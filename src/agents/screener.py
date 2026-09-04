@@ -19,9 +19,11 @@ import re
 from dataclasses import dataclass, field
 
 # Maps directly to the taxonomy in ship_roadmap.md:
-# imports/egress/pii_data -> PIIE (Detector #1, must-ship)
-# bias_data                -> ALBP (Detector #2 candidate A)
-# agentic                  -> TLGP-001 (not currently a detector, kept for later)
+# imports/egress/pii_data       -> PIIE-001 (Detector #1, must-ship)
+# logging_sinks + pii_data      -> PIIE-002 (near-free extension, same GDPR Art. 32 grounding)
+# cache_sinks + pii_data        -> PIIE-003 (near-free extension, same GDPR Art. 32 grounding)
+# bias_data                     -> ALBP (Detector #2 candidate A)
+# agentic                       -> TLGP-001 (not currently a detector, kept for later)
 SCREENER_TRIGGERS = {
     "imports": ["openai", "anthropic", "langchain", "llamaindex", "transformers", "autogen"],
     "egress": ["httpx.post", "requests.post", "client.chat.completions", "axios.post"],
@@ -29,6 +31,13 @@ SCREENER_TRIGGERS = {
                  # fintech-flavored additions per the MicroPyramid demo repo's actual
                  # Client model fields (blood_group, dob, mobile, pincode-as-PII context)
                  "blood_group", "date_of_birth", "mobile", "annual_income", "account_number"],
+    # PIIE-002: PII written to insecure log streams (stdout, cloud logs)
+    "logging_sinks": ["logging.info", "logging.debug", "logging.warning", "logging.error",
+                       "logger.info", "logger.debug", "logger.warning", "logger.error",
+                       "print(", "console.log"],
+    # PIIE-003: PII stored in a cache/session store without row-level encryption
+    "cache_sinks": ["redis.set", "cache.set", "memcache.set", "session[",
+                     "redis_client.set", ".setex("],
     "bias_data": ["gender", "ethnicity", "race", "zipcode", "pincode", "income_tier", "weights"],
     "agentic": ["subprocess.run", "eval(", "exec(", "os.system", "bind_tools", "Agent("],
 }

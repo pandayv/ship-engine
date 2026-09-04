@@ -21,6 +21,20 @@ def get_opinion(client):
     assert "pii_data" in result.matched_buckets
 
 
+def test_logging_sink_bucket_pii_to_logs():
+    result = scan('logging.info(f"Processing applicant {client.ssn}, income {client.annual_income}")')
+    assert result.matched is True
+    assert "logging_sinks" in result.matched_buckets
+    assert "pii_data" in result.matched_buckets
+
+
+def test_cache_sink_bucket_pii_to_cache():
+    result = scan('redis.set(f"user:{client.email}", client.date_of_birth)')
+    assert result.matched is True
+    assert "cache_sinks" in result.matched_buckets
+    assert "pii_data" in result.matched_buckets
+
+
 def test_bias_data_bucket():
     result = scan("score -= 5 if client.pincode in high_risk_zones else 0")
     assert result.matched is True
