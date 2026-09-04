@@ -22,9 +22,9 @@ from dataclasses import dataclass, field
 # imports/egress/pii_data       -> PIIE-001 (Detector #1, must-ship)
 # logging_sinks + pii_data      -> PIIE-002 (near-free extension, same GDPR Art. 32 grounding)
 # cache_sinks + pii_data        -> PIIE-003 (near-free extension, same GDPR Art. 32 grounding)
-# decision_mutation (+ imports) -> TLGP-002 (Detector #2, built 2026-09-04)
-# bias_data                     -> ALBP (not currently a detector, candidate if TLGP-002 doesn't land)
-# agentic                       -> TLGP-001 (not currently a detector, kept for later)
+# decision_mutation (+ imports) -> TLGP-002 (built 2026-09-04)
+# bias_data                     -> ALBP-001 (built 2026-09-04, stretch goal)
+# agentic                       -> TLGP-001 (built 2026-09-04, stretch goal)
 SCREENER_TRIGGERS = {
     "imports": ["openai", "anthropic", "langchain", "llamaindex", "transformers", "autogen"],
     "egress": ["httpx.post", "requests.post", "client.chat.completions", "axios.post"],
