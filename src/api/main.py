@@ -24,7 +24,7 @@ import os
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from src.agents.diagnostician import diagnose
-from src.agents.screener import isolate_fragment, scan
+from src.agents.screener import isolate_fragment, scan, split_diff_into_fragments
 from src.agents.triage import BuildAction, DiagnosticianVerdict, route
 from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
@@ -71,36 +71,56 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     if not code_diff:
         return {"action": "pass", "reason": "No code_diff in payload and not a recognized PR event."}
 
-    screener_result = scan(code_diff)
-    if not screener_result.matched:
-        return {"action": "pass", "reason": "Screener found no trigger matches.", "screener": screener_result.to_dict()}
+    # A PR frequently touches multiple unrelated files/functions in one diff
+    # (verified against a real multi-violation PR, not just a demo
+    # contrivance) — isolate each one independently so Diagnostician judges
+    # each concern on its own rather than reasoning over one jumbled blob.
+    fragments = split_diff_into_fragments(code_diff)
+    results = []
+    any_frozen = False
 
-    fragment = isolate_fragment(code_diff, screener_result.matched_terms)
-    diag = diagnose(fragment)  # requires AWS credentials — will raise if not configured
+    for frag in fragments:
+        screener_result = scan(frag["text"])
+        if not screener_result.matched:
+            continue  # this fragment passes silently, not worth a result entry
 
-    verdict = DiagnosticianVerdict(
-        matched=diag.matched,
-        taxonomy_id=diag.taxonomy_id,
-        risk_score=diag.risk_score,
-        plain_english_summary=diag.plain_english_summary,
-        citation=diag.citation,
-        remediation_patch=diag.remediation_patch,
-    )
-    decision = route(verdict)
+        isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
+        diag = diagnose(isolated)  # requires AWS credentials — will raise if not configured
 
-    alert = None
-    if decision.action == BuildAction.FREEZE:
-        # only frozen (high-risk) cases need an Attending review record —
-        # low-risk log-and-pass cases aren't persisted for MVP scope
-        alert = put_alert(
-            repo=repo_full_name, pr_number=pr_number, taxonomy_id=diag.taxonomy_id or "",
-            risk_score=diag.risk_score or 0.0, plain_english_summary=diag.plain_english_summary or "",
-            citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
-        )  # requires dynamodb:* permissions — untested until ship-agent's policy grants them
+        verdict = DiagnosticianVerdict(
+            matched=diag.matched,
+            taxonomy_id=diag.taxonomy_id,
+            risk_score=diag.risk_score,
+            plain_english_summary=diag.plain_english_summary,
+            citation=diag.citation,
+            remediation_patch=diag.remediation_patch,
+        )
+        decision = route(verdict)
+
+        alert_id = None
+        if decision.action == BuildAction.FREEZE:
+            any_frozen = True
+            # only frozen (high-risk) cases need an Attending review record —
+            # low-risk log-and-pass and dismissed-false-positive cases aren't
+            # persisted for MVP scope
+            alert = put_alert(
+                repo=repo_full_name, pr_number=pr_number, taxonomy_id=diag.taxonomy_id or "",
+                risk_score=diag.risk_score or 0.0, plain_english_summary=diag.plain_english_summary or "",
+                citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
+            )  # requires dynamodb:* permissions
+            alert_id = alert.alert_id
+
+        results.append({
+            "file": frag["file"],
+            "action": decision.action.value,
+            "reason": decision.reason,
+            "diagnostician": diag.model_dump(),
+            "alert_id": alert_id,
+        })
 
     return {
-        "action": decision.action.value,
-        "reason": decision.reason,
-        "diagnostician": diag.model_dump(),
-        "alert_id": alert.alert_id if alert else None,
+        "action": "freeze" if any_frozen else "pass",
+        "fragments_scanned": len(fragments),
+        "fragments_escalated": len(results),
+        "results": results,
     }

@@ -86,6 +86,52 @@ def scan(code_diff: str) -> ScreenerResult:
     return ScreenerResult(matched=bool(matched_buckets), matched_buckets=matched_buckets, matched_terms=matched_terms)
 
 
+def split_diff_into_fragments(code_diff: str) -> list[dict]:
+    """
+    Splits a multi-file diff into independent per-file, per-function
+    fragments, so a PR touching several unrelated concerns (e.g. one file
+    with a bias-in-scoring issue, another with an unscoped agent tool)
+    doesn't get isolated into one jumbled blob for Diagnostician to reason
+    about. Real production diffs commonly touch multiple files/functions in
+    one PR — this isn't a demo-only contrivance.
+
+    Splits on `diff --git a/X b/X` for file boundaries, then on top-level
+    `def `/`class ` lines for function boundaries within a file (unified
+    diffs for brand-new files carry the whole file as one hunk with no
+    function-name context, so hunk-header splitting alone isn't enough
+    here — this is deliberately closer to a lightweight AST-aware split
+    than pure hunk splitting).
+
+    Returns a list of {"file": str, "text": str} fragments. Falls back to
+    treating the whole diff as one fragment (file="<diff>") if no
+    `diff --git` markers are found (e.g. a pre-split test payload).
+    """
+    file_pattern = re.compile(r"^diff --git a/(\S+) b/\S+", re.MULTILINE)
+    file_matches = list(file_pattern.finditer(code_diff))
+    if not file_matches:
+        return [{"file": "<diff>", "text": code_diff}]
+
+    file_chunks = []
+    for idx, m in enumerate(file_matches):
+        start = m.start()
+        end = file_matches[idx + 1].start() if idx + 1 < len(file_matches) else len(code_diff)
+        file_chunks.append({"file": m.group(1), "text": code_diff[start:end]})
+
+    fragments = []
+    func_pattern = re.compile(r"^\+\s*(?:def|class)\s+\w+")
+    for chunk in file_chunks:
+        lines = chunk["text"].splitlines()
+        boundaries = [i for i, line in enumerate(lines) if func_pattern.match(line)]
+        if len(boundaries) <= 1:
+            fragments.append(chunk)  # nothing to split further
+            continue
+        boundaries.append(len(lines))
+        for i in range(len(boundaries) - 1):
+            fragments.append({"file": chunk["file"], "text": "\n".join(lines[boundaries[i]:boundaries[i + 1]])})
+
+    return fragments
+
+
 def isolate_fragment(code_diff: str, matched_terms: list, context_lines: int = 3) -> str:
     """
     Given a diff and the terms that matched, return just the surrounding
