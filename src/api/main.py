@@ -1,12 +1,20 @@
 """
-FastAPI webhook ingestion — wires Screener -> Diagnostician -> Triage.
+FastAPI webhook ingestion — wires Screener -> Diagnostician -> Triage -> alert_store.
 
 Deliberately kept as a plain FastAPI service rather than Lambda+API Gateway
-(see ship_roadmap.md's AWS-native stack section for why). The webhook
-signature verification below is a placeholder (GITHUB_WEBHOOK_SECRET not yet
-provisioned) — real verification needs to be wired in before this is pointed
-at a live GitHub webhook. Diagnostician calls require AWS credentials that
-aren't configured in this environment; that part is untested end-to-end.
+(see ship_roadmap.md's AWS-native stack section for why).
+
+Signature verification is real (HMAC-SHA256, tested in
+tests/test_webhook_signature.py) but GITHUB_WEBHOOK_SECRET isn't provisioned
+yet — verification silently no-ops until that env var is set, which MUST
+happen before this is pointed at a live GitHub webhook.
+
+PR-diff fetching is real and tested against the live PR #1 fixture
+(src/api/github_client.py). Diagnostician and alert_store calls need AWS
+credentials/permissions this environment doesn't fully have yet (Bedrock
+calls are blocked on a daily token quota as of this writing; DynamoDB
+permissions haven't been added to ship-agent's policy at all) — those two
+legs of the pipeline are code-complete but not live-tested end-to-end.
 """
 
 import hashlib
@@ -17,7 +25,9 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from src.agents.diagnostician import diagnose
 from src.agents.screener import isolate_fragment, scan
-from src.agents.triage import DiagnosticianVerdict, route
+from src.agents.triage import BuildAction, DiagnosticianVerdict, route
+from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
+from src.storage.alert_store import put_alert
 
 app = FastAPI(title="SHIP webhook ingestion")
 
@@ -47,13 +57,17 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     _verify_signature(body, x_hub_signature_256)
     payload = await request.json()
 
-    # Real GitHub PR payloads carry the diff via a separate API call (the
-    # webhook event itself doesn't include the full patch text) — this
-    # extraction is a placeholder pending that wiring; for now, accept a
-    # simplified {"code_diff": "..."} body directly for local testing.
-    code_diff = payload.get("code_diff", "")
+    if is_pr_event(payload):
+        repo_full_name, pr_number = extract_pr_ref(payload)
+        code_diff = fetch_pr_diff(repo_full_name, pr_number)
+    else:
+        # simplified {"code_diff": "..."} body, for local testing without a
+        # real GitHub webhook payload — no real PR to link an alert back to
+        repo_full_name, pr_number = "local-test", 0
+        code_diff = payload.get("code_diff", "")
+
     if not code_diff:
-        return {"action": "pass", "reason": "No code_diff in payload (real PR-diff fetch not yet wired)"}
+        return {"action": "pass", "reason": "No code_diff in payload and not a recognized PR event."}
 
     screener_result = scan(code_diff)
     if not screener_result.matched:
@@ -72,6 +86,19 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     )
     decision = route(verdict)
 
-    # TODO: persist to DynamoDB for Attending to read (not yet built —
-    # Milestone D). For now, decision is returned but not stored anywhere.
-    return {"action": decision.action.value, "reason": decision.reason, "diagnostician": diag.model_dump()}
+    alert = None
+    if decision.action == BuildAction.FREEZE:
+        # only frozen (high-risk) cases need an Attending review record —
+        # low-risk log-and-pass cases aren't persisted for MVP scope
+        alert = put_alert(
+            repo=repo_full_name, pr_number=pr_number, taxonomy_id=diag.taxonomy_id or "",
+            risk_score=diag.risk_score or 0.0, plain_english_summary=diag.plain_english_summary or "",
+            citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
+        )  # requires dynamodb:* permissions — untested until ship-agent's policy grants them
+
+    return {
+        "action": decision.action.value,
+        "reason": decision.reason,
+        "diagnostician": diag.model_dump(),
+        "alert_id": alert.alert_id if alert else None,
+    }

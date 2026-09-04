@@ -90,8 +90,20 @@ def retrieve_regulation_text(query: str) -> str:
     return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
 
+DIAGNOSTICIAN_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# "us." prefix = cross-region inference profile, required for on-demand use
+# of this model (raw model ID alone gets a ValidationException from Bedrock).
+# Right-sized for the task: Screener has already pre-filtered the input, so
+# Diagnostician's job is bounded classification + structured drafting, not
+# open-ended reasoning. Current-gen Haiku (not the older Claude 3 Haiku also
+# available) is meaningfully cheaper/faster than Sonnet/Opus for this. If
+# testing shows it's missing nuance on real violations, swap to a Sonnet ID
+# from `aws bedrock list-foundation-models --by-provider anthropic` — one
+# line to change, no architecture impact either way.
+
+
 def build_agent() -> Agent:
-    model = BedrockModel()  # uses strands' default: global.anthropic.claude-sonnet-4-6, us-west-2
+    model = BedrockModel(model_id=DIAGNOSTICIAN_MODEL_ID)
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
