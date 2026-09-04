@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 # imports/egress/pii_data       -> PIIE-001 (Detector #1, must-ship)
 # logging_sinks + pii_data      -> PIIE-002 (near-free extension, same GDPR Art. 32 grounding)
 # cache_sinks + pii_data        -> PIIE-003 (near-free extension, same GDPR Art. 32 grounding)
-# bias_data                     -> ALBP (Detector #2 candidate A)
+# decision_mutation (+ imports) -> TLGP-002 (Detector #2, built 2026-09-04)
+# bias_data                     -> ALBP (not currently a detector, candidate if TLGP-002 doesn't land)
 # agentic                       -> TLGP-001 (not currently a detector, kept for later)
 SCREENER_TRIGGERS = {
     "imports": ["openai", "anthropic", "langchain", "llamaindex", "transformers", "autogen"],
@@ -38,6 +39,12 @@ SCREENER_TRIGGERS = {
     # PIIE-003: PII stored in a cache/session store without row-level encryption
     "cache_sinks": ["redis.set", "cache.set", "memcache.set", "session[",
                      "redis_client.set", ".setex("],
+    # TLGP-002: an AI/LLM output directly drives a high-risk decision (status
+    # mutation) with no apparent human-review step in between. Loose signal —
+    # co-occurrence with imports/egress is what actually matters; Diagnostician
+    # does the real judgment on whether a human gate exists.
+    "decision_mutation": [".status =", ".approved =", ".rejected =",
+                           "= 'Approved'", '= "Approved"', "= 'Rejected'", '= "Rejected"'],
     "bias_data": ["gender", "ethnicity", "race", "zipcode", "pincode", "income_tier", "weights"],
     "agentic": ["subprocess.run", "eval(", "exec(", "os.system", "bind_tools", "Agent("],
 }
