@@ -1,13 +1,15 @@
 """
 Diagnostician — SHIP's semantic evaluator (formerly "Tier 2"). Runs only on
-fragments Screener has already flagged. A Strands Agent on Amazon Bedrock,
-RAG-grounded against real regulation text (never unaided model recollection).
+fragments Screener has already flagged. A Strands Agent, RAG-grounded
+against real regulation text (never unaided model recollection).
 
-NOT LIVE-TESTED as of this writing — requires AWS credentials (Bedrock
-access) that aren't configured in this environment. Code is written to the
-real Strands + Bedrock API (verified against the installed strands-agents
-1.54.0 package's actual signatures, not guessed), ready to run once AWS
-Builder ID / account setup is done.
+Model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama",
+default "ollama" as of 2026-09-04) — see BEDROCK_MODEL_ID/OLLAMA_MODEL_ID
+below. Bedrock is the intended AWS-native choice for the real submission,
+but the account is currently blocked at a 0.0 default quota across every
+model, first-party and third-party alike (confirmed via real Service
+Quotas data — not something a different Bedrock model sidesteps). Ollama
+runs fully local for POC/dev purposes in the meantime.
 
 IMPORTANT scoping note (per ship_roadmap.md): this prompt is deliberately
 narrowed to PIIE-001 only, NOT the full 12-flag taxonomy from the original
@@ -18,11 +20,11 @@ when a second detector's grounding corpus actually exists — see roadmap's
 feature-flag rollout model.
 """
 
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from strands import Agent, tool
-from strands.models.bedrock import BedrockModel
 
 from src.rag.chunker import chunk_corpus
 from src.rag.vector_store import VectorStore
@@ -90,27 +92,41 @@ def retrieve_regulation_text(query: str) -> str:
     return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
 
-DIAGNOSTICIAN_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
-# Cheapest available option, used deliberately for the testing/dev-iteration
-# phase (2026-09-04) while the account's daily token quota on newer models
-# is exhausted — being an older model, it's both cheaper and plausibly in a
-# separate quota bucket from the newer Haiku 4.5 / Sonnet models that are
-# currently blocked. No "us." inference-profile prefix needed for legacy
-# models (unlike Haiku 4.5/Sonnet above) — confirm this still holds when
-# testing.
-#
-# Right-sizing note (unchanged from the original reasoning): Screener has
-# already pre-filtered the input, so Diagnostician's job is bounded
-# classification + structured drafting, not open-ended reasoning — a small
-# model is architecturally appropriate here regardless of the quota
-# situation. Once quota allows, re-evaluate whether the older Claude 3
-# generation is accurate enough for the real submission, or whether to move
-# back to Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) or a
-# Sonnet ID for the polished demo — one line to change either way.
+BEDROCK_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+# Bedrock's whole account is currently blocked at a 0.0 default quota — not
+# specific to Anthropic (Amazon's own Nova/Titan models show the same 0.0),
+# confirmed via real Service Quotas data, so no model swap within Bedrock
+# fixes this. This ID is what the real submission should use once account
+# activation resolves (see ship_roadmap.md for the full saga).
+
+OLLAMA_MODEL_ID = "llama3.2:3b"
+# Fully local, zero AWS dependency. Mechanically proven working (2026-09-04)
+# but the 3B model produced a false negative on the one clear planted
+# violation and appears to have skipped the mandatory RAG tool call —
+# plumbing validated, judgment quality not.
+
+GEMINI_MODEL_ID = "gemini-3.6-flash"
+# Hosted (not local, so not constrained by dev-machine compute), free tier
+# via Google AI Studio, independent of both the AWS account issue and
+# local-model capability limits. Needs GEMINI_API_KEY set in the
+# environment. Being tried specifically because Ollama's small local model
+# under-performed on judgment quality/tool-use reliability.
 
 
 def build_agent() -> Agent:
-    model = BedrockModel(model_id=DIAGNOSTICIAN_MODEL_ID)
+    backend = os.environ.get("SHIP_MODEL_BACKEND", "ollama")
+    if backend == "bedrock":
+        from strands.models.bedrock import BedrockModel
+        model = BedrockModel(model_id=BEDROCK_MODEL_ID)
+    elif backend == "ollama":
+        from strands.models.ollama import OllamaModel
+        model = OllamaModel("http://localhost:11434", model_id=OLLAMA_MODEL_ID)
+    elif backend == "gemini":
+        from strands.models.gemini import GeminiModel
+        model = GeminiModel(model_id=GEMINI_MODEL_ID)  # reads GEMINI_API_KEY from env
+    else:
+        raise ValueError(f"Unknown SHIP_MODEL_BACKEND: {backend!r} (expected 'bedrock', 'ollama', or 'gemini')")
+
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,

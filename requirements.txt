@@ -8,3 +8,4 @@ numpy
 requests
 jinja2
 python-multipart
+ollama
