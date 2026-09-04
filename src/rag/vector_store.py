@@ -50,7 +50,7 @@ def _embed_ollama(texts: list[str]) -> np.ndarray:
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    backend = os.environ.get("SHIP_MODEL_BACKEND", "ollama")
+    backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
     if backend == "bedrock":
         return _embed_bedrock(texts)
     elif backend == "ollama":

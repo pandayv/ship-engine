@@ -92,12 +92,14 @@ def retrieve_regulation_text(query: str) -> str:
     return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
 
-BEDROCK_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
-# Bedrock's whole account is currently blocked at a 0.0 default quota — not
-# specific to Anthropic (Amazon's own Nova/Titan models show the same 0.0),
-# confirmed via real Service Quotas data, so no model swap within Bedrock
-# fixes this. This ID is what the real submission should use once account
-# activation resolves (see ship_roadmap.md for the full saga).
+BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# Account-wide 0.0 quota block resolved 2026-09-04 (see ship_roadmap.md for
+# the full saga). Legacy Claude 3 Haiku was tried first as the cheapest
+# option but rejected — Anthropic marks it Legacy and denies access to
+# accounts without 30 days of prior usage history, a brand-new account can
+# never satisfy that. Haiku 4.5 isn't legacy-gated; needs the "us." cross-
+# region inference profile prefix for on-demand invocation (confirmed
+# earlier in the troubleshooting saga).
 
 OLLAMA_MODEL_ID = "llama3.2:3b"
 # Fully local, zero AWS dependency. Mechanically proven working (2026-09-04)
@@ -114,7 +116,7 @@ GEMINI_MODEL_ID = "gemini-3.6-flash"
 
 
 def build_agent() -> Agent:
-    backend = os.environ.get("SHIP_MODEL_BACKEND", "ollama")
+    backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
     if backend == "bedrock":
         from strands.models.bedrock import BedrockModel
         model = BedrockModel(model_id=BEDROCK_MODEL_ID)
