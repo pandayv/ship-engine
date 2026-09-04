@@ -26,10 +26,12 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from src.agents.diagnostician import diagnose
 from src.agents.screener import isolate_fragment, scan
 from src.agents.triage import BuildAction, DiagnosticianVerdict, route
+from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
 from src.storage.alert_store import put_alert
 
-app = FastAPI(title="SHIP webhook ingestion")
+app = FastAPI(title="SHIP")
+app.include_router(dashboard_router)
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
