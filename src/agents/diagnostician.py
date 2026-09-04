@@ -11,13 +11,15 @@ model, first-party and third-party alike (confirmed via real Service
 Quotas data — not something a different Bedrock model sidesteps). Ollama
 runs fully local for POC/dev purposes in the meantime.
 
-IMPORTANT scoping note (per ship_roadmap.md): this prompt is deliberately
-narrowed to PIIE-001 only, NOT the full 12-flag taxonomy from the original
-draft. Asking Diagnostician to judge categories we haven't sourced RAG text
-for (ALBP, TLGP, DPSL) would risk exactly the hallucinated-citation failure
-the "Trust but Verify" design principle exists to prevent. Widen this only
-when a second detector's grounding corpus actually exists — see roadmap's
-feature-flag rollout model.
+IMPORTANT scoping note (per ship_roadmap.md): this prompt covers the full
+PIIE vector (PIIE-001/002/003) — all three share the same GDPR Art. 32
+grounding corpus, so widening from PIIE-001-only to all three was a
+near-free extension, not new grounding work. It is still deliberately NOT
+widened to ALBP/TLGP/DPSL, which have no sourced RAG text yet — asking
+Diagnostician to judge categories we haven't grounded would risk exactly
+the hallucinated-citation failure the "Trust but Verify" design principle
+exists to prevent. Widen further only when that detector's own grounding
+corpus actually exists — see roadmap's feature-flag rollout model.
 """
 
 import os
@@ -32,31 +34,42 @@ from src.rag.vector_store import VectorStore
 SYSTEM_PROMPT = """You are the SHIP Diagnostician, a compliance auditor for a small \
 fintech startup's engineering team. You analyze a single isolated code fragment \
 that has already been flagged by a fast keyword pre-filter (Screener) as \
-POTENTIALLY containing a PIIE-001 violation: raw, un-anonymized personal \
-identifiers (name, SSN, date of birth, income, account number, blood group, \
-etc.) being sent to an external LLM's prompt context without tokenization or \
-hashing.
+POTENTIALLY containing one of these PIIE (PII & Context Exfiltration) violations:
+
+- PIIE-001: raw, un-anonymized personal identifiers (name, SSN, date of birth, \
+  income, account number, blood group, etc.) being sent to an external LLM's \
+  prompt context without tokenization or hashing.
+- PIIE-002: raw PII being written into a log stream (logging.*, print(), \
+  console.log, etc.) — insecure persistent storage of identifying data in \
+  logs/telemetry that weren't designed to hold it.
+- PIIE-003: raw PII or conversational history being written into a cache or \
+  session store (redis, memcache, session[...], etc.) without row-level \
+  encryption.
 
 Screener's keyword match is a POTENTIAL signal, not a confirmed violation — \
-your job is to judge whether it's real. A variable named `email` that is \
-never actually sent anywhere, or PII that IS already masked/hashed before \
-use, is NOT a violation and must not be flagged as one.
+your job is to judge whether it's real, and which of the three it actually is. \
+A variable named `email` that is never actually sent/logged/cached anywhere, or \
+PII that IS already masked/hashed before use, is NOT a violation and must not \
+be flagged as one.
 
 You MUST use the `retrieve_regulation_text` tool to ground your reasoning in \
 the actual GDPR Article 32 text before making any determination — never cite \
-a regulation from memory alone.
+a regulation from memory alone. All three PIIE sub-flags ground against the \
+same Article 32 text (security of processing) — the specific sink (LLM prompt \
+vs. log vs. cache) determines which sub-flag applies, not which article.
 
-If you confirm a real PIIE-001 violation:
+If you confirm a real violation:
+- Set taxonomy_id to whichever of PIIE-001 / PIIE-002 / PIIE-003 actually applies.
 - Assign a risk_score from 1-10. A score >= 7.5 means raw, directly-identifying \
   financial PII (SSN, account number, full name + income together) reaching an \
-  external, closed-source model with no masking at all. Lower scores are for \
-  partial/ambiguous cases.
+  external sink (LLM, log stream, or cache) with no masking at all. Lower scores \
+  are for partial/ambiguous cases.
 - Write a plain_english_summary a non-technical founder could understand in one \
   read.
 - Provide the exact citation (article and paragraph) from the retrieved text — \
   never paraphrase the paragraph number, quote what the tool actually returned.
 - Draft a remediation_patch: a small, concrete code change (e.g. redact or hash \
-  the field before it's included in the prompt) that would resolve the issue.
+  the field before it reaches that sink) that would resolve the issue.
 
 If Screener's match was a false positive, set matched=false and leave the other \
 fields empty — do not invent a violation to justify the escalation."""
@@ -64,7 +77,7 @@ fields empty — do not invent a violation to justify the escalation."""
 
 class DiagnosticianOutput(BaseModel):
     matched: bool = Field(description="True only if a real PIIE-001 violation was confirmed, not just Screener's keyword match")
-    taxonomy_id: str | None = Field(default=None, description="e.g. 'PIIE-001'")
+    taxonomy_id: str | None = Field(default=None, description="'PIIE-001', 'PIIE-002', or 'PIIE-003'")
     risk_score: float | None = Field(default=None, ge=1, le=10)
     plain_english_summary: str | None = None
     citation: str | None = Field(default=None, description="Exact article/paragraph from the retrieved regulation text")
