@@ -6,13 +6,17 @@ simpler, has zero install risk, and is functionally identical at this scale.
 See ship_roadmap.md's "AWS-native technical stack" section for why Knowledge
 Bases was deliberately skipped.
 
-Embeddings come from Amazon Bedrock Titan (the decided AWS-native choice) —
-this module WILL raise a clear error if AWS credentials aren't configured,
-which is expected until the user completes the AWS Builder ID / account
-setup. Nothing here is mocked or faked.
+Embedding backend is switchable via the SHIP_MODEL_BACKEND env var
+("bedrock" | "ollama", default "ollama" as of 2026-09-04). Bedrock Titan is
+the intended AWS-native choice for the real submission, but the account's
+Bedrock access is currently blocked by an unrelated new-account activation
+issue (see ship_roadmap.md) — Ollama's nomic-embed-text runs fully local,
+zero AWS dependency, so POC/dev work isn't blocked on that resolving.
+Swapping back to Bedrock is a one-line env var change, not a code change.
 """
 
 import json
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,16 +24,12 @@ import numpy as np
 from src.rag.chunker import Chunk
 
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
+OLLAMA_EMBED_MODEL_ID = "nomic-embed-text"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
-def embed_texts(texts: list[str]) -> np.ndarray:
-    """
-    Calls Bedrock Titan Embeddings for each text. Requires AWS credentials
-    configured (aws configure / AWS Builder ID + account setup) — will raise
-    botocore.exceptions.NoCredentialsError or similar if not.
-    """
-    import boto3  # imported lazily so the rest of this module is importable
-                  # without boto3 configured, for testing chunker/store logic
+def _embed_bedrock(texts: list[str]) -> np.ndarray:
+    import boto3  # lazy import, same reasoning as before
 
     client = boto3.client("bedrock-runtime")
     vectors = []
@@ -39,6 +39,23 @@ def embed_texts(texts: list[str]) -> np.ndarray:
         payload = json.loads(response["body"].read())
         vectors.append(payload["embedding"])
     return np.array(vectors, dtype=np.float32)
+
+
+def _embed_ollama(texts: list[str]) -> np.ndarray:
+    import ollama  # lazy import
+
+    client = ollama.Client(host=OLLAMA_HOST)
+    vectors = [client.embeddings(model=OLLAMA_EMBED_MODEL_ID, prompt=text)["embedding"] for text in texts]
+    return np.array(vectors, dtype=np.float32)
+
+
+def embed_texts(texts: list[str]) -> np.ndarray:
+    backend = os.environ.get("SHIP_MODEL_BACKEND", "ollama")
+    if backend == "bedrock":
+        return _embed_bedrock(texts)
+    elif backend == "ollama":
+        return _embed_ollama(texts)
+    raise ValueError(f"Unknown SHIP_MODEL_BACKEND: {backend!r} (expected 'bedrock' or 'ollama')")
 
 
 @dataclass
