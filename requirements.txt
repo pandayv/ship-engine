@@ -1,0 +1,7 @@
+strands-agents
+fastapi
+uvicorn[standard]
+boto3
+python-dotenv
+pydantic
+numpy
