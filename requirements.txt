@@ -6,3 +6,5 @@ python-dotenv
 pydantic
 numpy
 requests
+jinja2
+python-multipart

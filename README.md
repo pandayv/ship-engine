@@ -22,7 +22,7 @@ compliance hire — the founder/CTO gets the alert and closes the loop.
 | **Screener** | Fast, zero-cost regex/AST pre-filter + Amazon Comprehend PII pass. Runs on every commit. |
 | **Diagnostician** | Semantic evaluator (Strands Agent on Amazon Bedrock). RAG-grounded against real GDPR / EU AI Act text. Runs only on fragments Screener flags. |
 | **Triage** | Routes the build: log-and-pass, or freeze pending human review. |
-| **Attending** | The human-in-the-loop review console. |
+| **Attending** | The human-in-the-loop review console (`/dashboard`) — Approve/Reject a frozen alert. |
 
 (Herald and Surveillance are planned for later phases — see the project roadmap, not yet in this repo.)
 
