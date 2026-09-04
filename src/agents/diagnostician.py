@@ -137,11 +137,53 @@ def build_agent() -> Agent:
     )
 
 
-def diagnose(isolated_fragment: str) -> DiagnosticianOutput:
-    """Entry point Triage/the webhook route call. Needs AWS credentials configured."""
+def diagnose_in_process(isolated_fragment: str) -> DiagnosticianOutput:
+    """Builds and runs the Strands Agent directly in this process. Faster,
+    no network hop, no dependency on the deployed AgentCore runtime being
+    healthy — used for the demo/dev path."""
     agent = build_agent()
     result = agent(f"Isolated code fragment flagged by Screener:\n\n{isolated_fragment}")
     return result.structured_output  # type: ignore[return-value]
+
+
+AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:680160265218:runtime/shipagentcore_ship_diagnostician-ziGdiLDe7Q"
+
+
+def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
+    """Calls the real deployed Bedrock AgentCore Runtime (shipagentcore/) over
+    the network instead of running the agent in this process — the
+    architecturally "complete" path: webhook -> deployed AgentCore runtime,
+    not two parallel implementations of the same logic. Needs
+    bedrock-agentcore:InvokeAgentRuntime permission (already granted)."""
+    import json
+    import uuid
+
+    import boto3
+
+    client = boto3.client("bedrock-agentcore", region_name="us-west-2")
+    response = client.invoke_agent_runtime(
+        agentRuntimeArn=AGENTCORE_RUNTIME_ARN,
+        runtimeSessionId=str(uuid.uuid4()),
+        payload=json.dumps({"fragment": isolated_fragment}).encode("utf-8"),
+    )
+    body = response["response"].read()
+    # main.py's deployed invoke() returns result.structured_output.model_dump()
+    # (see shipagentcore/app/ship_diagnostician/main.py) as a single JSON
+    # object, confirmed empirically against the real deployed runtime
+    return DiagnosticianOutput(**json.loads(body))
+
+
+def diagnose(isolated_fragment: str) -> DiagnosticianOutput:
+    """Entry point Triage/the webhook route call. Needs AWS credentials
+    configured. Toggled via SHIP_DIAGNOSTICIAN_MODE ("in_process" | "agentcore",
+    default "in_process" for demo reliability) — see diagnose_in_process vs
+    diagnose_via_agentcore above for the tradeoff."""
+    mode = os.environ.get("SHIP_DIAGNOSTICIAN_MODE", "in_process")
+    if mode == "in_process":
+        return diagnose_in_process(isolated_fragment)
+    elif mode == "agentcore":
+        return diagnose_via_agentcore(isolated_fragment)
+    raise ValueError(f"Unknown SHIP_DIAGNOSTICIAN_MODE: {mode!r} (expected 'in_process' or 'agentcore')")
 
 
 if __name__ == "__main__":
