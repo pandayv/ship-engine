@@ -16,6 +16,7 @@ decisions during a hackathon sprint):
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 
 TABLE_NAME = "ship-alerts"
 
@@ -77,14 +78,24 @@ def put_alert(repo: str, pr_number: int, taxonomy_id: str, risk_score: float,
         status="frozen",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
-    _table().put_item(Item=asdict(alert))
+    item = asdict(alert)
+    item["risk_score"] = Decimal(str(item["risk_score"]))  # DynamoDB rejects native float
+    _table().put_item(Item=item)
     return alert
 
 
 def list_active_alerts() -> list[Alert]:
     response = _table().scan(FilterExpression="#s = :status", ExpressionAttributeNames={"#s": "status"},
                               ExpressionAttributeValues={":status": "frozen"})
-    return [Alert(**item) for item in response.get("Items", [])]
+    alerts = []
+    for item in response.get("Items", []):
+        # DynamoDB's Number type has no int/float distinction — everything
+        # numeric comes back as Decimal; convert back to what the rest of
+        # the app (and JSON serialization) actually expects
+        item["risk_score"] = float(item["risk_score"])
+        item["pr_number"] = int(item["pr_number"])
+        alerts.append(Alert(**item))
+    return alerts
 
 
 def resolve_alert(alert_id: str, approved: bool) -> None:
