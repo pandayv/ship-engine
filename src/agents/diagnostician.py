@@ -3,13 +3,14 @@ Diagnostician — SHIP's semantic evaluator (formerly "Tier 2"). Runs only on
 fragments Screener has already flagged. A Strands Agent, RAG-grounded
 against real regulation text (never unaided model recollection).
 
-Model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama",
-default "ollama" as of 2026-09-04) — see BEDROCK_MODEL_ID/OLLAMA_MODEL_ID
-below. Bedrock is the intended AWS-native choice for the real submission,
-but the account is currently blocked at a 0.0 default quota across every
-model, first-party and third-party alike (confirmed via real Service
-Quotas data — not something a different Bedrock model sidesteps). Ollama
-runs fully local for POC/dev purposes in the meantime.
+Model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama" |
+"gemini", default "bedrock" — the account-wide quota block that once made
+this default to "ollama" was resolved 2026-09-04, see ship_roadmap.md).
+Diagnostician itself is also switchable via SHIP_DIAGNOSTICIAN_MODE
+("in_process" default | "agentcore", see diagnose() below) — "agentcore"
+calls the real deployed Bedrock AgentCore Runtime over the network instead
+of building the Strands Agent in this process, which is why strands/numpy
+imports in this file are deliberately lazy (see the import block below).
 
 IMPORTANT scoping note (per ship_roadmap.md): this prompt covers PIIE-001/
 002/003 (GDPR Art. 32), TLGP-002 (EU AI Act Art. 14), ALBP-001 (EU AI Act
@@ -27,12 +28,20 @@ failure "Trust but Verify" exists to prevent.
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
-from strands import Agent, tool
 
-from src.rag.chunker import chunk_corpus
-from src.rag.vector_store import VectorStore
+if TYPE_CHECKING:
+    from strands import Agent
+
+# strands/numpy (via src.rag.vector_store) are DELIBERATELY NOT imported at
+# module level — only diagnose_in_process()'s path needs them. This lets a
+# caller that only ever uses diagnose_via_agentcore() (e.g. the public
+# webhook deployment, which delegates the heavy lifting to the already-
+# deployed AgentCore runtime over the network) import this module without
+# pulling in strands-agents/numpy's dependency tree at all — the difference
+# between a plain zip-based Lambda deployment and needing a container.
 
 SYSTEM_PROMPT = """You are the SHIP Diagnostician, a compliance auditor for a small \
 fintech startup's engineering team. You analyze a single isolated code fragment \
@@ -148,25 +157,20 @@ class DiagnosticianOutput(BaseModel):
     remediation_patch: str | None = None
 
 
-_store: VectorStore | None = None
+_store = None  # type: ignore[var-annotated]  # lazily typed as VectorStore, see _get_store
 
 
-def _get_store() -> VectorStore:
+def _get_store():
     global _store
     if _store is None:
+        from src.rag.chunker import chunk_corpus
+        from src.rag.vector_store import VectorStore
+
         corpus_dir = Path(__file__).resolve().parents[2] / "rag_corpus"
         chunks = chunk_corpus(corpus_dir)
         _store = VectorStore()
         _store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
     return _store
-
-
-@tool
-def retrieve_regulation_text(query: str) -> str:
-    """Retrieve the most relevant real regulation text chunks for a query about
-    a possible compliance violation. Always call this before citing any law."""
-    results = _get_store().query(query, top_k=3)
-    return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
 
 BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -192,7 +196,17 @@ GEMINI_MODEL_ID = "gemini-3.6-flash"
 # under-performed on judgment quality/tool-use reliability.
 
 
-def build_agent() -> Agent:
+def build_agent() -> "Agent":
+    from strands import Agent, tool
+
+    @tool
+    def retrieve_regulation_text(query: str) -> str:
+        """Retrieve the most relevant real regulation text chunks for a query
+        about a possible compliance violation. Always call this before citing
+        any law."""
+        results = _get_store().query(query, top_k=3)
+        return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
+
     backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
     if backend == "bedrock":
         from strands.models.bedrock import BedrockModel
