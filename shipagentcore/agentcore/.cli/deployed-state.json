@@ -1,0 +1,17 @@
+{
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "ship_diagnostician": {
+            "runtimeId": "shipagentcore_ship_diagnostician-ziGdiLDe7Q",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:680160265218:runtime/shipagentcore_ship_diagnostician-ziGdiLDe7Q",
+            "roleArn": "arn:aws:iam::680160265218:role/AgentCore-shipagentcore-d-ApplicationAgentShipDiagn-IhUlgB2aNEZy"
+          }
+        },
+        "stackName": "AgentCore-shipagentcore-default",
+        "deployHash": "f06286547974936c"
+      }
+    }
+  }
+}
