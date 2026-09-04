@@ -90,16 +90,23 @@ def retrieve_regulation_text(query: str) -> str:
     return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
 
-DIAGNOSTICIAN_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-# "us." prefix = cross-region inference profile, required for on-demand use
-# of this model (raw model ID alone gets a ValidationException from Bedrock).
-# Right-sized for the task: Screener has already pre-filtered the input, so
-# Diagnostician's job is bounded classification + structured drafting, not
-# open-ended reasoning. Current-gen Haiku (not the older Claude 3 Haiku also
-# available) is meaningfully cheaper/faster than Sonnet/Opus for this. If
-# testing shows it's missing nuance on real violations, swap to a Sonnet ID
-# from `aws bedrock list-foundation-models --by-provider anthropic` — one
-# line to change, no architecture impact either way.
+DIAGNOSTICIAN_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+# Cheapest available option, used deliberately for the testing/dev-iteration
+# phase (2026-09-04) while the account's daily token quota on newer models
+# is exhausted — being an older model, it's both cheaper and plausibly in a
+# separate quota bucket from the newer Haiku 4.5 / Sonnet models that are
+# currently blocked. No "us." inference-profile prefix needed for legacy
+# models (unlike Haiku 4.5/Sonnet above) — confirm this still holds when
+# testing.
+#
+# Right-sizing note (unchanged from the original reasoning): Screener has
+# already pre-filtered the input, so Diagnostician's job is bounded
+# classification + structured drafting, not open-ended reasoning — a small
+# model is architecturally appropriate here regardless of the quota
+# situation. Once quota allows, re-evaluate whether the older Claude 3
+# generation is accurate enough for the real submission, or whether to move
+# back to Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) or a
+# Sonnet ID for the polished demo — one line to change either way.
 
 
 def build_agent() -> Agent:
