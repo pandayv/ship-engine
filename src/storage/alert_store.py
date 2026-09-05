@@ -119,10 +119,29 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, risk_score
 
 
 def list_active_alerts() -> list[Alert]:
-    response = _table().scan(FilterExpression="#s = :status", ExpressionAttributeNames={"#s": "status"},
-                              ExpressionAttributeValues={":status": "frozen"})
+    # finding #14: DynamoDB Scan reads at most 1MB BEFORE applying
+    # FilterExpression, then returns LastEvaluatedKey if more of the table
+    # remains to be scanned - a single, unpaginated .scan() silently
+    # truncates once the table grows past that, and a reviewer sees an
+    # empty-looking queue while real "frozen" alerts sit unseen past the
+    # 1MB boundary. Loop until LastEvaluatedKey is actually absent.
+    table = _table()
+    items = []
+    scan_kwargs = {
+        "FilterExpression": "#s = :status",
+        "ExpressionAttributeNames": {"#s": "status"},
+        "ExpressionAttributeValues": {":status": "frozen"},
+    }
+    while True:
+        response = table.scan(**scan_kwargs)
+        items.extend(response.get("Items", []))
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        scan_kwargs["ExclusiveStartKey"] = last_key
+
     alerts = []
-    for item in response.get("Items", []):
+    for item in items:
         # DynamoDB's Number type has no int/float distinction — everything
         # numeric comes back as Decimal; convert back to what the rest of
         # the app (and JSON serialization) actually expects
