@@ -27,15 +27,15 @@
   {% if alerts %}
     {% for alert in alerts %}
     <div class="alert high">
-      <div class="meta">{{ alert.repo }} #{{ alert.pr_number }} &middot; {{ alert.taxonomy_id }} &middot;
+      <div class="meta">{{ alert.repo }} #{{ alert.pr_number }} &middot; <code>{{ alert.file }}</code> &middot; {{ alert.taxonomy_id }} &middot;
         <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
       <div>{{ alert.plain_english_summary }}</div>
       {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
       <div class="actions">
-        <form method="post" action="/dashboard/{{ alert.alert_id }}/approve" style="display:inline">
+        <form method="post" action="/dashboard/{{ alert.alert_id }}/approve?token={{ token }}" style="display:inline">
           <button class="approve" type="submit">Approve patch</button>
         </form>
-        <form method="post" action="/dashboard/{{ alert.alert_id }}/reject" style="display:inline">
+        <form method="post" action="/dashboard/{{ alert.alert_id }}/reject?token={{ token }}" style="display:inline">
           <button class="reject" type="submit">Reject</button>
         </form>
       </div>

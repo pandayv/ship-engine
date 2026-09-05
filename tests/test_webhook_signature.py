@@ -7,10 +7,24 @@ from fastapi import HTTPException
 import src.api.main as main_module
 
 
-def test_no_secret_configured_allows_through(monkeypatch):
+def test_no_secret_configured_fails_closed_by_default(monkeypatch):
+    # review finding #1: this used to silently allow any unsigned payload
+    # through when the secret wasn't configured — a real production
+    # misconfiguration would have let anyone trigger the pipeline. Now it
+    # must fail loudly (500, "misconfigured") rather than fail open.
     monkeypatch.setattr(main_module, "GITHUB_WEBHOOK_SECRET", "")
-    # should not raise, even with no signature header, when secret isn't provisioned
-    main_module._verify_signature(b'{"a": 1}', None)
+    monkeypatch.setattr(main_module, "ALLOW_UNSIGNED", False)
+    with pytest.raises(HTTPException) as exc_info:
+        main_module._verify_signature(b'{"a": 1}', None)
+    assert exc_info.value.status_code == 500
+
+
+def test_no_secret_configured_allows_through_with_explicit_opt_out(monkeypatch):
+    # the fail-open behavior still exists, but only as an explicit,
+    # named opt-in for local dev (SHIP_ALLOW_UNSIGNED=true) — not the default.
+    monkeypatch.setattr(main_module, "GITHUB_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(main_module, "ALLOW_UNSIGNED", True)
+    main_module._verify_signature(b'{"a": 1}', None)  # should not raise
 
 
 def test_valid_signature_passes(monkeypatch):
