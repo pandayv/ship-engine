@@ -257,15 +257,18 @@ def build_agent() -> "Agent":
     if backend == "bedrock":
         from strands.models.bedrock import BedrockModel
 
-        from src.aws.bedrock_session import bedrock_session
+        from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 
-        # finding #45: shares one rate-limited boto3 Session with
-        # vector_store.py's Bedrock embedding calls, so pacing is enforced
-        # against real combined traffic (RAG lookups + completions) at the
-        # transport boundary, instead of a fixed per-fragment sleep that
-        # couldn't see how many Bedrock calls a single fragment actually
-        # triggers.
-        model = BedrockModel(model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session())
+        # finding #45 (updated 2026-09-05): shares the process-wide boto3
+        # Session with vector_store.py's Bedrock embedding calls, and uses
+        # the same adaptive-retry Config — if concurrent fragment
+        # processing (this session's parallel-dispatch redesign) trips the
+        # real account-wide quota, this call backs off and retries
+        # automatically instead of either failing or being pre-emptively
+        # delayed by a limiter that can't see other processes' traffic.
+        model = BedrockModel(
+            model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session(), boto_client_config=BEDROCK_RETRY_CONFIG,
+        )
     elif backend == "ollama":
         from strands.models.ollama import OllamaModel
         # finding #53: this used to hardcode localhost while vector_store.py's

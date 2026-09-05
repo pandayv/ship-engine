@@ -52,16 +52,19 @@ def _bedrock_runtime_client():
     # still built a fresh boto3 client from the (already-cached) session
     # on every single RAG query, including every retrieve_regulation_text
     # tool call during a fragment's diagnosis. Cached the same way now.
-    from src.aws.bedrock_session import bedrock_session  # lazy import, same reasoning as before
+    from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session  # lazy import, same reasoning as before
 
-    return bedrock_session().client("bedrock-runtime")
+    return bedrock_session().client("bedrock-runtime", config=BEDROCK_RETRY_CONFIG)
 
 
 def _embed_bedrock(texts: list[str]) -> np.ndarray:
-    # finding #45: built from the shared rate-limited session so a cold-
-    # start VectorStore.build() burst (one call per corpus chunk) is paced
-    # against the same account-wide quota as Diagnostician's own LLM calls,
-    # instead of being unpaced entirely.
+    # finding #45 (updated 2026-09-05): built with adaptive retry config
+    # (BEDROCK_RETRY_CONFIG) so a cold-start VectorStore.build() burst (one
+    # call per corpus chunk), or concurrent traffic from other fragments'
+    # own diagnosis running at the same time, backs off and retries
+    # automatically if the real account-wide quota is hit, instead of
+    # either being unpaced entirely or pre-emptively delayed by a local
+    # limiter that can't see other processes' traffic anyway.
     client = _bedrock_runtime_client()
     vectors = []
     for text in texts:
