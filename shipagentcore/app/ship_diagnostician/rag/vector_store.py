@@ -7,16 +7,20 @@ environment, so there's no reason for a local/Ollama fallback path here.
 
 import json
 
-import boto3
 import numpy as np
 
+from aws.bedrock_session import bedrock_session
 from rag.chunker import Chunk
 
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    client = boto3.client("bedrock-runtime")
+    # finding #45: built from the shared rate-limited session so a cold-
+    # start VectorStore.build() burst (one call per corpus chunk) is paced
+    # against the same account-wide quota as this container's own LLM
+    # completion calls, instead of being unpaced entirely.
+    client = bedrock_session().client("bedrock-runtime")
     vectors = []
     for text in texts:
         body = json.dumps({"inputText": text})

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from strands import Agent, tool
 from strands.models.bedrock import BedrockModel
 
+from aws.bedrock_session import bedrock_session
 from rag.chunker import chunk_corpus
 from rag.vector_store import VectorStore
 
@@ -195,7 +196,14 @@ async def invoke(payload: dict, context) -> dict:
         raise ValueError("payload must include a non-empty 'fragment' (or 'prompt') string")
 
     agent = Agent(
-        model=BedrockModel(model_id=BEDROCK_MODEL_ID),
+        # finding #45: shares this container's one rate-limited boto3
+        # Session with vector_store.py's Bedrock embedding calls — this is
+        # the layer where real Bedrock traffic actually happens when the
+        # webhook Lambda runs in agentcore mode (it only calls
+        # invoke_agent_runtime itself, a different, less restrictive
+        # quota), so this is where pacing needs to live, not in the
+        # Lambda's own process.
+        model=BedrockModel(model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session()),
         system_prompt=SYSTEM_PROMPT,
         tools=[retrieve_regulation_text],
         structured_output_model=DiagnosticianOutput,

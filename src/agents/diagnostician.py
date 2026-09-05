@@ -246,7 +246,16 @@ def build_agent() -> "Agent":
     backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
     if backend == "bedrock":
         from strands.models.bedrock import BedrockModel
-        model = BedrockModel(model_id=BEDROCK_MODEL_ID)
+
+        from src.aws.bedrock_session import bedrock_session
+
+        # finding #45: shares one rate-limited boto3 Session with
+        # vector_store.py's Bedrock embedding calls, so pacing is enforced
+        # against real combined traffic (RAG lookups + completions) at the
+        # transport boundary, instead of a fixed per-fragment sleep that
+        # couldn't see how many Bedrock calls a single fragment actually
+        # triggers.
+        model = BedrockModel(model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session())
     elif backend == "ollama":
         from strands.models.ollama import OllamaModel
         # finding #53: this used to hardcode localhost while vector_store.py's

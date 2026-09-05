@@ -50,7 +50,6 @@ import hashlib
 import hmac
 import json
 import os
-import time
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
@@ -99,25 +98,21 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     fragments = split_diff_into_fragments(code_diff)
     results = []
     any_frozen = False
-    first_call = True
 
     for frag in fragments:
         screener_result = scan(frag["text"])
         if not screener_result.matched:
             continue  # this fragment passes silently, not worth a result entry
 
-        # Confirmed real limit (2026-09-04): Bedrock's cross-region requests-
-        # per-minute quota for our model is 10/min — a densely-flagged PR can
-        # legitimately exceed that if every escalated fragment fires back to
-        # back. Self-service quota increases aren't granted for this account
-        # (same "not really a raisable quota" pattern as the earlier Bedrock
-        # access saga - see ship_roadmap.md), so pace our own calls instead
-        # of relying on a limit that may not move. ~7s keeps us safely under
-        # 10/min even counting a fragment's own internal retries.
-        if not first_call:
-            time.sleep(7)
-        first_call = False
-
+        # finding #45: pacing against the real Bedrock quota (10/min,
+        # cross-region, confirmed 2026-09-04 - see ship_roadmap.md) used to
+        # live here as a fixed time.sleep(7) between fragments. That assumed
+        # exactly one Bedrock call per fragment, which isn't how a tool-
+        # using Diagnostician agent behaves (RAG lookups + completions, any
+        # of which can retry) - moved to src/aws/bedrock_session.py, a
+        # shared rate limiter at the actual transport boundary every
+        # Bedrock call goes through, regardless of how many calls a given
+        # fragment ends up making.
         try:
             isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
             diag = diagnose(isolated)  # requires AWS credentials — will raise if not configured
