@@ -15,10 +15,18 @@ high-risk alert with a bare curl, defeating the entire "freeze pending
 human review" point with no credential at all. Now gated behind a shared-
 secret token (SHIP_DASHBOARD_TOKEN), passed as a `token` query parameter so
 it works uniformly for a browser GET and for the HTML forms' POST actions
-without needing custom headers. Same escape-hatch pattern as the webhook's
-SHIP_ALLOW_UNSIGNED flag, for local dev without the env var set.
+without needing custom headers.
+
+Real bug an independent review caught (2026-09-05): the local-dev opt-out
+used to read the exact same SHIP_ALLOW_UNSIGNED env var the webhook uses
+to bypass its own, unrelated HMAC signature check. Setting that flag to
+test webhook delivery locally silently disabled dashboard auth too, with
+no indication that happened as a side effect of an unrelated setting.
+Given its own dedicated flag (SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD) so the
+two security controls can only ever be bypassed independently, on purpose.
 """
 
+import hmac
 import os
 from pathlib import Path
 
@@ -32,7 +40,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "dashboard_ui" / "templates"))
 
 DASHBOARD_TOKEN = os.environ.get("SHIP_DASHBOARD_TOKEN", "")
-ALLOW_UNAUTHENTICATED = os.environ.get("SHIP_ALLOW_UNSIGNED", "").lower() == "true"
+ALLOW_UNAUTHENTICATED = os.environ.get("SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD", "").lower() == "true"
 
 
 def _require_token(token: str | None) -> None:
@@ -40,7 +48,12 @@ def _require_token(token: str | None) -> None:
         if ALLOW_UNAUTHENTICATED:
             return  # explicit local-dev opt-out, same pattern as the webhook secret
         raise HTTPException(status_code=500, detail="SHIP_DASHBOARD_TOKEN is not configured on the server")
-    if token != DASHBOARD_TOKEN:
+    # Independent review (2026-09-05): this was a plain `!=` comparison,
+    # unlike the webhook's own HMAC check in the same fix pass, which
+    # correctly used hmac.compare_digest. A data-dependent short-circuiting
+    # string comparison risks a timing side-channel for a shared-secret
+    # token check; compare_digest is the standard fix.
+    if not token or not hmac.compare_digest(token, DASHBOARD_TOKEN):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
 

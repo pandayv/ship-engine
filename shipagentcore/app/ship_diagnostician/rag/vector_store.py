@@ -6,6 +6,7 @@ environment, so there's no reason for a local/Ollama fallback path here.
 """
 
 import json
+from functools import lru_cache
 
 import numpy as np
 
@@ -15,12 +16,23 @@ from rag.chunker import Chunk
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
 
 
+@lru_cache(maxsize=1)
+def _bedrock_runtime_client():
+    # Independent review (2026-09-05, mirrors the main ship-engine copy's
+    # same fix): embed_texts() used to build a fresh boto3 client from the
+    # already-cached session on every single call, including every
+    # retrieve_regulation_text tool call during a fragment's diagnosis —
+    # the exact hot-loop client-construction overhead findings #16/#50
+    # fixed elsewhere but missed here.
+    return bedrock_session().client("bedrock-runtime")
+
+
 def embed_texts(texts: list[str]) -> np.ndarray:
     # finding #45: built from the shared rate-limited session so a cold-
     # start VectorStore.build() burst (one call per corpus chunk) is paced
     # against the same account-wide quota as this container's own LLM
     # completion calls, instead of being unpaced entirely.
-    client = bedrock_session().client("bedrock-runtime")
+    client = _bedrock_runtime_client()
     vectors = []
     for text in texts:
         body = json.dumps({"inputText": text})

@@ -139,9 +139,20 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
                 # non-None whenever matched=True. remediation_patch is the
                 # one field that validator deliberately does NOT enforce (a
                 # legitimately optional field), so it keeps its fallback.
+                # finding #6 follow-up (independent review, 2026-09-05):
+                # the alert_id used to be derived from (repo, pr_number,
+                # file, taxonomy_id) alone — too coarse. Two different
+                # violations of the same taxonomy_id in the same file
+                # collided on the identical id, and the second put_alert()
+                # call would silently overwrite the first's row. Passing
+                # the isolated fragment text (exactly what Diagnostician
+                # actually judged) makes the id specific to THIS violation
+                # while a real retry of the same violation still re-derives
+                # the identical fragment text and correctly collides/
+                # overwrites, preserving finding #6's idempotency guarantee.
                 alert = put_alert(
                     repo=repo_full_name, pr_number=pr_number, file=frag["file"],
-                    taxonomy_id=diag.taxonomy_id, risk_score=diag.risk_score,
+                    taxonomy_id=diag.taxonomy_id, fragment_text=isolated, risk_score=diag.risk_score,
                     plain_english_summary=diag.plain_english_summary,
                     citation=diag.citation, remediation_patch=diag.remediation_patch or "",
                 )  # requires dynamodb:* permissions

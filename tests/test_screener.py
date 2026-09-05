@@ -75,6 +75,29 @@ def test_real_mobile_field_still_matches():
     assert "pii_data" in result.matched_buckets
 
 
+def test_punctuation_ending_terms_match_with_their_own_argument_immediately_following():
+    # Regression test for a bug an independent review caught (2026-09-05)
+    # in the #63 word-boundary fix itself: an unconditional (?!\w) after
+    # every term broke matching for any term ending in punctuation
+    # ("print(", ".setex(", "eval(", "exec(", "Agent(", "session[") the
+    # instant it was followed by its own realistic argument - exactly the
+    # normal, correct usage, not an edge case. Reproduced directly before
+    # fixing: scan("print(applicant_summary)") returned matched=False.
+    cases = [
+        ("result = eval(user_input)", "agentic", "eval("),
+        ("subprocess.exec(cmd)", "agentic", "exec("),
+        ("agent = Agent(tools=[shell_tool])", "agentic", "Agent("),
+        ("print(applicant_summary)", "logging_sinks", "print("),
+        ("session[user_id] = pii_blob", "cache_sinks", "session["),
+        ("cache.setex(300, key, value)", "cache_sinks", ".setex("),
+    ]
+    for text, expected_bucket, expected_term in cases:
+        result = scan(text)
+        assert result.matched, f"{text!r} should have matched but didn't"
+        assert expected_bucket in result.matched_buckets, f"{text!r} should be in {expected_bucket}"
+        assert expected_term in result.matched_terms, f"{text!r} should report term {expected_term!r}"
+
+
 def test_isolate_fragment_keeps_only_relevant_lines():
     code = "\n".join([f"line_{i} = {i}" for i in range(20)] + ["ssn_value = client.ssn"])
     result = scan(code)

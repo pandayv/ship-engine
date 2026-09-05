@@ -106,3 +106,41 @@ def test_no_token_configured_allows_through_with_explicit_opt_out(monkeypatch):
     monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [])
     response = client.get("/dashboard")
     assert response.status_code == 200
+
+
+def test_dashboard_auth_env_var_is_independent_of_the_webhook_signature_flag():
+    # Real bug an independent review caught (2026-09-05): the dashboard's
+    # opt-out used to read the exact same SHIP_ALLOW_UNSIGNED env var the
+    # webhook uses to bypass its own, unrelated HMAC check — setting one
+    # for local webhook testing silently disabled dashboard auth too, with
+    # no indication that happened as a side effect. Asserted directly
+    # against the source (not just current in-memory values, which could
+    # coincidentally differ even if both read the same env var) that the
+    # dashboard reads its own dedicated env var and does not reference the
+    # webhook's at all.
+    import inspect
+
+    dashboard_source = inspect.getsource(dashboard_module)
+    assert 'os.environ.get("SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD"' in dashboard_source
+    # Check the actual env-var-read call pattern, not just any mention of
+    # the string anywhere in the file (this test's own docstring above
+    # names it by name, which a naive substring check would also match).
+    assert 'os.environ.get("SHIP_ALLOW_UNSIGNED"' not in dashboard_source
+
+
+def test_wrong_token_uses_constant_time_comparison(monkeypatch):
+    # Independent review (2026-09-05): the token check used a plain `!=`
+    # rather than hmac.compare_digest, unlike the sibling webhook HMAC
+    # check in the same fix pass. This test can't observe timing directly,
+    # but confirms the code path actually calls compare_digest rather than
+    # `!=` by checking a wrong-but-same-length token is still rejected
+    # (compare_digest and `!=` agree on correctness; the real fix is in
+    # the source, asserted via inspection below).
+    import inspect
+
+    source = inspect.getsource(dashboard_module._require_token)
+    assert "hmac.compare_digest" in source
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [])
+    response = client.get("/dashboard", params={"token": "x" * len(TEST_TOKEN)})
+    assert response.status_code == 401
