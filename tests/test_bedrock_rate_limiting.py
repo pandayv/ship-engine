@@ -1,21 +1,30 @@
 """
-Tests for finding #45's real fix: rate-limiting Bedrock calls at the
-shared transport boundary (src/aws/bedrock_session.py) instead of a
-hand-placed time.sleep(7) in main.py's fragment loop that assumed one
-Bedrock call per fragment.
+Tests for finding #45's rate-limiting fix, updated 2026-09-05 for the
+parallel per-fragment dispatch redesign (see src/api/main.py's module
+docstring for the full architecture change).
+
+The original fix (a hand-rolled, process-local SlidingWindowRateLimiter)
+was removed: once fragments genuinely run concurrently across multiple
+Lambda/AgentCore instances, a pre-emptive local limiter can't see other
+instances' traffic and can't actually prevent the account-wide quota from
+being exceeded in aggregate — it was always documented as not solving
+that. The replacement is AWS's own standard pattern for many concurrent
+clients sharing one rate limit: adaptive retry (botocore's `adaptive`
+mode), configured once via BEDROCK_RETRY_CONFIG and applied everywhere a
+Bedrock client is built.
 
 Includes structural checks (reading source as text, same technique as
 tests/test_taxonomy_consistency.py) that both the in-process copy AND the
-deployed AgentCore copy actually route their Bedrock calls through the
-shared rate limiter — catching a future edit that quietly reverts to a
-bare boto3.client("bedrock-runtime") in either copy, which would silently
-reintroduce unpaced Bedrock traffic with no error anywhere.
+deployed AgentCore copy actually apply BEDROCK_RETRY_CONFIG everywhere
+they build a Bedrock client — catching a future edit that quietly reverts
+to an unconfigured boto3.client("bedrock-runtime") in either copy, which
+would silently reintroduce unhandled-throttle failures under concurrent
+load with no error anywhere obvious.
 """
 
-import time
 from pathlib import Path
 
-from src.aws.bedrock_session import SlidingWindowRateLimiter, bedrock_session
+from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_DIAGNOSTICIAN_SOURCE = (REPO_ROOT / "src" / "agents" / "diagnostician.py").read_text()
@@ -26,79 +35,60 @@ DEPLOYED_DIAGNOSTICIAN_SOURCE = (
 DEPLOYED_VECTOR_STORE_SOURCE = (
     REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "rag" / "vector_store.py"
 ).read_text()
+DEPLOYED_BEDROCK_SESSION_SOURCE = (
+    REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "aws" / "bedrock_session.py"
+).read_text()
 
 
-def test_limiter_allows_calls_under_the_limit_without_blocking():
-    limiter = SlidingWindowRateLimiter(max_calls=3, window_seconds=1.0)
-    start = time.monotonic()
-    for _ in range(3):
-        limiter.acquire()
-    elapsed = time.monotonic() - start
-    assert elapsed < 0.1, f"calls under the limit should not block, took {elapsed}s"
-
-
-def test_limiter_blocks_the_call_that_exceeds_the_limit():
-    limiter = SlidingWindowRateLimiter(max_calls=2, window_seconds=0.4)
-    limiter.acquire()
-    limiter.acquire()
-    start = time.monotonic()
-    limiter.acquire()  # 3rd call within the window must wait
-    elapsed = time.monotonic() - start
-    assert elapsed >= 0.35, f"3rd call within the window should have been paced, took {elapsed}s"
-
-
-def test_limiter_does_not_block_once_the_window_has_passed():
-    limiter = SlidingWindowRateLimiter(max_calls=1, window_seconds=0.2)
-    limiter.acquire()
-    time.sleep(0.25)  # let the window fully expire
-    start = time.monotonic()
-    limiter.acquire()
-    elapsed = time.monotonic() - start
-    assert elapsed < 0.1, f"call after the window expired should not block, took {elapsed}s"
+def test_bedrock_retry_config_uses_adaptive_mode():
+    # 'adaptive' is the specific mode that observes real throttling
+    # responses and paces/backs off client-side automatically - the
+    # AWS-recommended pattern for many concurrent clients sharing one
+    # account-wide rate limit. Read directly off the real Config object,
+    # not assumed from how it was constructed.
+    assert BEDROCK_RETRY_CONFIG.retries["mode"] == "adaptive"
 
 
 def test_bedrock_session_is_a_process_wide_singleton():
-    # Same session object every call - the fix only works if every Bedrock
-    # caller in the process actually shares the one rate-limited session,
-    # not a fresh, unregistered one each time.
+    # Same session object every call - avoids repeating session/credential
+    # resolution per caller, even though rate-limit handling itself is now
+    # per-client (BEDROCK_RETRY_CONFIG), not on the session.
     assert bedrock_session() is bedrock_session()
 
 
-def test_bedrock_session_registers_the_rate_limit_hook_on_bedrock_runtime():
-    session = bedrock_session()
-    calls = []
-    session.events.register("before-send.bedrock-runtime", lambda **kw: calls.append(kw))
-    # Emit the actual hierarchical event name botocore uses for a real
-    # bedrock-runtime operation (confirmed via botocore source read, see
-    # bedrock_session.py's docstring) - proves the hook is reachable from
-    # the real event path, not just registered under an unused name.
-    session.events.emit("before-send.bedrock-runtime.Converse", request="fake")
-    assert len(calls) >= 1, "before-send.bedrock-runtime hook was not reachable from a real operation event"
+def test_deployed_bedrock_session_also_exports_adaptive_retry_config():
+    # The deployed copy is a separate module (own dependency tree, can't
+    # import the main repo's copy) - read as text since it can't be
+    # imported into this venv (bedrock_agentcore isn't installed here,
+    # same reasoning as test_taxonomy_consistency.py).
+    assert 'Config(retries={"mode": "adaptive"})' in DEPLOYED_BEDROCK_SESSION_SOURCE
 
 
-def test_main_bedrock_model_uses_the_shared_rate_limited_session():
-    assert "from src.aws.bedrock_session import bedrock_session" in MAIN_DIAGNOSTICIAN_SOURCE
-    assert "boto_session=bedrock_session()" in MAIN_DIAGNOSTICIAN_SOURCE
+def test_main_bedrock_model_uses_adaptive_retry_config():
+    assert "BEDROCK_RETRY_CONFIG" in MAIN_DIAGNOSTICIAN_SOURCE
+    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in MAIN_DIAGNOSTICIAN_SOURCE
 
 
-def test_deployed_bedrock_model_uses_the_shared_rate_limited_session():
-    assert "from aws.bedrock_session import bedrock_session" in DEPLOYED_DIAGNOSTICIAN_SOURCE
-    assert "boto_session=bedrock_session()" in DEPLOYED_DIAGNOSTICIAN_SOURCE
+def test_deployed_bedrock_model_uses_adaptive_retry_config():
+    assert "BEDROCK_RETRY_CONFIG" in DEPLOYED_DIAGNOSTICIAN_SOURCE
+    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in DEPLOYED_DIAGNOSTICIAN_SOURCE
 
 
-def test_main_vector_store_embeddings_use_the_shared_rate_limited_session():
-    assert "bedrock_session()" in MAIN_VECTOR_STORE_SOURCE
-    assert 'boto3.client("bedrock-runtime")' not in MAIN_VECTOR_STORE_SOURCE
+def test_main_vector_store_embeddings_use_adaptive_retry_config():
+    assert "config=BEDROCK_RETRY_CONFIG" in MAIN_VECTOR_STORE_SOURCE
+    assert 'client("bedrock-runtime")' not in MAIN_VECTOR_STORE_SOURCE  # must always pass a config
 
 
-def test_deployed_vector_store_embeddings_use_the_shared_rate_limited_session():
-    assert "bedrock_session()" in DEPLOYED_VECTOR_STORE_SOURCE
-    assert 'boto3.client("bedrock-runtime")' not in DEPLOYED_VECTOR_STORE_SOURCE
+def test_deployed_vector_store_embeddings_use_adaptive_retry_config():
+    assert "config=BEDROCK_RETRY_CONFIG" in DEPLOYED_VECTOR_STORE_SOURCE
+    assert 'client("bedrock-runtime")' not in DEPLOYED_VECTOR_STORE_SOURCE
 
 
-def test_main_py_no_longer_has_the_removed_fragment_loop_sleep():
+def test_main_py_dispatches_fragments_instead_of_self_invoking_lambda():
+    # The old design (self-invoke the same Lambda with the whole diff via
+    # InvocationType="Event") is fully replaced by per-fragment SQS
+    # dispatch - assert the old marker/self-invoke machinery is gone and
+    # the new dispatch function is what the webhook route actually calls.
     main_source = (REPO_ROOT / "src" / "api" / "main.py").read_text()
-    # Check for the actual removed statement, not just the string "time.sleep(7)"
-    # anywhere (this test file's own explanatory comments mention it by name).
-    assert "        time.sleep(7)" not in main_source
-    assert "\nimport time\n" not in main_source
+    assert "ASYNC_MARKER" not in main_source
+    assert "_dispatch_fragments(repo_full_name, pr_number, code_diff)" in main_source
