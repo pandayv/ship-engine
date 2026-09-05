@@ -282,7 +282,23 @@ def diagnose_in_process(isolated_fragment: str) -> DiagnosticianOutput:
     return result.structured_output
 
 
-AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:680160265218:runtime/shipagentcore_ship_diagnostician-ziGdiLDe7Q"
+def _agentcore_runtime_arn() -> str:
+    # finding #42: this used to be a hardcoded literal, including the
+    # deploy-specific random suffix `agentcore deploy` assigns. Every
+    # re-deploy risks silently leaving this pointed at a stale, superseded
+    # runtime with no error anywhere — exactly the "fail silent" failure
+    # class the whole review pass has been about eliminating. Required env
+    # var, no fallback default: a missing/wrong value now fails LOUDLY the
+    # first time diagnose_via_agentcore() is actually called, instead of
+    # silently invoking whatever the constant happened to say.
+    arn = os.environ.get("SHIP_AGENTCORE_RUNTIME_ARN")
+    if not arn:
+        raise RuntimeError(
+            "SHIP_AGENTCORE_RUNTIME_ARN is not set — diagnose_via_agentcore() has no runtime to "
+            "call. Set it to the current runtime ARN (visible in `agentcore status` or the "
+            "deploy output) after every `agentcore deploy`, since redeploys can mint a new ARN."
+        )
+    return arn
 
 
 def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
@@ -298,7 +314,7 @@ def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
 
     client = boto3.client("bedrock-agentcore", region_name="us-west-2")
     response = client.invoke_agent_runtime(
-        agentRuntimeArn=AGENTCORE_RUNTIME_ARN,
+        agentRuntimeArn=_agentcore_runtime_arn(),
         runtimeSessionId=str(uuid.uuid4()),
         payload=json.dumps({"fragment": isolated_fragment}).encode("utf-8"),
     )
