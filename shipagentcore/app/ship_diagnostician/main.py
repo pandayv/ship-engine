@@ -215,7 +215,19 @@ async def invoke(payload: dict, context) -> dict:
         tools=[retrieve_regulation_text],
         structured_output_model=DiagnosticianOutput,
     )
-    result = agent(f"Isolated code fragment flagged by Screener:\n\n{fragment}")
+    # finding #11: this used to be the synchronous `agent(...)` call inside
+    # an `async def` entrypoint - a plain blocking call, not a real
+    # coroutine, so it never actually yielded control back to
+    # BedrockAgentCoreApp's event loop during Bedrock I/O. Since this is a
+    # persistent runtime service (not a one-shot Lambda), that meant any
+    # concurrency it offered was defeated - concurrent requests queued
+    # behind whichever one arrived first. Strands' own Agent exposes a
+    # real async entrypoint (confirmed via direct introspection of the
+    # installed library, not assumed: Agent.invoke_async is an actual
+    # coroutine function with the same signature as the sync __call__) -
+    # using it here lets the runtime genuinely interleave concurrent
+    # requests during I/O wait instead of one strictly blocking the next.
+    result = await agent.invoke_async(f"Isolated code fragment flagged by Screener:\n\n{fragment}")
     # finding #59: structured_output is genuinely Optional in Strands' own
     # AgentResult (e.g. a run that ends via interrupt) — treating it as
     # always-populated crashed several frames from the real cause.
