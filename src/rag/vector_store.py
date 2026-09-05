@@ -43,9 +43,13 @@ GEMINI_EMBED_MODEL_ID = "gemini-embedding-001"  # text-only; confirmed current v
 
 
 def _embed_bedrock(texts: list[str]) -> np.ndarray:
-    import boto3  # lazy import, same reasoning as before
+    from src.aws.bedrock_session import bedrock_session  # lazy import, same reasoning as before
 
-    client = boto3.client("bedrock-runtime")
+    # finding #45: built from the shared rate-limited session so a cold-
+    # start VectorStore.build() burst (one call per corpus chunk) is paced
+    # against the same account-wide quota as Diagnostician's own LLM calls,
+    # instead of being unpaced entirely.
+    client = bedrock_session().client("bedrock-runtime")
     vectors = []
     for text in texts:
         body = json.dumps({"inputText": text})
