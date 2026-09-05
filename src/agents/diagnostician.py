@@ -315,13 +315,37 @@ def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
     the network instead of running the agent in this process — the
     architecturally "complete" path: webhook -> deployed AgentCore runtime,
     not two parallel implementations of the same logic. Needs
-    bedrock-agentcore:InvokeAgentRuntime permission (already granted)."""
+    bedrock-agentcore:InvokeAgentRuntime permission (already granted).
+
+    Live-caught bug (2026-09-05, during finding #45's deployment
+    verification): botocore's default read timeout is 60s. A single
+    invoke_agent_runtime call can legitimately take several minutes once
+    the deployed container's own Bedrock rate limiter (finding #45,
+    shipagentcore/.../aws/bedrock_session.py) is pacing a cold-start
+    corpus-embedding burst plus the model's own completion calls -
+    directly observed taking 190s-308s in real runs, not a theoretical
+    worst case. The default timeout fired mid-call, the exception was
+    correctly caught by process_pr()'s per-fragment handler (finding #8)
+    and swallowed with NO visible error (before the logging fix right
+    above this), so the invocation "succeeded" in CloudWatch while
+    silently producing zero alerts. Set an explicit read_timeout with
+    real margin under this Lambda's 600s function timeout, and disable
+    botocore's own retry-on-timeout (max_attempts=1): a retry here would
+    silently double the wait past the Lambda's own timeout budget instead
+    of failing fast and letting finding #8's handler record one clear
+    error.
+    """
     import json
     import uuid
 
     import boto3
+    from botocore.config import Config
 
-    client = boto3.client("bedrock-agentcore", region_name="us-west-2")
+    client = boto3.client(
+        "bedrock-agentcore",
+        region_name="us-west-2",
+        config=Config(read_timeout=540, connect_timeout=10, retries={"max_attempts": 1}),
+    )
     response = client.invoke_agent_runtime(
         agentRuntimeArn=_agentcore_runtime_arn(),
         runtimeSessionId=str(uuid.uuid4()),

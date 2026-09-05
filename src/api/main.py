@@ -49,6 +49,7 @@ for the full plain-English writeup of every finding):
 import hashlib
 import hmac
 import json
+import logging
 import os
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -62,6 +63,9 @@ from src.storage.alert_store import put_alert
 
 app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
+
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 ALLOW_UNSIGNED = os.environ.get("SHIP_ALLOW_UNSIGNED", "").lower() == "true"
@@ -98,6 +102,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     fragments = split_diff_into_fragments(code_diff)
     results = []
     any_frozen = False
+    log.info("process_pr start: repo=%s pr=%s fragments=%d", repo_full_name, pr_number, len(fragments))
 
     for frag in fragments:
         screener_result = scan(frag["text"])
@@ -141,6 +146,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
                 )  # requires dynamodb:* permissions
                 alert_id = alert.alert_id
 
+            log.info("fragment result: file=%s action=%s alert_id=%s", frag["file"], decision.action.value, alert_id)
             results.append({
                 "file": frag["file"],
                 "action": decision.action.value,
@@ -154,6 +160,18 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
             # response) used to silently abort every fragment after it in
             # the same PR, since nothing caught it. Record the failure and
             # keep going — a partial result is far better than a silent gap.
+            #
+            # Live-caught gap (2026-09-05, during finding #45's deployment
+            # verification): this except block recorded the failure into
+            # `results`, but for the real production path — an async,
+            # fire-and-forget Lambda invocation (InvocationType="Event") —
+            # nothing ever reads `results` back. A real fragment failure
+            # here was completely invisible: the invocation reported
+            # success in CloudWatch, took the full multi-minute processing
+            # time, and silently produced zero alerts. log.exception()
+            # (not just recording into the discarded return value) is what
+            # actually makes this debuggable from CloudWatch.
+            log.exception("fragment failed: file=%s repo=%s pr=%s", frag["file"], repo_full_name, pr_number)
             results.append({
                 "file": frag["file"],
                 "action": "error",
@@ -162,6 +180,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
                 "alert_id": None,
             })
 
+    log.info("process_pr done: repo=%s pr=%s any_frozen=%s escalated=%d", repo_full_name, pr_number, any_frozen, len(results))
     return {
         "action": "freeze" if any_frozen else "pass",
         "fragments_scanned": len(fragments),
