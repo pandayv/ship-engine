@@ -29,6 +29,7 @@ Diagnostician's Gemini LLM path.
 import json
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -42,14 +43,26 @@ GEMINI_EMBED_MODEL_ID = "gemini-embedding-001"  # text-only; confirmed current v
 # is multimodal (text/image/video/audio) and unnecessary for this text-only corpus.
 
 
-def _embed_bedrock(texts: list[str]) -> np.ndarray:
+@lru_cache(maxsize=1)
+def _bedrock_runtime_client():
+    # Independent review (2026-09-05) caught a real gap: the #16/#50
+    # cleanup pass cached alert_store._table() and both Diagnostician
+    # copies' _get_store() to avoid rebuilding a client on every call in
+    # the hot per-fragment loop, but missed this one — _embed_bedrock()
+    # still built a fresh boto3 client from the (already-cached) session
+    # on every single RAG query, including every retrieve_regulation_text
+    # tool call during a fragment's diagnosis. Cached the same way now.
     from src.aws.bedrock_session import bedrock_session  # lazy import, same reasoning as before
 
+    return bedrock_session().client("bedrock-runtime")
+
+
+def _embed_bedrock(texts: list[str]) -> np.ndarray:
     # finding #45: built from the shared rate-limited session so a cold-
     # start VectorStore.build() burst (one call per corpus chunk) is paced
     # against the same account-wide quota as Diagnostician's own LLM calls,
     # instead of being unpaced entirely.
-    client = bedrock_session().client("bedrock-runtime")
+    client = _bedrock_runtime_client()
     vectors = []
     for text in texts:
         body = json.dumps({"inputText": text})

@@ -77,7 +77,7 @@ def create_table_if_not_exists() -> None:
     client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
 
 
-def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: str) -> str:
+def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str) -> str:
     """
     Review finding #6: alert_id used to be a fresh uuid4() on every call, so
     a GitHub webhook redelivery or a Lambda async-invoke retry (finding #52)
@@ -85,11 +85,27 @@ def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: s
     violation every time — the dashboard accumulated duplicate frozen rows
     that had to be manually reconciled, and resolving one had no effect on
     the others. Deriving the id from what actually identifies "this
-    violation" (which repo, which PR, which file, which taxonomy category)
-    means a retry's put_item naturally overwrites the same row instead of
-    creating a new one — true idempotency, not just retry-avoidance.
+    violation" means a retry's put_item naturally overwrites the same row
+    instead of creating a new one — true idempotency, not just
+    retry-avoidance.
+
+    Bug an independent review caught (2026-09-05) in the original fix:
+    (repo, pr_number, file, taxonomy_id) alone is too coarse. Two entirely
+    different violations of the SAME taxonomy_id in the SAME file (e.g. an
+    SSN leak in one function and a separate account-number leak in another
+    function, both PIIE-001) hashed to the IDENTICAL alert_id — the second
+    put_alert() call would silently overwrite the first violation's row
+    (the idempotent-write ConditionExpression allows overwriting a still-
+    "frozen" row), and once resolved, that same collision would silently
+    block a genuinely new future violation of the same taxonomy_id/file
+    from ever being persisted at all, with put_alert() returning as if it
+    had succeeded. Fixed by including the isolated fragment's own text in
+    the key: a real retry of the SAME violation re-diagnoses the SAME
+    fragment text (still collides/overwrites correctly, preserving finding
+    #6's idempotency guarantee), while two DIFFERENT violations produce
+    different fragment text and therefore different ids.
     """
-    key = f"{repo}#{pr_number}#{file}#{taxonomy_id}"
+    key = f"{repo}#{pr_number}#{file}#{taxonomy_id}#{fragment_text}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
@@ -123,10 +139,10 @@ def _decode_item(item: dict) -> dict:
     return item
 
 
-def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, risk_score: float,
+def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str, risk_score: float,
               plain_english_summary: str, citation: str, remediation_patch: str) -> Alert:
     alert = Alert(
-        alert_id=_deterministic_alert_id(repo, pr_number, file, taxonomy_id),
+        alert_id=_deterministic_alert_id(repo, pr_number, file, taxonomy_id, fragment_text),
         repo=repo,
         pr_number=pr_number,
         file=file,
@@ -236,7 +252,7 @@ if __name__ == "__main__":
     create_table_if_not_exists()
     alert = put_alert(
         repo="pandayv/micro-finance", pr_number=1, file="loans/ai_underwriting.py",
-        taxonomy_id="PIIE-001", risk_score=9.1,
+        taxonomy_id="PIIE-001", fragment_text="prompt = f'SSN {applicant.ssn}'", risk_score=9.1,
         plain_english_summary="Raw applicant PII sent to an external LLM without masking.",
         citation="GDPR Art. 32(1)(a)", remediation_patch="# hash/redact PII before building the prompt",
     )

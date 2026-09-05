@@ -65,7 +65,29 @@ class ScreenerResult:
 
 
 def _compile_term_pattern(term: str) -> re.Pattern:
-    return re.compile(r"(?<!\w)" + re.escape(term) + r"(?!\w)", flags=re.IGNORECASE)
+    # Independent review (2026-09-05) caught a real regression here: an
+    # unconditional (?<!\w) / (?!\w) on BOTH sides breaks matching for any
+    # term whose own first/last character is already punctuation, not a
+    # word character — which several real trigger terms are ("print(",
+    # ".setex(", "eval(", "exec(", "Agent(", "session["). Reproduced
+    # directly: scan("print(applicant_summary)") returned matched=False,
+    # because (?!\w) checks the character AFTER the literal "(" — which is
+    # the call's own argument, a word character — and rejects. ".setex("
+    # failed on the LEADING side too: (?<!\w) checked the character before
+    # the term's leading ".", which in "cache.setex(" is "e" (word char),
+    # and rejected a completely normal, correct usage.
+    #
+    # The boundary check's actual purpose is only to reject a term being
+    # embedded INSIDE a longer identifier (the finding #63 false positives:
+    # "race" inside "traceback", "mobile" inside "automobile") — that risk
+    # only exists on a side where the term's own edge character is itself
+    # a word character. If the term already starts/ends in punctuation
+    # (".", "(", "["), that punctuation can't be "continued" as part of a
+    # longer identifier in any of these languages, so no boundary
+    # assertion is needed — or correct — on that side at all.
+    prefix = r"(?<!\w)" if term[0].isalnum() or term[0] == "_" else ""
+    suffix = r"(?!\w)" if term[-1].isalnum() or term[-1] == "_" else ""
+    return re.compile(prefix + re.escape(term) + suffix, flags=re.IGNORECASE)
 
 
 # finding #21: _term_matches() used to build a fresh pattern string (escape
@@ -92,9 +114,19 @@ def _term_matches(text: str, term: str) -> bool:
     "automobile" tripped pii_data's "mobile". Fixed with single-char
     lookaround (?<!\\w)...(?!\\w) instead of \\b, since several terms end in
     punctuation (e.g. "print(", "httpx.post") where \\b's word-char
-    requirement on both sides doesn't behave as intended — the lookaround
-    only cares what surrounds the match, not what's inside it, so it works
-    uniformly for both plain-word terms and punctuation-heavy ones.
+    requirement on both sides doesn't behave as intended.
+
+    Follow-up fix (independent review, 2026-09-05): the first version of
+    this applied the lookaround unconditionally on both sides, which broke
+    matching entirely for the realistic case — a punctuation-ending term
+    (e.g. "print(") immediately followed by its own argument
+    ("print(applicant_summary)"). _compile_term_pattern() now only applies
+    a boundary assertion on a side where the term's own edge character is
+    itself a word character — see that function's docstring for the full
+    reasoning. Confirmed via direct reproduction that this fix restores
+    matching for "eval(user_input)", "cache.setex(...)",
+    "print(applicant_summary)", and "session[user_id]" while the original
+    #63 false-positive tests (race/mobile) still correctly reject.
 
     Trade-off worth knowing: this also stops matching a term as a prefix of
     a longer identifier (e.g. "mobile" no longer matches inside
