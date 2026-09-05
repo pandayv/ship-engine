@@ -30,7 +30,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 if TYPE_CHECKING:
     from strands import Agent
@@ -149,18 +149,53 @@ fields empty — do not invent a violation to justify the escalation."""
 
 
 class DiagnosticianOutput(BaseModel):
-    matched: bool = Field(description="True only if a real PIIE-001 violation was confirmed, not just Screener's keyword match")
+    # finding #39 (review, 2026-09-05): this description said "PIIE-001"
+    # only, contradicting the prompt above on every non-PIIE fragment — the
+    # model receives literally contradictory instructions in the same
+    # request, since Strands surfaces this description to the model as part
+    # of the structured-output schema it must fill in. Fixed to match the
+    # prompt's actual scope.
+    matched: bool = Field(description="True only if a real violation was confirmed (any of PIIE-001/002/003, TLGP-001, TLGP-002, ALBP-001), not just Screener's keyword match")
     taxonomy_id: str | None = Field(default=None, description="'PIIE-001', 'PIIE-002', 'PIIE-003', 'TLGP-001', 'TLGP-002', or 'ALBP-001'")
     risk_score: float | None = Field(default=None, ge=1, le=10)
     plain_english_summary: str | None = None
     citation: str | None = Field(default=None, description="Exact article/paragraph from the retrieved regulation text")
     remediation_patch: str | None = None
 
+    @model_validator(mode="after")
+    def _matched_implies_populated(self) -> "DiagnosticianOutput":
+        # finding #46: "matched implies all four fields populated" was only
+        # prose in the prompt, never enforced — every caller had to
+        # separately re-derive it (finding #9's `or` fallbacks) with no
+        # guarantee of getting it right, and finding #51 showed a schema-
+        # permitted matched=True/risk_score=None combination can crash
+        # triage.route() several frames away from the actual cause. Enforce
+        # it once, here, so a prompt regression fails loudly at the model
+        # boundary instead of silently becoming an empty string downstream.
+        if self.matched:
+            missing = [
+                name for name, value in (
+                    ("taxonomy_id", self.taxonomy_id),
+                    ("risk_score", self.risk_score),
+                    ("citation", self.citation),
+                    ("plain_english_summary", self.plain_english_summary),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"matched=True but missing required field(s): {', '.join(missing)}")
+        return self
+
 
 _store = None  # type: ignore[var-annotated]  # lazily typed as VectorStore, see _get_store
 
 
 def _get_store():
+    # finding #10: build into a local var, only publish to the module
+    # global on success — the old version published an empty VectorStore()
+    # before .build() ran, so a transient embedding failure left a
+    # permanently-broken cached store for the rest of the process's
+    # lifetime (every later call skipped re-init and just re-raised).
     global _store
     if _store is None:
         from src.rag.chunker import chunk_corpus
@@ -168,8 +203,9 @@ def _get_store():
 
         corpus_dir = Path(__file__).resolve().parents[2] / "rag_corpus"
         chunks = chunk_corpus(corpus_dir)
-        _store = VectorStore()
-        _store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
+        store = VectorStore()
+        store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
+        _store = store
     return _store
 
 
@@ -213,7 +249,11 @@ def build_agent() -> "Agent":
         model = BedrockModel(model_id=BEDROCK_MODEL_ID)
     elif backend == "ollama":
         from strands.models.ollama import OllamaModel
-        model = OllamaModel("http://localhost:11434", model_id=OLLAMA_MODEL_ID)
+        # finding #53: this used to hardcode localhost while vector_store.py's
+        # _embed_ollama() correctly read OLLAMA_HOST — same logical backend,
+        # two different sources of truth for where it lives.
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        model = OllamaModel(ollama_host, model_id=OLLAMA_MODEL_ID)
     elif backend == "gemini":
         from strands.models.gemini import GeminiModel
         model = GeminiModel(model_id=GEMINI_MODEL_ID)  # reads GEMINI_API_KEY from env
@@ -234,7 +274,12 @@ def diagnose_in_process(isolated_fragment: str) -> DiagnosticianOutput:
     healthy — used for the demo/dev path."""
     agent = build_agent()
     result = agent(f"Isolated code fragment flagged by Screener:\n\n{isolated_fragment}")
-    return result.structured_output  # type: ignore[return-value]
+    # finding #59: structured_output is genuinely Optional in Strands' own
+    # AgentResult (e.g. a run that ends via interrupt) — treating it as
+    # always-populated crashed several frames from the real cause.
+    if result.structured_output is None:
+        raise RuntimeError("Agent run completed without producing structured output — no verdict to return.")
+    return result.structured_output
 
 
 AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:680160265218:runtime/shipagentcore_ship_diagnostician-ziGdiLDe7Q"

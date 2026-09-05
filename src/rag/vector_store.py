@@ -7,12 +7,18 @@ See ship_roadmap.md's "AWS-native technical stack" section for why Knowledge
 Bases was deliberately skipped.
 
 Embedding backend is switchable via the SHIP_MODEL_BACKEND env var
-("bedrock" | "ollama", default "ollama" as of 2026-09-04). Bedrock Titan is
-the intended AWS-native choice for the real submission, but the account's
-Bedrock access is currently blocked by an unrelated new-account activation
-issue (see ship_roadmap.md) — Ollama's nomic-embed-text runs fully local,
-zero AWS dependency, so POC/dev work isn't blocked on that resolving.
-Swapping back to Bedrock is a one-line env var change, not a code change.
+("bedrock" | "ollama", default "bedrock" — the account-wide Bedrock quota
+block that once made "ollama" the safe default was resolved 2026-09-04, see
+ship_roadmap.md; this docstring previously went stale on that point,
+finding #55 in the 2026-09-05 architecture review — fixed here). Bedrock
+Titan is the AWS-native choice for the real submission; Ollama's
+nomic-embed-text remains available as a fully-local, zero-AWS-dependency
+fallback.
+
+Note: "gemini" is a valid SHIP_MODEL_BACKEND value for Diagnostician's LLM
+(see diagnostician.py) but NOT for embeddings here — Gemini's embedding API
+isn't wired up, so selecting it fails fast with a clear error rather than
+the previous generic "Unknown backend" (finding #23/#47).
 """
 
 import json

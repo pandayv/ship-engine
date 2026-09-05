@@ -64,6 +64,34 @@ class ScreenerResult:
         }
 
 
+def _term_matches(text: str, term: str) -> bool:
+    """
+    Shared match logic for a single trigger term against a text (finding
+    #33: scan() and isolate_fragment() used to reimplement this
+    independently and could disagree).
+
+    finding #63: the old version was a plain re.escape(term) substring
+    search with no actual boundary anchoring, despite a comment claiming
+    "word-boundary-ish" matching. Confirmed real false positives in this
+    exact fintech domain: "traceback"/"embrace" tripped bias_data's "race";
+    "automobile" tripped pii_data's "mobile". Fixed with single-char
+    lookaround (?<!\\w)...(?!\\w) instead of \\b, since several terms end in
+    punctuation (e.g. "print(", "httpx.post") where \\b's word-char
+    requirement on both sides doesn't behave as intended — the lookaround
+    only cares what surrounds the match, not what's inside it, so it works
+    uniformly for both plain-word terms and punctuation-heavy ones.
+
+    Trade-off worth knowing: this also stops matching a term as a prefix of
+    a longer identifier (e.g. "mobile" no longer matches inside
+    "mobile_number", since "_" counts as a word character) — acceptable
+    here since the real demo repo uses the bare field name, not a suffixed
+    variant, but worth remembering if trigger terms ever need prefix
+    matching against a real codebase that uses such suffixes.
+    """
+    pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+
+
 def scan(code_diff: str) -> ScreenerResult:
     """
     Binary trigger: scan a code diff's text for any Screener keyword.
@@ -75,10 +103,7 @@ def scan(code_diff: str) -> ScreenerResult:
 
     for bucket, terms in SCREENER_TRIGGERS.items():
         for term in terms:
-            # word-boundary-ish match, case-insensitive, tolerant of the
-            # trailing "(" already present in some agentic trigger terms
-            pattern = re.escape(term)
-            if re.search(pattern, code_diff, flags=re.IGNORECASE):
+            if _term_matches(code_diff, term):
                 matched_buckets.append(bucket)
                 matched_terms.append(term)
 
@@ -118,13 +143,29 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
         file_chunks.append({"file": m.group(1), "text": code_diff[start:end]})
 
     fragments = []
-    func_pattern = re.compile(r"^\+\s*(?:def|class)\s+\w+")
+    # finding #64: this used to allow arbitrary leading whitespace after the
+    # "+", so an indented class method counted as a boundary too, contrary
+    # to the docstring's "top-level def/class" claim — a class's __init__
+    # (building a scoring table) and its score() method could get split
+    # into separate fragments, dropping context ALBP-001's strict evidence
+    # bar needs. Requiring the "+" to be immediately followed by def/class
+    # (no whitespace) restricts this to genuinely top-level definitions.
+    func_pattern = re.compile(r"^\+(?:def|class)\s+\w+")
     for chunk in file_chunks:
         lines = chunk["text"].splitlines()
         boundaries = [i for i, line in enumerate(lines) if func_pattern.match(line)]
         if len(boundaries) <= 1:
             fragments.append(chunk)  # nothing to split further
             continue
+        # finding #5: this used to have an end sentinel (len(lines)) but no
+        # start sentinel, so lines[0:boundaries[0]] — imports, module-level
+        # constants, diff/hunk headers, any added top-level code before the
+        # first def/class — was silently dropped from every fragment. A
+        # fragment matched by Screener's whole-diff precheck but containing
+        # none of the actual triggering line would reach Diagnostician
+        # effectively un-diagnosed.
+        if boundaries[0] != 0:
+            boundaries = [0] + boundaries
         boundaries.append(len(lines))
         for i in range(len(boundaries) - 1):
             fragments.append({"file": chunk["file"], "text": "\n".join(lines[boundaries[i]:boundaries[i + 1]])})
@@ -141,7 +182,10 @@ def isolate_fragment(code_diff: str, matched_terms: list, context_lines: int = 3
     lines = code_diff.splitlines()
     keep = set()
     for i, line in enumerate(lines):
-        if any(term.lower() in line.lower() for term in matched_terms):
+        # finding #33: now shares _term_matches with scan() instead of its
+        # own separate substring check, so the two can't silently disagree
+        # about what counts as a match.
+        if any(_term_matches(line, term) for term in matched_terms):
             for j in range(max(0, i - context_lines), min(len(lines), i + context_lines + 1)):
                 keep.add(j)
     return "\n".join(lines[i] for i in sorted(keep))
