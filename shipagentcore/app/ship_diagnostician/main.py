@@ -114,16 +114,25 @@ actually relevant to what you're looking at.
 If you confirm a real violation:
 - Set taxonomy_id to whichever ID actually applies (PIIE-001/002/003, TLGP-001, \
   TLGP-002, or ALBP-001).
-- Assign a risk_score from 1-10. For PIIE, a score >= 7.5 means raw, directly- \
+- Assign a risk_score from 1-10. Each category is judged and frozen against \
+  its own bar (finding #41 fixed this — these numbers match exactly what \
+  Triage actually enforces per category, see src/taxonomy.py's REGISTRY): \
+  For PIIE-001 (external sink), a score >= 7.0 means raw, directly- \
   identifying financial PII (SSN, account number, full name + income together) \
-  reaching an external sink with no masking at all. For TLGP-002, a score >= 7.5 \
-  means the AI's output is applied as a final decision with no human checkpoint \
-  visible anywhere in the fragment. For ALBP-001, a score >= 7.5 means the \
-  protected characteristic/proxy directly and materially affects the scoring \
-  outcome (e.g. a numeric penalty/bonus applied). For TLGP-001, a score >= 7.5 \
-  means the exposed capability is broad/destructive (arbitrary shell exec, \
-  unscoped DB write) with zero human gate before execution. Lower scores are \
-  for partial/ambiguous cases.
+  reaching an external sink with no masking at all — this category freezes \
+  at a lower bar because data leaving the system boundary is irrecoverable. \
+  For PIIE-002/003 (logs/cache), a score >= 7.5 means the same kind of raw \
+  PII exposure, but internally contained. For TLGP-002, a score >= 7.0 means \
+  the AI's output is applied as a final decision with no human checkpoint \
+  visible anywhere in the fragment — lower bar because this breaks the core \
+  human-in-the-loop guarantee, not a matter of degree. For ALBP-001, a score \
+  >= 7.5 means the protected characteristic/proxy directly and materially \
+  affects the scoring outcome (e.g. a numeric penalty/bonus applied). For \
+  TLGP-001, a score >= 7.0 means the exposed capability is broad/destructive \
+  (arbitrary shell exec, unscoped DB write) with zero human gate before \
+  execution — lower bar because an AI-controlled destructive capability with \
+  no gate is severe once genuinely confirmed. Lower scores are for \
+  partial/ambiguous cases regardless of category.
 - Write a plain_english_summary a non-technical founder could understand in one \
   read.
 - Provide the exact citation (article and paragraph, or OWASP section) from the \
