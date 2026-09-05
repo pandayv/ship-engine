@@ -66,7 +66,21 @@ app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
 
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+# Real bug caught during end-to-end verification (2026-09-05): AWS Lambda's
+# Python runtime pre-attaches its own handler to the root logger before
+# user code runs. logging.basicConfig() is documented to be a no-op if the
+# root logger already has handlers (unless force=True) - so this silently
+# did nothing in the deployed Lambda, even though it worked fine locally
+# (no pre-existing handler there), which is exactly why this went
+# unnoticed: local testing gave false confidence. Only ERROR-level
+# log.exception() calls were ever actually visible in CloudWatch; the
+# INFO-level "process_pr start/done" and "fragment result" lines this
+# session's earlier #45 follow-up fix added for debuggability were never
+# reaching CloudWatch at all. Setting the level directly on both this
+# logger and the root logger works regardless of pre-existing handlers -
+# confirmed by a real Lambda invocation after this fix, not assumed.
+log.setLevel(logging.INFO)
+logging.getLogger().setLevel(logging.INFO)
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 ALLOW_UNSIGNED = os.environ.get("SHIP_ALLOW_UNSIGNED", "").lower() == "true"
