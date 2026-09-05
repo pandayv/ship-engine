@@ -52,6 +52,7 @@ import json
 import logging
 import os
 
+import requests
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from src.agents.diagnostician import diagnose
@@ -236,7 +237,19 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
         # this service's own GitHub token / Bedrock quota against it.
         if repo_full_name not in ALLOWED_REPOS:
             raise HTTPException(status_code=403, detail=f"Repo {repo_full_name!r} is not in the configured allowlist")
-        code_diff = fetch_pr_diff(repo_full_name, pr_number)
+        # finding #62: fetch_pr_diff()'s raise_for_status() was uncaught
+        # right here, in the "fast, reliable" leg specifically meant not
+        # to crash — a closed/deleted PR, an expired token, or a transient
+        # GitHub 5xx turned into an unhandled requests.HTTPError and a bare
+        # 500 with no logged context. Log it clearly (same "make failures
+        # visible" principle as finding #45's timeout fix) and return a
+        # real HTTP error GitHub's own webhook redelivery can react to,
+        # instead of an opaque crash.
+        try:
+            code_diff = fetch_pr_diff(repo_full_name, pr_number)
+        except requests.exceptions.RequestException as e:
+            log.exception("fetch_pr_diff failed: repo=%s pr=%s", repo_full_name, pr_number)
+            raise HTTPException(status_code=502, detail=f"Could not fetch PR diff from GitHub: {e}") from e
     else:
         # Simplified {"code_diff": "..."} body, for local testing without a
         # real GitHub webhook payload.
