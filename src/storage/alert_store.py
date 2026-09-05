@@ -14,9 +14,10 @@ decisions during a hackathon sprint):
 """
 
 import hashlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import lru_cache
 
 TABLE_NAME = "ship-alerts"
 
@@ -38,6 +39,17 @@ class Alert:
     resolved_at: str | None = None
 
 
+# finding #16/#50: this used to build a fresh boto3 DynamoDB resource +
+# Table wrapper on every single call — real, repeated construction overhead
+# inside process_pr()'s hot per-fragment loop, where a multi-fragment PR
+# can call put_alert() several times in one invocation. lru_cache(maxsize=1)
+# gives the same "build once, reuse" behavior as a hand-rolled singleton
+# (finding #35's motivation too) with real failure-tolerance for free:
+# lru_cache does NOT cache an exception, so a transient failure on the
+# first call doesn't poison every later call in the same process — the
+# next call just retries construction, the same guarantee finding #10's
+# fix for _get_store() had to hand-write.
+@lru_cache(maxsize=1)
 def _table():
     import boto3  # lazy import, same reasoning as vector_store.py
 
@@ -81,6 +93,36 @@ def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: s
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
+# finding #27: float<->Decimal conversion used to be hand-written per
+# field in two separate functions (put_alert() encoding risk_score alone;
+# list_active_alerts() decoding risk_score and pr_number separately) — a
+# new numeric field added to Alert needed matching manual lines in both
+# places, silently breaking (native float rejected by DynamoDB on write,
+# or a stray Decimal leaking into JSON serialization on read) if either
+# side was forgotten. Generalized once here, driven off Alert's own field
+# type annotations, so it can't drift out of sync with the dataclass.
+_FLOAT_FIELDS = {f.name for f in fields(Alert) if f.type is float}
+_INT_FIELDS = {f.name for f in fields(Alert) if f.type is int}
+
+
+def _encode_item(alert: Alert) -> dict:
+    item = asdict(alert)
+    for name in _FLOAT_FIELDS:
+        item[name] = Decimal(str(item[name]))  # DynamoDB rejects native float
+    return item
+
+
+def _decode_item(item: dict) -> dict:
+    item = dict(item)
+    for name in _FLOAT_FIELDS:
+        if name in item:
+            item[name] = float(item[name])
+    for name in _INT_FIELDS:
+        if name in item:
+            item[name] = int(item[name])
+    return item
+
+
 def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, risk_score: float,
               plain_english_summary: str, citation: str, remediation_patch: str) -> Alert:
     alert = Alert(
@@ -96,8 +138,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, risk_score
         status="frozen",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
-    item = asdict(alert)
-    item["risk_score"] = Decimal(str(item["risk_score"]))  # DynamoDB rejects native float
+    item = _encode_item(alert)
     try:
         # Guard the idempotent write itself: a retry/redelivery for a
         # violation a human already resolved must NOT silently re-freeze
@@ -143,10 +184,10 @@ def list_active_alerts() -> list[Alert]:
     alerts = []
     for item in items:
         # DynamoDB's Number type has no int/float distinction — everything
-        # numeric comes back as Decimal; convert back to what the rest of
-        # the app (and JSON serialization) actually expects
-        item["risk_score"] = float(item["risk_score"])
-        item["pr_number"] = int(item["pr_number"])
+        # numeric comes back as Decimal; _decode_item() converts back to
+        # what the rest of the app (and JSON serialization) actually
+        # expects, generically off Alert's own field types (finding #27).
+        item = _decode_item(item)
         # Tolerate rows written before a field existed (caught live,
         # 2026-09-05: real rows from earlier this session predate the
         # "file" field added for finding #60 and crashed this exact call

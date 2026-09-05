@@ -64,6 +64,21 @@ class ScreenerResult:
         }
 
 
+def _compile_term_pattern(term: str) -> re.Pattern:
+    return re.compile(r"(?<!\w)" + re.escape(term) + r"(?!\w)", flags=re.IGNORECASE)
+
+
+# finding #21: _term_matches() used to build a fresh pattern string (escape
+# + concatenate) and call re.search() with it on every single call — for
+# ~50 terms across 8 buckets, that's ~50 pattern (re)constructions per
+# scan(), every time, for text that's known at module-load time and never
+# changes. Precompiled once here instead; scan()/isolate_fragment() now
+# look up the compiled pattern instead of rebuilding it.
+_COMPILED_TERM_PATTERNS: dict[str, re.Pattern] = {
+    term: _compile_term_pattern(term) for terms in SCREENER_TRIGGERS.values() for term in terms
+}
+
+
 def _term_matches(text: str, term: str) -> bool:
     """
     Shared match logic for a single trigger term against a text (finding
@@ -88,8 +103,10 @@ def _term_matches(text: str, term: str) -> bool:
     variant, but worth remembering if trigger terms ever need prefix
     matching against a real codebase that uses such suffixes.
     """
-    pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
-    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+    pattern = _COMPILED_TERM_PATTERNS.get(term)
+    if pattern is None:  # a term not in SCREENER_TRIGGERS (e.g. ad-hoc test input) — compile on the fly
+        pattern = _compile_term_pattern(term)
+    return pattern.search(text) is not None
 
 
 def scan(code_diff: str) -> ScreenerResult:

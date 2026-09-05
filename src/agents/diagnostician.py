@@ -27,6 +27,7 @@ failure "Trust but Verify" exists to prevent.
 """
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -196,26 +197,26 @@ class DiagnosticianOutput(BaseModel):
         return self
 
 
-_store = None  # type: ignore[var-annotated]  # lazily typed as VectorStore, see _get_store
-
-
+@lru_cache(maxsize=1)
 def _get_store():
-    # finding #10: build into a local var, only publish to the module
-    # global on success — the old version published an empty VectorStore()
-    # before .build() ran, so a transient embedding failure left a
-    # permanently-broken cached store for the rest of the process's
-    # lifetime (every later call skipped re-init and just re-raised).
-    global _store
-    if _store is None:
-        from src.rag.chunker import chunk_corpus
-        from src.rag.vector_store import VectorStore
+    # finding #35: this used to be a hand-rolled module-global + "is None"
+    # guard (build into a local var, only publish on success — finding
+    # #10's fix for the exact failure this must still tolerate: a
+    # transient embedding failure permanently poisoning the cache for the
+    # rest of the process's lifetime). lru_cache(maxsize=1) gives the
+    # identical guarantee for free: it does NOT cache a raised exception,
+    # so a failed call is simply retried fresh on the next call, with far
+    # less hand-written state-machine code to get right (verified directly
+    # against the installed functools implementation before relying on
+    # this, not assumed).
+    from src.rag.chunker import chunk_corpus
+    from src.rag.vector_store import VectorStore
 
-        corpus_dir = Path(__file__).resolve().parents[2] / "rag_corpus"
-        chunks = chunk_corpus(corpus_dir)
-        store = VectorStore()
-        store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
-        _store = store
-    return _store
+    corpus_dir = Path(__file__).resolve().parents[2] / "rag_corpus"
+    chunks = chunk_corpus(corpus_dir)
+    store = VectorStore()
+    store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
+    return store
 
 
 BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

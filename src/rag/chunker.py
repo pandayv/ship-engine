@@ -39,17 +39,20 @@ def chunk_file(path: Path) -> list[Chunk]:
         return []
 
     title = paragraphs[0].splitlines()[0].strip()
-    chunks = []
-    idx = 0
-    for para in paragraphs[1:]:
+    # finding #25: filter out the non-statute paragraphs first, then
+    # enumerate() the survivors — no hand-incremented counter to keep in
+    # sync with which paragraphs were skipped.
+    body_paragraphs = [
+        para for para in paragraphs[1:]
         # skip the "Source:" / "Retrieved verbatim from..." provenance line
         # and standalone "Note:" appendices we added ourselves, not part of
         # the actual statute text
-        if para.startswith("Source:") or para.startswith("Note:"):
-            continue
-        chunks.append(Chunk(text=para, source_file=str(path), article=title, paragraph_index=idx))
-        idx += 1
-    return chunks
+        if not (para.startswith("Source:") or para.startswith("Note:"))
+    ]
+    return [
+        Chunk(text=para, source_file=str(path), article=title, paragraph_index=idx)
+        for idx, para in enumerate(body_paragraphs)
+    ]
 
 
 def chunk_corpus(corpus_dir: Path) -> list[Chunk]:

@@ -57,7 +57,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from src.agents.diagnostician import diagnose
 from src.agents.screener import isolate_fragment, scan, split_diff_into_fragments
-from src.agents.triage import BuildAction, DiagnosticianVerdict, route
+from src.agents.triage import BuildAction, route
 from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
 from src.storage.alert_store import put_alert
@@ -102,7 +102,6 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     """
     fragments = split_diff_into_fragments(code_diff)
     results = []
-    any_frozen = False
     log.info("process_pr start: repo=%s pr=%s fragments=%d", repo_full_name, pr_number, len(fragments))
 
     for frag in fragments:
@@ -123,27 +122,28 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
             isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
             diag = diagnose(isolated)  # requires AWS credentials — will raise if not configured
 
-            verdict = DiagnosticianVerdict(
-                matched=diag.matched,
-                taxonomy_id=diag.taxonomy_id,
-                risk_score=diag.risk_score,
-                plain_english_summary=diag.plain_english_summary,
-                citation=diag.citation,
-                remediation_patch=diag.remediation_patch,
-            )
-            decision = route(verdict)
+            # finding #24: route() now takes DiagnosticianOutput directly —
+            # no more hand-copying every field into a separate, duplicate
+            # DiagnosticianVerdict shape first.
+            decision = route(diag)
 
             alert_id = None
             if decision.action == BuildAction.FREEZE:
-                any_frozen = True
                 # only frozen (high-risk) cases need an Attending review record —
                 # low-risk log-and-pass and dismissed-false-positive cases aren't
                 # persisted for MVP scope
+                # finding #28: taxonomy_id/risk_score/citation/plain_english_summary
+                # no longer need an `or <default>` fallback here — reaching
+                # FREEZE requires matched=True, and DiagnosticianOutput's own
+                # validator (finding #46) already guarantees those four are
+                # non-None whenever matched=True. remediation_patch is the
+                # one field that validator deliberately does NOT enforce (a
+                # legitimately optional field), so it keeps its fallback.
                 alert = put_alert(
                     repo=repo_full_name, pr_number=pr_number, file=frag["file"],
-                    taxonomy_id=diag.taxonomy_id or "", risk_score=diag.risk_score or 0.0,
-                    plain_english_summary=diag.plain_english_summary or "",
-                    citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
+                    taxonomy_id=diag.taxonomy_id, risk_score=diag.risk_score,
+                    plain_english_summary=diag.plain_english_summary,
+                    citation=diag.citation, remediation_patch=diag.remediation_patch or "",
                 )  # requires dynamodb:* permissions
                 alert_id = alert.alert_id
 
@@ -181,6 +181,10 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
                 "alert_id": None,
             })
 
+    # finding #26: any_frozen used to be a hand-toggled boolean set inside
+    # the loop, restating what `results` already encodes — derived here
+    # instead, one fewer piece of mutable state to keep in sync.
+    any_frozen = any(r["action"] == "freeze" for r in results)
     log.info("process_pr done: repo=%s pr=%s any_frozen=%s escalated=%d", repo_full_name, pr_number, any_frozen, len(results))
     return {
         "action": "freeze" if any_frozen else "pass",
