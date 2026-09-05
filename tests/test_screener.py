@@ -53,6 +53,28 @@ def test_agentic_bucket():
     assert "agentic" in result.matched_buckets
 
 
+def test_no_false_positive_from_race_substring():
+    # regression test for review finding #63 — "traceback"/"embrace" used
+    # to trip bias_data's "race" via plain substring matching
+    result = scan("try:\n    do_thing()\nexcept Exception:\n    log.error(traceback.format_exc())\n")
+    assert "bias_data" not in result.matched_buckets
+    result2 = scan("def embrace_new_design():\n    pass\n")
+    assert "bias_data" not in result2.matched_buckets
+
+
+def test_no_false_positive_from_mobile_substring():
+    # regression test for review finding #63 — "automobile" used to trip
+    # pii_data's "mobile" via plain substring matching
+    result = scan("loan_purpose = 'automobile financing for the applicant'")
+    assert "pii_data" not in result.matched_buckets
+
+
+def test_real_mobile_field_still_matches():
+    # confirms the word-boundary fix didn't overcorrect into false negatives
+    result = scan("logging.info(client.mobile)")
+    assert "pii_data" in result.matched_buckets
+
+
 def test_isolate_fragment_keeps_only_relevant_lines():
     code = "\n".join([f"line_{i} = {i}" for i in range(20)] + ["ssn_value = client.ssn"])
     result = scan(code)
@@ -108,3 +130,50 @@ def test_split_diff_into_fragments_falls_back_without_git_markers():
     fragments = split_diff_into_fragments("just some code, no diff --git header")
     assert len(fragments) == 1
     assert fragments[0]["file"] == "<diff>"
+
+
+def test_split_diff_preserves_code_before_first_function():
+    # regression test for review finding #5 — code before the first
+    # def/class (imports, module-level constants) used to be silently
+    # dropped from every fragment
+    diff = """diff --git a/loans/x.py b/loans/x.py
+new file mode 100644
+--- /dev/null
++++ b/loans/x.py
+@@ -0,0 +1,6 @@
++import openai
++
++def first_func():
++    return 1
++
++def second_func():
++    return 2
+"""
+    fragments = split_diff_into_fragments(diff)
+    assert any("import openai" in f["text"] for f in fragments)
+
+
+def test_split_diff_does_not_split_indented_methods_from_their_class():
+    # regression test for review finding #64 — indented class methods used
+    # to be treated as top-level boundaries too, splitting a class's
+    # __init__ away from a method that uses what __init__ built
+    diff = """diff --git a/loans/y.py b/loans/y.py
+new file mode 100644
+--- /dev/null
++++ b/loans/y.py
+@@ -0,0 +1,7 @@
++class Scorer:
++    def __init__(self):
++        self.weights = build_weights()
++
++    def score(self, applicant):
++        if applicant.pincode in RISKY:
++            return self.weights['penalty']
+"""
+    fragments = split_diff_into_fragments(diff)
+    # the whole class should stay in one fragment — no top-level def/class
+    # boundary exists inside it (only indented methods), so this should not
+    # split at all
+    assert len(fragments) == 1
+    assert "__init__" in fragments[0]["text"]
+    assert "def score" in fragments[0]["text"]

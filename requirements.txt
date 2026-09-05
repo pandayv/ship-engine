@@ -9,3 +9,4 @@ requests
 jinja2
 python-multipart
 ollama
+google-genai
