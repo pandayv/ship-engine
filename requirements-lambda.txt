@@ -1,0 +1,13 @@
+# Slim dependency set for the public webhook's Lambda deployment.
+# Deliberately excludes strands-agents, numpy, google-genai, ollama - those
+# are only needed by diagnose_in_process()'s path, and this Lambda runs
+# with SHIP_DIAGNOSTICIAN_MODE=agentcore (see lambda_handler.py).
+# boto3/botocore are already present in the Lambda Python runtime and
+# excluded here to keep the package small - listed for local-build clarity
+# only, not actually bundled into the zip.
+fastapi
+mangum
+requests
+jinja2
+python-multipart
+pydantic
