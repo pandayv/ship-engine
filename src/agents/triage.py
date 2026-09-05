@@ -1,10 +1,23 @@
 """
 Triage — routes the build based on Diagnostician's risk score.
-Pure conditional logic, no judgment of its own, no AWS dependency.
+Pure conditional logic, no judgment of its own, no AWS dependency (beyond
+importing src.taxonomy, itself a plain dataclass registry with no AWS/heavy
+dependency of its own — see that module's docstring).
+
+Finding #41: the freeze threshold used to be one constant applied uniformly
+across all six taxonomy IDs. It's now looked up per taxonomy_id from
+src/taxonomy.py's REGISTRY (see that file for the full reasoning behind
+each category's specific value) — HIGH_RISK_THRESHOLD below is kept only
+as the fallback for a taxonomy_id the registry doesn't recognize, which
+should not happen in practice (see tests/test_taxonomy_consistency.py) but
+is safer as a conservative default than a crash in what's meant to be
+simple, reliable routing logic.
 """
 
 from dataclasses import dataclass
 from enum import Enum
+
+from src.taxonomy import RISK_THRESHOLDS
 
 
 class BuildAction(str, Enum):
@@ -13,7 +26,7 @@ class BuildAction(str, Enum):
     FREEZE = "freeze"
 
 
-HIGH_RISK_THRESHOLD = 7.5
+HIGH_RISK_THRESHOLD = 7.5  # fallback only — see module docstring
 
 
 @dataclass
@@ -41,16 +54,18 @@ def route(verdict: DiagnosticianVerdict) -> TriageDecision:
     if verdict.risk_score is None:
         raise ValueError("Diagnostician matched a violation but returned no risk_score — cannot route.")
 
-    if verdict.risk_score >= HIGH_RISK_THRESHOLD:
+    threshold = RISK_THRESHOLDS.get(verdict.taxonomy_id, HIGH_RISK_THRESHOLD)
+
+    if verdict.risk_score >= threshold:
         return TriageDecision(
             action=BuildAction.FREEZE,
-            reason=f"{verdict.taxonomy_id} scored {verdict.risk_score} (>= {HIGH_RISK_THRESHOLD}). "
+            reason=f"{verdict.taxonomy_id} scored {verdict.risk_score} (>= {threshold}). "
                    f"Build frozen pending Attending review.",
         )
 
     return TriageDecision(
         action=BuildAction.LOG_WARNING,
-        reason=f"{verdict.taxonomy_id} scored {verdict.risk_score} (< {HIGH_RISK_THRESHOLD}). "
+        reason=f"{verdict.taxonomy_id} scored {verdict.risk_score} (< {threshold}). "
                f"Logged, build continues.",
     )
 
