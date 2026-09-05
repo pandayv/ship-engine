@@ -6,9 +6,6 @@ ship_roadmap.md's AWS-native stack section for why FastAPI over Lambda's
 usual API Gateway pairing) — this same app is wrapped for Lambda via
 Mangum (see lambda_handler.py) rather than needing a separate deployment.
 
-Signature verification is real (HMAC-SHA256, tested in
-tests/test_webhook_signature.py).
-
 IMPORTANT architecture note (found + fixed 2026-09-04): GitHub's webhook
 delivery does NOT wait several minutes for a response — a real PR with
 several escalated fragments, each needing a real Bedrock/AgentCore call
@@ -27,6 +24,26 @@ Diagnostician processing as a separate ASYNC Lambda self-invocation
 _invoke_async_processing() and process_pr() below. lambda_handler.py
 detects that self-invocation's marker and routes straight to process_pr(),
 bypassing Mangum/FastAPI entirely for that path.
+
+2026-09-05 architecture-review fix pass (see SHIP_REVIEW_DISPOSITIONS.md
+for the full plain-English writeup of every finding):
+- #1: signature verification now fails CLOSED by default (was fail-open
+  when GITHUB_WEBHOOK_SECRET was unset) — set SHIP_ALLOW_UNSIGNED=true to
+  explicitly opt into the old dev-convenience behavior.
+- #44: the local-test `{"code_diff": ...}` payload path no longer gets
+  special-cased synchronous processing inline in the request — it goes
+  through the same async dispatch as a real PR event, closing the same
+  GitHub-timeout-shaped failure mode for any caller producing that shape.
+- #7: added a minimal repo allowlist (SHIP_ALLOWED_REPOS) — a payload
+  can't make this service spend its GitHub token / Bedrock quota against
+  an arbitrary repo of the caller's choosing.
+- #8: a single fragment's exception no longer aborts every fragment after
+  it in the same PR — caught and recorded per-fragment instead.
+- #60: file path now threaded through into put_alert() so a multi-file
+  PR's alerts are traceable back to which file triggered each one.
+- #61: async invoke payload size is checked against Lambda's 256KB Event
+  limit before attempting the call, instead of letting an oversized PR
+  raise an uncaught ClientError inside the "fast" synchronous leg.
 """
 
 import hashlib
@@ -48,15 +65,18 @@ app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+ALLOW_UNSIGNED = os.environ.get("SHIP_ALLOW_UNSIGNED", "").lower() == "true"
 LAMBDA_FUNCTION_NAME = os.environ.get("SHIP_LAMBDA_FUNCTION_NAME", "")
 ASYNC_MARKER = "ship_internal_action"
+ASYNC_INVOKE_PAYLOAD_LIMIT = 250_000  # bytes; AWS's real cap is 256KB, small margin for JSON overhead
+ALLOWED_REPOS = {r.strip() for r in os.environ.get("SHIP_ALLOWED_REPOS", "pandayv/micro-finance").split(",") if r.strip()}
 
 
 def _verify_signature(payload_body: bytes, signature_header: str | None) -> None:
     if not GITHUB_WEBHOOK_SECRET:
-        # not yet provisioned — allow through in dev, but this MUST be set
-        # before pointing this at a real GitHub webhook (see roadmap "Still open")
-        return
+        if ALLOW_UNSIGNED:
+            return  # explicit local-dev opt-out, not the default
+        raise HTTPException(status_code=500, detail="GITHUB_WEBHOOK_SECRET is not configured on the server")
     if not signature_header:
         raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
     expected = "sha256=" + hmac.new(GITHUB_WEBHOOK_SECRET.encode(), payload_body, hashlib.sha256).hexdigest()
@@ -72,9 +92,9 @@ def health() -> dict:
 def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     """
     The actual (slow) analysis: split into fragments, scan/diagnose/route
-    each, persist an alert per fragment that freezes. Called either inline
-    (local-test payloads, where there's no GitHub delivery deadline to
-    respect) or from the async self-invocation path for real PR events.
+    each, persist an alert per fragment that freezes. Always reached via
+    the async self-invocation path for real deployments — see
+    _invoke_async_processing().
     """
     fragments = split_diff_into_fragments(code_diff)
     results = []
@@ -98,39 +118,54 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
             time.sleep(7)
         first_call = False
 
-        isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
-        diag = diagnose(isolated)  # requires AWS credentials — will raise if not configured
+        try:
+            isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
+            diag = diagnose(isolated)  # requires AWS credentials — will raise if not configured
 
-        verdict = DiagnosticianVerdict(
-            matched=diag.matched,
-            taxonomy_id=diag.taxonomy_id,
-            risk_score=diag.risk_score,
-            plain_english_summary=diag.plain_english_summary,
-            citation=diag.citation,
-            remediation_patch=diag.remediation_patch,
-        )
-        decision = route(verdict)
+            verdict = DiagnosticianVerdict(
+                matched=diag.matched,
+                taxonomy_id=diag.taxonomy_id,
+                risk_score=diag.risk_score,
+                plain_english_summary=diag.plain_english_summary,
+                citation=diag.citation,
+                remediation_patch=diag.remediation_patch,
+            )
+            decision = route(verdict)
 
-        alert_id = None
-        if decision.action == BuildAction.FREEZE:
-            any_frozen = True
-            # only frozen (high-risk) cases need an Attending review record —
-            # low-risk log-and-pass and dismissed-false-positive cases aren't
-            # persisted for MVP scope
-            alert = put_alert(
-                repo=repo_full_name, pr_number=pr_number, taxonomy_id=diag.taxonomy_id or "",
-                risk_score=diag.risk_score or 0.0, plain_english_summary=diag.plain_english_summary or "",
-                citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
-            )  # requires dynamodb:* permissions
-            alert_id = alert.alert_id
+            alert_id = None
+            if decision.action == BuildAction.FREEZE:
+                any_frozen = True
+                # only frozen (high-risk) cases need an Attending review record —
+                # low-risk log-and-pass and dismissed-false-positive cases aren't
+                # persisted for MVP scope
+                alert = put_alert(
+                    repo=repo_full_name, pr_number=pr_number, file=frag["file"],
+                    taxonomy_id=diag.taxonomy_id or "", risk_score=diag.risk_score or 0.0,
+                    plain_english_summary=diag.plain_english_summary or "",
+                    citation=diag.citation or "", remediation_patch=diag.remediation_patch or "",
+                )  # requires dynamodb:* permissions
+                alert_id = alert.alert_id
 
-        results.append({
-            "file": frag["file"],
-            "action": decision.action.value,
-            "reason": decision.reason,
-            "diagnostician": diag.model_dump(),
-            "alert_id": alert_id,
-        })
+            results.append({
+                "file": frag["file"],
+                "action": decision.action.value,
+                "reason": decision.reason,
+                "diagnostician": diag.model_dump(),
+                "alert_id": alert_id,
+            })
+        except Exception as e:
+            # finding #8: a single fragment's failure (a transient AWS
+            # hiccup, a schema-validation error from a malformed model
+            # response) used to silently abort every fragment after it in
+            # the same PR, since nothing caught it. Record the failure and
+            # keep going — a partial result is far better than a silent gap.
+            results.append({
+                "file": frag["file"],
+                "action": "error",
+                "reason": f"{type(e).__name__}: {e}",
+                "diagnostician": None,
+                "alert_id": None,
+            })
 
     return {
         "action": "freeze" if any_frozen else "pass",
@@ -140,7 +175,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     }
 
 
-def _invoke_async_processing(repo_full_name: str, pr_number: int, code_diff: str) -> None:
+def _invoke_async_processing(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     """
     Fires process_pr() as a separate, fire-and-forget Lambda invocation
     (InvocationType="Event") so the webhook handler can return to GitHub
@@ -150,22 +185,29 @@ def _invoke_async_processing(repo_full_name: str, pr_number: int, code_diff: str
     neither is configured (e.g. local dev without a real Lambda deployment).
     """
     if not LAMBDA_FUNCTION_NAME:
-        process_pr(repo_full_name, pr_number, code_diff)
-        return
+        return process_pr(repo_full_name, pr_number, code_diff)
+
+    payload_bytes = json.dumps({
+        ASYNC_MARKER: "process_pr",
+        "repo_full_name": repo_full_name,
+        "pr_number": pr_number,
+        "code_diff": code_diff,
+    }).encode("utf-8")
+
+    # finding #61: AWS caps async (InvocationType="Event") payloads at
+    # 256KB, well below the 6MB synchronous limit — an uncaught ClientError
+    # here used to surface as an unhandled 500 in the "fast, reliable" leg
+    # of the handler, for exactly the kind of PR (a vendored file, a
+    # generated migration, a lockfile update) the async redesign was built
+    # to handle reliably.
+    if len(payload_bytes) > ASYNC_INVOKE_PAYLOAD_LIMIT:
+        return {"action": "pass", "reason": f"Diff too large to process asynchronously ({len(payload_bytes)} bytes) — skipped rather than risk a delivery failure."}
 
     import boto3
 
     client = boto3.client("lambda")
-    client.invoke(
-        FunctionName=LAMBDA_FUNCTION_NAME,
-        InvocationType="Event",
-        Payload=json.dumps({
-            ASYNC_MARKER: "process_pr",
-            "repo_full_name": repo_full_name,
-            "pr_number": pr_number,
-            "code_diff": code_diff,
-        }).encode("utf-8"),
-    )
+    client.invoke(FunctionName=LAMBDA_FUNCTION_NAME, InvocationType="Event", Payload=payload_bytes)
+    return {"action": "accepted", "reason": "Screener flagged at least one match; analyzing asynchronously."}
 
 
 @app.post("/api/v1/webhook")
@@ -176,24 +218,31 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
 
     if is_pr_event(payload):
         repo_full_name, pr_number = extract_pr_ref(payload)
+        # finding #7: don't let a payload name an arbitrary repo and spend
+        # this service's own GitHub token / Bedrock quota against it.
+        if repo_full_name not in ALLOWED_REPOS:
+            raise HTTPException(status_code=403, detail=f"Repo {repo_full_name!r} is not in the configured allowlist")
         code_diff = fetch_pr_diff(repo_full_name, pr_number)
+    else:
+        # Simplified {"code_diff": "..."} body, for local testing without a
+        # real GitHub webhook payload.
+        repo_full_name, pr_number = "local-test", 0
+        code_diff = payload.get("code_diff", "")
 
-        if not code_diff:
-            return {"action": "pass", "reason": "No diff content for this PR."}
-
-        # Cheap whole-diff precheck (pure regex, no network) — if literally
-        # nothing matches anywhere, skip the async invocation entirely
-        # rather than spending a Lambda invoke + cold start for nothing.
-        if not scan(code_diff).matched:
-            return {"action": "pass", "reason": "Screener found no trigger matches."}
-
-        _invoke_async_processing(repo_full_name, pr_number, code_diff)
-        return {"action": "accepted", "reason": "Screener flagged at least one match; analyzing asynchronously."}
-
-    # Simplified {"code_diff": "..."} body, for local testing without a real
-    # GitHub webhook payload — no GitHub delivery deadline to respect here,
-    # so just process inline and return the real result directly.
-    code_diff = payload.get("code_diff", "")
     if not code_diff:
-        return {"action": "pass", "reason": "No code_diff in payload and not a recognized PR event."}
-    return process_pr("local-test", 0, code_diff)
+        return {"action": "pass", "reason": "No diff content in the payload."}
+
+    # Cheap whole-diff precheck (pure regex, no network) — if literally
+    # nothing matches anywhere, skip the async invocation entirely rather
+    # than spending a Lambda invoke + cold start for nothing.
+    if not scan(code_diff).matched:
+        return {"action": "pass", "reason": "Screener found no trigger matches."}
+
+    # finding #44: this used to call process_pr() synchronously inline for
+    # the local-test payload shape specifically — the exact multi-minute
+    # operation the async split exists to move off the request-response
+    # cycle, reachable by ANY caller who could produce this body shape, not
+    # just our own test harness. Both payload shapes now go through the
+    # same dispatch; _invoke_async_processing() itself falls back to inline
+    # processing only when no real Lambda deployment is configured at all.
+    return _invoke_async_processing(repo_full_name, pr_number, code_diff)
