@@ -384,6 +384,13 @@ def diagnose(isolated_fragment: str) -> DiagnosticianOutput:
 if __name__ == "__main__":
     # Will only run once AWS credentials are configured (Bedrock + the
     # embedding calls inside retrieve_regulation_text both need them).
+    #
+    # finding #36: this fixture used to be independently hand-retyped here
+    # and had already drifted from screener.py's own copy (missing
+    # blood_group). Kept identical to screener.py's __main__ fixture now —
+    # not shared via an import, since these are deliberately tiny, self-
+    # contained smoke tests for running each module standalone, but synced
+    # by hand once here to remove the existing drift.
     from src.agents.screener import isolate_fragment, scan
 
     bad_sample = '''
@@ -391,8 +398,9 @@ import openai
 
 def get_underwriting_opinion(client):
     prompt = f"Applicant {client.first_name} {client.last_name}, DOB {client.date_of_birth}, " \\
-             f"income {client.annual_income}. Should we approve?"
-    return openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+             f"income {client.annual_income}, blood group {client.blood_group}. Should we approve?"
+    response = openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    return response
 '''
     screener_result = scan(bad_sample)
     fragment = isolate_fragment(bad_sample, screener_result.matched_terms)

@@ -51,11 +51,14 @@ def view_dashboard(request: Request, token: str | None = Query(default=None)):
     return templates.TemplateResponse(request, "attending.html", {"alerts": alerts, "token": token})
 
 
-@router.post("/dashboard/{alert_id}/approve")
-def approve(alert_id: str, token: str | None = Query(default=None)):
+def _resolve(alert_id: str, token: str | None, approved: bool) -> RedirectResponse:
+    # finding #37: approve()/reject() used to be a near-duplicate pair
+    # differing only in this boolean — factored out so the noted Milestone
+    # B follow-up (actually applying remediation_patch back to the PR via
+    # the GitHub API) only needs writing once, not twice.
     _require_token(token)
     try:
-        alert_store.resolve_alert(alert_id, approved=True)
+        alert_store.resolve_alert(alert_id, approved=approved)
     except alert_store.AlertNotFoundOrAlreadyResolved as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     # TODO (Milestone B follow-up, not yet built): actually apply
@@ -64,11 +67,11 @@ def approve(alert_id: str, token: str | None = Query(default=None)):
     return RedirectResponse(url=f"/dashboard?token={token}", status_code=303)
 
 
+@router.post("/dashboard/{alert_id}/approve")
+def approve(alert_id: str, token: str | None = Query(default=None)):
+    return _resolve(alert_id, token, approved=True)
+
+
 @router.post("/dashboard/{alert_id}/reject")
 def reject(alert_id: str, token: str | None = Query(default=None)):
-    _require_token(token)
-    try:
-        alert_store.resolve_alert(alert_id, approved=False)
-    except alert_store.AlertNotFoundOrAlreadyResolved as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    return RedirectResponse(url=f"/dashboard?token={token}", status_code=303)
+    return _resolve(alert_id, token, approved=False)
