@@ -18,6 +18,7 @@ src/agents/diagnostician.py, you MUST make the same change here and run
 `agentcore deploy` again — nothing currently automates or verifies this.
 """
 
+from functools import lru_cache
 from pathlib import Path
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -157,24 +158,21 @@ class DiagnosticianOutput(BaseModel):
     remediation_patch: str | None = None
 
 
-_store: VectorStore | None = None
-
-
+@lru_cache(maxsize=1)
 def _get_store() -> VectorStore:
-    # Build into a local var and only publish to the module global on success
-    # (finding #10): the old version assigned an empty VectorStore() to
-    # _store BEFORE calling .build(), so a transient embedding failure left
-    # a non-None-but-broken store cached for the rest of the container's
-    # lifetime, with every later call skipping re-init and just re-raising
-    # "must call build() first" instead of retrying.
-    global _store
-    if _store is None:
-        corpus_dir = Path(__file__).resolve().parent / "rag_corpus"
-        chunks = chunk_corpus(corpus_dir)
-        store = VectorStore()
-        store.build(chunks)
-        _store = store
-    return _store
+    # finding #35 (mirrors the main ship-engine copy): this used to be a
+    # hand-rolled module-global + "is None" guard (finding #10: build into
+    # a local var, only publish on success, since the old version assigned
+    # an empty VectorStore() to _store BEFORE calling .build(), so a
+    # transient embedding failure left a broken store cached for the rest
+    # of the container's lifetime). lru_cache(maxsize=1) gives the same
+    # guarantee for free — it does not cache a raised exception, so a
+    # failed build() is retried fresh on the next call.
+    corpus_dir = Path(__file__).resolve().parent / "rag_corpus"
+    chunks = chunk_corpus(corpus_dir)
+    store = VectorStore()
+    store.build(chunks)
+    return store
 
 
 @tool
