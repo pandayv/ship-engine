@@ -157,7 +157,7 @@ coin-flip.
 
 ## Architecture
 
-Full diagram and component-by-component detail: [`docs/architecture.html`](docs/architecture.html).
+Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)).
 
 The one piece worth calling out here: **each flagged issue in a PR is
 reviewed as its own independent, retryable job**, queued and picked up by
