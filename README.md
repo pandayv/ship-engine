@@ -16,19 +16,33 @@ surface on top without changing anything described here.
 
 ## The problem
 
-A small fintech engineering team ships AI features fast — an LLM-assisted
-underwriting opinion, an automated risk score — without a dedicated
-compliance hire to review every pull request for GDPR or EU AI Act
-exposure. The risk is real (raw PII in a prompt, a protected characteristic
-silently driving a credit decision, an autonomous approval with no human
-checkpoint) and expensive to get wrong, but a human compliance review on
-every PR doesn't scale for a team that size. Generic static-analysis tools
-don't help either — they're blind to AI-specific risk patterns entirely.
+Every fintech startup is racing to bolt AI onto its product. Almost none
+of them have someone whose job is to notice when that AI quietly breaks
+the law.
 
-SHIP is the middle ground: point it at a repo, and every PR gets a
-compliance pass before merge. Real violations get cited against the actual
-regulation and frozen for a human to confirm. Everything else — the
-majority of PRs — never sees a human at all.
+An LLM-assisted underwriting opinion. An automated risk score. A chatbot
+with account access. Each one ships in an afternoon — and each one can
+just as easily leak a customer's SSN into a prompt, let a zip code quietly
+decide who gets a loan, or let an AI's opinion become the final answer
+with nobody signing off. GDPR fines reach €20 million or 4% of global
+revenue, whichever is bigger. The EU AI Act adds a second, dedicated
+exposure specifically for credit-scoring AI, classified as high-risk
+outright. And the five-person engineering team that just shipped the
+feature has no compliance hire, no legal review queue, and no time to
+build one.
+
+The usual answers both fail: ship blind and hope, or slow every single PR
+down for a human review that doesn't scale and that nobody actually wants
+to do all day. A generic static-analysis tool doesn't help either — it
+has never heard of an LLM call and wouldn't know a compliance violation
+from a syntax error.
+
+SHIP is the missing hire, running on every pull request instead of once a
+quarter. It reads the diff the moment a PR opens, judges whether it's
+actually a violation — not just a keyword match — cites the exact
+regulation it breaks, drafts the fix, and only ever interrupts a human
+when it's found something real. Everything else ships without anyone
+ever seeing it.
 
 ## Guiding principles
 
@@ -38,13 +52,13 @@ majority of PRs — never sees a human at all.
   call its retrieval tool before judging anything.
 - Screener's keyword match is a *signal*, not a verdict — Diagnostician
   independently judges whether it's a real violation or a false positive,
-  and is graded on both: live-tested against genuine violations *and*
-  deliberate look-alikes designed to trip a naive pattern match.
+  verified against both genuine violations and deliberate look-alikes
+  designed to trip a naive pattern match, not just the easy cases.
 - The stricter categories carry an explicit evidence bar in the prompt
-  itself (e.g. a protected characteristic must connect to an actual
-  scoring *operation* — an arithmetic adjustment, a conditional — not just
-  appear in the same function), added after live testing caught a
-  borderline case being judged inconsistently across runs.
+  itself — a protected characteristic must connect to an actual scoring
+  *operation* (an arithmetic adjustment, a conditional), not just appear
+  in the same function, so a field that's merely present isn't confused
+  with a field that's actually driving the decision.
 
 ### A human always makes the call
 - Triage only ever proposes an action — log-and-continue, or freeze. It
@@ -64,18 +78,14 @@ an unscoped dangerous capability). That scope *is* the product — diluting
 it into general-purpose static analysis would trade away the one thing
 that differentiates this from tools that already exist.
 
-### Built to actually survive contact with real traffic
-Every fix in this codebase's history was verified against real
-infrastructure, not just a passing test suite — including a live
-end-to-end run that deliberately tried to break it. That process is what
-found and closed several real gaps: idempotent alert writes so a webhook
-redelivery can't double-alert (or silently block a genuinely new
-violation from ever being recorded), a rate limiter that was quietly
-process-local replaced with AWS's own adaptive-retry pattern once
-fragments started reviewing in parallel, and — the most significant one —
-discovering that a single busy PR could get its review silently cut short
-by a cloud timeout, and re-architecting the dispatch so that can't happen
-(see [Architecture](#architecture) below).
+### Built to survive real traffic, not just a demo
+A webhook redelivery or a retried job can never create a duplicate alert,
+and can never silently reopen or overwrite a decision a human already
+made. Every flagged issue in a PR is reviewed independently and in
+parallel, so one slow or unlucky issue can never crowd out the review of
+another in the same PR (see [Architecture](#architecture) below). Every
+property on this list is verified against the real, deployed system, not
+asserted from a passing test suite alone.
 
 ## What it does
 
@@ -105,7 +115,10 @@ by a cloud timeout, and re-architecting the dispatch so that can't happen
    GitHub API is a scoped-out next step, not yet wired in — today, a
    human still applies the fix themselves once they've reviewed it here.)
 
-### Detectors — 6 of 12 scoped sub-flags built, each independently verified
+### Detectors
+
+Each independently verified against real, deliberately adversarial test
+cases — genuine violations and deliberate false-positive look-alikes both.
 
 | ID | What it catches | Grounded in |
 |---|---|---|
@@ -116,13 +129,9 @@ by a cloud timeout, and re-architecting the dispatch so that can't happen
 | **ALBP-001** | A protected characteristic (or a clear proxy) directly driving a scoring calculation | EU AI Act Article 10 + Annex III §5(b) |
 | **TLGP-001** | A dangerous capability (shell exec, unscoped DB write) granted to an AI agent with no gate | OWASP Top 10 for LLM Apps, LLM06:2025 |
 
-The remaining six sub-flags in the original taxonomy (data-sovereignty
-routing, model-training contamination, dynamic pricing arbitrage,
-unmonitored clustering, unrestricted agent write-access, audit-trail
-lineage) aren't detectable from a single PR diff at all — they need
-infrastructure/deployment context or multi-file, ongoing observation SHIP
-deliberately doesn't attempt. Full reasoning per sub-flag is in the
-architecture doc.
+SHIP is deliberately scoped to what a single PR diff can actually prove —
+see the architecture doc for the reasoning behind that boundary, and
+what's on the roadmap next.
 
 ## See it in action
 
@@ -150,23 +159,16 @@ coin-flip.
 
 Full diagram and component-by-component detail: [`docs/architecture.html`](docs/architecture.html).
 
-The one piece worth calling out here: **each flagged fragment in a PR is
-reviewed as its own independent, retryable job**, not as part of one
-sequential pass through the whole PR. Earlier in this project's life, a
-single Lambda invocation diagnosed every flagged fragment in a PR one
-after another — correct, but capped by that Lambda's own hard timeout
-ceiling. A live test proved that a PR with enough flagged issues across
-different categories could get its review silently cut short mid-way,
-with no error shown anywhere. Since that could hit a real reviewer just as
-easily as a demo, the dispatch was rebuilt: Screener splits and screens
-the PR once, and every flagged fragment becomes one message on a queue,
-picked up by an independently-scaling reviewer function. A fragment that
-fails outright retries automatically and lands in a dead-letter queue
-after repeated failure instead of vanishing; fragments that are just slow
-(or that hit AWS's own request-rate limit) back off and retry on their own,
-rather than blocking anything else. The result: a PR with several flagged
-issues takes about as long as its slowest single issue, not the sum of
-all of them, and nothing is silently dropped.
+The one piece worth calling out here: **each flagged issue in a PR is
+reviewed as its own independent, retryable job**, queued and picked up by
+an independently-scaling reviewer function, rather than one sequential
+pass through the whole PR. A fragment that fails outright retries
+automatically and lands in a dead-letter queue after repeated failure
+instead of vanishing; a fragment that's just slow, or that hits AWS's own
+request-rate limit, backs off and retries on its own without blocking
+anything else. A PR with several flagged issues takes about as long as
+its slowest single issue, not the sum of all of them, and nothing is
+silently dropped.
 
 ## Tech stack
 
@@ -427,8 +429,10 @@ Three things known and deliberately not built yet, not overlooked:
 - A background job that keeps the RAG corpus current as the underlying
   regulations change (today's corpus is accurate as sourced, not
   self-updating).
-- The six taxonomy sub-flags ruled out as undetectable from a single PR
-  diff (see the architecture doc for why each one specifically).
+- New detectors, beyond what's listed above, for risk patterns that need
+  more than a single PR diff to prove — infrastructure/deployment context,
+  or behavior observed across multiple files or over time. See the
+  architecture doc for where that boundary sits and why.
 
 ## License
 
