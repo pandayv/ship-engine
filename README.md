@@ -1,11 +1,9 @@
 # SHIP
 
-**An autonomous compliance gatekeeper for AI-feature code changes.** A
-GitHub webhook scans a pull request diff, detects AI-specific compliance
-risk, verifies its own finding before trusting it, cites the actual
-regulation it violates, and drafts a remediation patch — then freezes the
-build and hands a human the decision, never resolving a high-risk case on
-its own.
+**Every AI feature your team ships is also a decision nobody signed off
+on.** SHIP is an AI reviewer that reads every pull request the moment it
+opens, catches the ones that quietly cross a real legal line, and only
+ever interrupts a human when it's actually found something.
 
 Built for the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
 (Strands Agents SDK, Professional Agents track); the same engine is the
@@ -16,33 +14,32 @@ surface on top without changing anything described here.
 
 ## The problem
 
-Every fintech startup is racing to bolt AI onto its product. Almost none
-of them have someone whose job is to notice when that AI quietly breaks
-the law.
+Say a five-person startup adds a feature this week: an AI that reads a
+loan application and suggests whether to approve it. It works, it ships,
+everyone moves on — until months later someone realizes the AI's prompt
+included the applicant's Social Security number in plain text, or that a
+zip code was quietly swaying who got approved, or that the AI's opinion
+had quietly become the actual decision, with no person ever looking at
+it. Nobody meant for any of that to happen. It's just what happens when a
+small team ships fast and nobody's job is to catch it.
 
-An LLM-assisted underwriting opinion. An automated risk score. A chatbot
-with account access. Each one ships in an afternoon — and each one can
-just as easily leak a customer's SSN into a prompt, let a zip code quietly
-decide who gets a loan, or let an AI's opinion become the final answer
-with nobody signing off. GDPR fines reach €20 million or 4% of global
-revenue, whichever is bigger. The EU AI Act adds a second, dedicated
-exposure specifically for credit-scoring AI, classified as high-risk
-outright. And the five-person engineering team that just shipped the
-feature has no compliance hire, no legal review queue, and no time to
-build one.
+That's not a hypothetical. It's the normal outcome for most startups
+bolting AI onto a real product right now — regulators can fine a company
+tens of millions of dollars for exactly this, real money for a small
+company. And the team that shipped the feature has no compliance person,
+no legal review queue, and no time to build one.
 
-The usual answers both fail: ship blind and hope, or slow every single PR
-down for a human review that doesn't scale and that nobody actually wants
-to do all day. A generic static-analysis tool doesn't help either — it
-has never heard of an LLM call and wouldn't know a compliance violation
-from a syntax error.
+The obvious fixes both fail. Ship blind and hope nothing surfaces. Or
+slow every single pull request down for a human to review by hand —
+which defeats the entire point of moving fast with AI in the first
+place.
 
-SHIP is the missing hire, running on every pull request instead of once a
-quarter. It reads the diff the moment a PR opens, judges whether it's
-actually a violation — not just a keyword match — cites the exact
-regulation it breaks, drafts the fix, and only ever interrupts a human
-when it's found something real. Everything else ships without anyone
-ever seeing it.
+SHIP is the third option. It reads the diff the moment a PR opens, works
+out whether something's actually wrong — not just whether a risky-looking
+word shows up — explains what it found in plain English, points to the
+exact rule it breaks, and drafts the fix. A person only ever gets pulled
+in when it's found something real. Every other PR ships exactly as fast
+as it always would have.
 
 ## Guiding principles
 
