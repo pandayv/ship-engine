@@ -8,9 +8,14 @@
     h1 { font-size: 1.3rem; }
     .subtitle { color: #666; margin-bottom: 2rem; }
     .alert { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .alert.high { border-left: 4px solid #c0392b; }
+    .alert.blocking { border-left: 4px solid #c0392b; }
+    .alert.review { border-left: 4px solid #e67e22; }
     .meta { color: #666; font-size: 0.85rem; margin-bottom: 0.5rem; }
     .score { font-weight: 600; color: #c0392b; }
+    .tier { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
+            text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; }
+    .tier.blocking { background: #c0392b; color: white; }
+    .tier.review { background: #e67e22; color: white; }
     .citation { font-family: monospace; background: #f5f5f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
     pre { background: #f5f5f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
     .actions { margin-top: 0.75rem; }
@@ -22,11 +27,16 @@
 </head>
 <body>
   <h1>SHIP — Attending</h1>
-  <div class="subtitle">Frozen pull requests awaiting your decision.</div>
+  <div class="subtitle">Findings awaiting your decision. Blocking findings stop the merge; flagged findings do not.</div>
 
   {% if alerts %}
     {% for alert in alerts %}
-    <div class="alert high">
+    <div class="alert {{ alert.severity }}">
+      {% if alert.severity == "blocking" %}
+        <div class="tier blocking">Blocking &middot; merge stopped</div>
+      {% else %}
+        <div class="tier review">Flagged for review &middot; merge not stopped</div>
+      {% endif %}
       <div class="meta">{{ alert.repo }} #{{ alert.pr_number }} &middot; <code>{{ alert.file }}</code> &middot; {{ alert.taxonomy_id }} &middot;
         <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
       <div>{{ alert.plain_english_summary }}</div>

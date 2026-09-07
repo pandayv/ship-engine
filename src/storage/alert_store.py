@@ -9,8 +9,15 @@ decisions during a hackathon sprint):
     architecture-review fix pass)
   - Attributes: repo, pr_number, file, taxonomy_id, risk_score,
     plain_english_summary, citation, remediation_patch, status
-    ("frozen" | "resolved"), resolution ("approved" | "rejected" | None),
-    created_at, resolved_at (ISO 8601 strings)
+    ("frozen" | "resolved"), severity ("blocking" | "review"), resolution
+    ("approved" | "rejected" | None), created_at, resolved_at (ISO 8601
+    strings)
+
+Note on status vs. severity: they answer different questions and both are
+needed. `status` is where the alert is in its lifecycle (does it still
+need a human?). `severity` is what Triage decided the finding warrants
+(does it stop the merge, or is it a flag someone should look at while the
+build continues?) — see src/agents/triage.py's three routing bands.
 """
 
 import hashlib
@@ -20,6 +27,9 @@ from decimal import Decimal
 from functools import lru_cache
 
 TABLE_NAME = "ship-alerts"
+
+SEVERITY_BLOCKING = "blocking"  # Triage froze the build; merge should not proceed
+SEVERITY_REVIEW = "review"      # flagged for a human, but the build was not stopped
 
 
 @dataclass
@@ -37,6 +47,11 @@ class Alert:
     created_at: str
     resolution: str | None = None  # "approved" | "rejected"
     resolved_at: str | None = None
+    # "blocking" defaults here rather than being required because every row
+    # written before this field existed (2026-09-07) was a FREEZE, and
+    # because a call site that forgets to pass it should fail toward
+    # over-blocking, not toward silently letting a blocking finding through.
+    severity: str = SEVERITY_BLOCKING
 
 
 # finding #16/#50: this used to build a fresh boto3 DynamoDB resource +
@@ -140,7 +155,12 @@ def _decode_item(item: dict) -> dict:
 
 
 def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str, risk_score: float,
-              plain_english_summary: str, citation: str, remediation_patch: str) -> Alert:
+              plain_english_summary: str, citation: str, remediation_patch: str,
+              severity: str = SEVERITY_BLOCKING) -> Alert:
+    # severity is deliberately NOT part of _deterministic_alert_id: a
+    # re-diagnosis of the same violation that scores differently enough to
+    # cross a band boundary must UPDATE that violation's existing row, not
+    # create a second row for the same finding at a different severity.
     alert = Alert(
         alert_id=_deterministic_alert_id(repo, pr_number, file, taxonomy_id, fragment_text),
         repo=repo,
@@ -153,6 +173,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
         remediation_patch=remediation_patch,
         status="frozen",
         created_at=datetime.now(timezone.utc).isoformat(),
+        severity=severity,
     )
     item = _encode_item(alert)
     try:
@@ -211,6 +232,11 @@ def list_active_alerts() -> list[Alert]:
         # like this is a real, general pattern — not specific to "file" —
         # so any future field addition should get the same treatment here.
         item.setdefault("file", "<unknown>")
+        # Same schema-evolution tolerance for severity, added 2026-09-07.
+        # Every row predating this field was written by the old binary
+        # freeze-or-nothing path, so "blocking" is the historically correct
+        # value for them — not just a safe filler.
+        item.setdefault("severity", SEVERITY_BLOCKING)
         alerts.append(Alert(**item))
     return alerts
 
