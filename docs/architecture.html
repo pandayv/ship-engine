@@ -240,7 +240,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <text x="1030" y="146" text-anchor="middle" fill="currentColor" font-size="10">1 SQS message per</text>
   <text x="1030" y="159" text-anchor="middle" fill="currentColor" font-size="10">flagged fragment</text>
 
-  <path d="M 1030 170 L 1030 300 L 105 300 L 105 337" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <path d="M 1030 170 L 1030 300 L 105 300 L 105 420" stroke="currentColor" marker-end="url(#arrow)"></path>
 </g>
 
 <!-- Lane B: fragment processor -->
@@ -261,7 +261,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <text x="355" y="528" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11">Regulation corpus</text>
   <text x="355" y="544" text-anchor="middle" font-size="9.5" fill="currentColor">GDPR &middot; EU AI Act &middot; OWASP, sourced verbatim</text>
 
-  <path d="M 200 500 C 190 570, 260 610, 300 585" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+  <path d="M 250 480 C 170 540, 170 600, 250 605 C 290 608, 330 570, 335 480" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
   <text x="150" y="600" font-size="10" fill="currentColor">throttled &rarr;</text>
   <text x="150" y="612" font-size="10" fill="currentColor">adaptive retry</text>
 
@@ -285,7 +285,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <path d="M 675 485 L 675 555" stroke="currentColor" marker-end="url(#arrow)"></path>
   <text x="685" y="520" font-size="10" fill="currentColor">yes</text>
 
-  <path d="M 480 500 C 440 560, 300 585, 260 650" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
+  <path d="M 380 480 C 360 560, 310 600, 260 650" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
   <text x="300" y="660" text-anchor="middle" font-size="10" fill="currentColor">fails repeatedly</text>
   <rect x="30" y="655" width="230" height="45" rx="8" fill="var(--surface)" stroke="var(--muted-stroke)" stroke-dasharray="3 3"></rect>
   <text x="145" y="672" text-anchor="middle" fill="var(--muted-text)" font-weight="600" font-size="11">Dead-letter queue</text>
@@ -306,8 +306,6 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <polygon points="1075,555 1120,590 1075,625 1030,590" fill="var(--human-tint)" stroke="var(--human)"></polygon>
   <text x="1075" y="586" text-anchor="middle" fill="var(--human)" font-size="9" font-weight="600">approve /</text>
   <text x="1075" y="597" text-anchor="middle" fill="var(--human)" font-size="9" font-weight="600">reject?</text>
-
-  <line x1="1120" y1="590" x2="1152" y2="590" stroke="currentColor" marker-end="url(#arrow)"></line>
 
   <rect x="1000" y="640" width="220" height="55" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
   <text x="1110" y="662" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Resolved</text>
