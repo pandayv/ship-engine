@@ -29,16 +29,30 @@ valuable: give an automated test something concrete to check both against.
 
 from dataclasses import dataclass
 
-# Review finding #41: a single global HIGH_RISK_THRESHOLD (7.5) was applied
-# uniformly across all six taxonomy IDs, even though Diagnostician's own
-# prompt already describes "severe" as meaning something structurally
-# different per category (unmasked financial PII reaching an external sink,
-# vs. zero human checkpoint on a final decision, vs. a materially applied
-# scoring penalty, vs. an ungated destructive capability). Decision made
-# 2026-09-05: differentiate real per-category thresholds rather than one
-# shared bar.
+# Two thresholds per category, defining three routing bands. Added
+# 2026-09-07: a single cutoff forced every confirmed finding into a binary
+# "block the build or say nothing at all," which is the wrong shape for the
+# problem. A finding the model is only moderately sure about doesn't
+# justify stopping a team's merge, but it also shouldn't vanish into a log
+# nobody reads. The bands Triage now routes on:
 #
-# Reasoning behind each value below (DEFAULT_RISK_THRESHOLD unless noted):
+#   score <  review_threshold  -> logged, build continues, nobody interrupted
+#   review <= score < block    -> REVIEW: an alert a human is asked to look
+#                                 at, build NOT blocked
+#   score >= block_threshold   -> FREEZE: alert created AND build blocked
+#
+# Honest note on what risk_score actually measures: it is a SEVERITY score
+# ("how bad is this if it's real"), and the review band is using it as a
+# proxy for CONFIDENCE ("how sure are we it's real"). Those are genuinely
+# different axes, and the more correct design gives Diagnostician a
+# separate confidence field. That's a schema + prompt change requiring
+# every detector's true/false-positive cases to be re-verified against the
+# new field, so it is deliberately NOT being done under deadline — the
+# proxy is a reasoned approximation, not a claim that the two axes are the
+# same thing. Recorded here so the limitation is visible in the code rather
+# than only in someone's memory.
+#
+# Reasoning behind each block value below (DEFAULT_BLOCK_THRESHOLD unless noted):
 # categories where a confirmed violation is structurally irreversible or
 # undermines a required safety guarantee get a LOWER threshold (freeze more
 # readily — the cost of a missed freeze is higher than an extra human
@@ -74,8 +88,17 @@ from dataclasses import dataclass
 # feedback — the point of making this a per-category field instead of one
 # constant is exactly so that retuning one category doesn't require
 # touching the others.
-DEFAULT_RISK_THRESHOLD = 7.5
-LOWERED_RISK_THRESHOLD = 7.0  # for structurally irreversible / safety-guarantee categories
+DEFAULT_BLOCK_THRESHOLD = 7.5
+LOWERED_BLOCK_THRESHOLD = 7.0  # for structurally irreversible / safety-guarantee categories
+
+# One shared review floor rather than a per-category value, deliberately.
+# The per-category BLOCK thresholds above are differentiated because there
+# is a real, articulable severity argument for each one. No equivalent
+# per-category argument exists for where "worth a human glance" begins —
+# inventing six different numbers would be false precision dressed up as
+# rigor. Below 5.0 on a 1-10 scale is minor by any reading, so that is the
+# floor for all categories until real usage data justifies splitting it.
+DEFAULT_REVIEW_THRESHOLD = 5.0
 
 
 @dataclass(frozen=True)
@@ -84,7 +107,8 @@ class TaxonomyEntry:
     screener_buckets: tuple[str, ...]  # which SCREENER_TRIGGERS keys can indicate this ID
     corpus_files: tuple[str, ...]  # required rag_corpus/-relative paths grounding this ID
     is_statutory: bool  # False for OWASP-style industry-standard grounding (TLGP-001)
-    risk_threshold: float = DEFAULT_RISK_THRESHOLD  # score at/above which Triage freezes the build
+    block_threshold: float = DEFAULT_BLOCK_THRESHOLD  # score at/above which Triage freezes the build
+    review_threshold: float = DEFAULT_REVIEW_THRESHOLD  # score at/above which a human is asked to look
 
 
 # Every ID Diagnostician's SYSTEM_PROMPT currently covers (both the
@@ -93,13 +117,13 @@ class TaxonomyEntry:
 REGISTRY: tuple[TaxonomyEntry, ...] = (
     TaxonomyEntry(
         "PIIE-001", ("imports", "egress", "pii_data"), ("gdpr/article_32.txt",),
-        is_statutory=True, risk_threshold=LOWERED_RISK_THRESHOLD,
+        is_statutory=True, block_threshold=LOWERED_BLOCK_THRESHOLD,
     ),
     TaxonomyEntry("PIIE-002", ("logging_sinks", "pii_data"), ("gdpr/article_32.txt",), is_statutory=True),
     TaxonomyEntry("PIIE-003", ("cache_sinks", "pii_data"), ("gdpr/article_32.txt",), is_statutory=True),
     TaxonomyEntry(
         "TLGP-002", ("decision_mutation",), ("eu_ai_act/article_14.txt",),
-        is_statutory=True, risk_threshold=LOWERED_RISK_THRESHOLD,
+        is_statutory=True, block_threshold=LOWERED_BLOCK_THRESHOLD,
     ),
     TaxonomyEntry(
         "ALBP-001", ("bias_data",),
@@ -108,11 +132,13 @@ REGISTRY: tuple[TaxonomyEntry, ...] = (
     TaxonomyEntry(
         "TLGP-001", ("agentic",),
         ("owasp_llm_top10/llm06_excessive_agency.txt",),
-        is_statutory=False, risk_threshold=LOWERED_RISK_THRESHOLD,
+        is_statutory=False, block_threshold=LOWERED_BLOCK_THRESHOLD,
     ),
 )
 
-RISK_THRESHOLDS: dict[str, float] = {e.taxonomy_id: e.risk_threshold for e in REGISTRY}
+BLOCK_THRESHOLDS: dict[str, float] = {e.taxonomy_id: e.block_threshold for e in REGISTRY}
+
+REVIEW_THRESHOLDS: dict[str, float] = {e.taxonomy_id: e.review_threshold for e in REGISTRY}
 
 ACTIVE_TAXONOMY_IDS: tuple[str, ...] = tuple(e.taxonomy_id for e in REGISTRY)
 

@@ -45,6 +45,57 @@ def test_process_fragment_stores_an_alert_when_frozen(monkeypatch):
     assert calls[0]["fragment_text"] == "logger.info(applicant.ssn)"
 
 
+def test_process_fragment_stores_a_non_blocking_alert_for_a_middle_band_finding(monkeypatch):
+    # The three-band model's real integration point: a confirmed finding
+    # scored between PIIE-001's review floor (5.0) and its blocking bar
+    # (7.0) must still be PERSISTED for a human, but recorded as
+    # non-blocking. Under the old two-band model this score produced no
+    # alert row at all.
+    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=6.0))
+    calls = []
+
+    class _FakeAlert:
+        alert_id = "def456"
+
+    monkeypatch.setattr("src.api.main.put_alert", lambda **kwargs: calls.append(kwargs) or _FakeAlert())
+
+    result = process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "logger.info(applicant.ssn)")
+
+    assert result["action"] == "review"
+    assert result["blocks_build"] is False
+    assert result["alert_id"] == "def456"
+    assert len(calls) == 1
+    assert calls[0]["severity"] == "review"
+
+
+def test_process_fragment_records_a_blocking_finding_as_blocking(monkeypatch):
+    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=9.0))
+    calls = []
+
+    class _FakeAlert:
+        alert_id = "abc123"
+
+    monkeypatch.setattr("src.api.main.put_alert", lambda **kwargs: calls.append(kwargs) or _FakeAlert())
+
+    result = process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "logger.info(applicant.ssn)")
+
+    assert result["blocks_build"] is True
+    assert calls[0]["severity"] == "blocking"
+
+
+def test_process_fragment_does_not_store_an_alert_below_the_review_floor(monkeypatch):
+    # A confirmed but trivial finding shouldn't clutter the human's queue.
+    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=2.0))
+    calls = []
+    monkeypatch.setattr("src.api.main.put_alert", lambda **kwargs: calls.append(kwargs))
+
+    result = process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "logger.info(applicant.ssn)")
+
+    assert result["action"] == "log_warning"
+    assert result["alert_id"] is None
+    assert calls == []
+
+
 def test_process_fragment_raises_instead_of_swallowing_errors(monkeypatch):
     def _raise(text):
         raise RuntimeError("simulated transient Bedrock failure")

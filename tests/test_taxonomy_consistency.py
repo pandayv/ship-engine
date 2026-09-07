@@ -80,26 +80,26 @@ def test_every_registry_screener_bucket_is_a_real_screener_bucket():
             )
 
 
-def test_every_registry_risk_threshold_is_mentioned_in_the_main_prompt():
+def test_every_registry_block_threshold_is_mentioned_in_the_main_prompt():
     # Finding #41: per-category thresholds only matter if the model's own
     # calibration (what it's told "severe" means per category) actually
     # matches what Triage enforces. A future retune of one without the
     # other would silently reintroduce the exact "model calibrates
     # against a number Triage doesn't use" problem #41 was about.
     for entry in REGISTRY:
-        threshold_text = f">= {entry.risk_threshold}"
+        threshold_text = f">= {entry.block_threshold}"
         assert threshold_text in MAIN_DIAGNOSTICIAN_SOURCE, (
-            f"{entry.taxonomy_id}'s threshold ({entry.risk_threshold}) from src/taxonomy.py isn't "
+            f"{entry.taxonomy_id}'s threshold ({entry.block_threshold}) from src/taxonomy.py isn't "
             f"mentioned in src/agents/diagnostician.py's SYSTEM_PROMPT — the model may be calibrating "
             f"against a stale number Triage doesn't actually use."
         )
 
 
-def test_every_registry_risk_threshold_is_mentioned_in_the_deployed_prompt():
+def test_every_registry_block_threshold_is_mentioned_in_the_deployed_prompt():
     for entry in REGISTRY:
-        threshold_text = f">= {entry.risk_threshold}"
+        threshold_text = f">= {entry.block_threshold}"
         assert threshold_text in DEPLOYED_DIAGNOSTICIAN_SOURCE, (
-            f"{entry.taxonomy_id}'s threshold ({entry.risk_threshold}) from src/taxonomy.py isn't "
+            f"{entry.taxonomy_id}'s threshold ({entry.block_threshold}) from src/taxonomy.py isn't "
             f"mentioned in the DEPLOYED shipagentcore prompt — the deployed model may be calibrating "
             f"against a stale number."
         )

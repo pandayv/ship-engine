@@ -24,11 +24,34 @@ def test_no_violation_passes():
 def test_low_risk_logs_and_continues():
     decision = route(_matched("PIIE-001", 3.0))
     assert decision.action == BuildAction.LOG_WARNING
+    assert not decision.blocks_build
+    assert not decision.creates_alert
 
 
 def test_high_risk_freezes():
     decision = route(_matched("PIIE-001", 8.0))
     assert decision.action == BuildAction.FREEZE
+    assert decision.blocks_build
+    assert decision.creates_alert
+
+
+def test_middle_band_creates_an_alert_without_blocking_the_build():
+    # The whole point of the three-band model (2026-09-07): a confirmed
+    # finding scored below the blocking bar must still reach a human, but
+    # must NOT stop the merge. Under the old two-band model this exact
+    # score produced LOG_WARNING - no alert, nobody ever saw it.
+    decision = route(_matched("PIIE-001", 6.0))
+    assert decision.action == BuildAction.REVIEW
+    assert not decision.blocks_build
+    assert decision.creates_alert
+
+
+def test_review_band_boundaries_are_inclusive_at_the_bottom_exclusive_at_the_top():
+    # PIIE-001: review floor 5.0, blocking bar 7.0.
+    assert route(_matched("PIIE-001", 4.9)).action == BuildAction.LOG_WARNING
+    assert route(_matched("PIIE-001", 5.0)).action == BuildAction.REVIEW
+    assert route(_matched("PIIE-001", 6.9)).action == BuildAction.REVIEW
+    assert route(_matched("PIIE-001", 7.0)).action == BuildAction.FREEZE
 
 
 def test_boundary_exactly_at_threshold_freezes():
@@ -60,14 +83,16 @@ def test_per_category_thresholds_actually_differ():
     # Finding #41: this is the behavior a single global threshold could
     # never produce - the identical risk_score routes differently
     # depending on taxonomy_id, because the categories are not treated as
-    # equally severe. 7.2 is below ALBP-001's default 7.5 threshold (logs,
-    # doesn't freeze) but at/above TLGP-002's lowered 7.0 threshold
-    # (freezes) - same score, different real-world consequence.
+    # equally severe. 7.2 is below ALBP-001's default 7.5 blocking bar but
+    # at/above TLGP-002's lowered 7.0 bar - same score, different
+    # real-world consequence: one stops the merge, one doesn't.
     albp = route(_matched("ALBP-001", 7.2))
     tlgp002 = route(_matched("TLGP-002", 7.2))
 
-    assert albp.action == BuildAction.LOG_WARNING
+    assert albp.action == BuildAction.REVIEW
+    assert not albp.blocks_build
     assert tlgp002.action == BuildAction.FREEZE
+    assert tlgp002.blocks_build
 
 
 def test_unknown_taxonomy_id_falls_back_to_the_conservative_default_instead_of_crashing():

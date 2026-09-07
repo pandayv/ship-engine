@@ -90,10 +90,10 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from src.agents.diagnostician import diagnose
 from src.agents.screener import isolate_fragment, scan, split_diff_into_fragments
-from src.agents.triage import BuildAction, route
+from src.agents.triage import route
 from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
-from src.storage.alert_store import put_alert
+from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
 
 app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
@@ -163,10 +163,13 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
     decision = route(diag)
 
     alert_id = None
-    if decision.action == BuildAction.FREEZE:
-        # only frozen (high-risk) cases need an Attending review record —
-        # low-risk log-and-pass and dismissed-false-positive cases aren't
-        # persisted for MVP scope
+    if decision.creates_alert:
+        # Both blocking (FREEZE) and non-blocking (REVIEW) findings create
+        # an Attending record — that middle band exists precisely so a
+        # confirmed-but-not-severe finding reaches a human instead of
+        # disappearing into a log. Only the severity recorded on the alert
+        # differs. Below-review-floor and dismissed-false-positive cases
+        # are still not persisted.
         # finding #28: taxonomy_id/risk_score/citation/plain_english_summary
         # no longer need an `or <default>` fallback here — reaching FREEZE
         # requires matched=True, and DiagnosticianOutput's own validator
@@ -190,13 +193,16 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
             taxonomy_id=diag.taxonomy_id, fragment_text=isolated_fragment, risk_score=diag.risk_score,
             plain_english_summary=diag.plain_english_summary,
             citation=diag.citation, remediation_patch=diag.remediation_patch or "",
+            severity=SEVERITY_BLOCKING if decision.blocks_build else SEVERITY_REVIEW,
         )  # requires dynamodb:* permissions
         alert_id = alert.alert_id
 
-    log.info("fragment result: file=%s action=%s alert_id=%s", file, decision.action.value, alert_id)
+    log.info("fragment result: file=%s action=%s blocks_build=%s alert_id=%s",
+             file, decision.action.value, decision.blocks_build, alert_id)
     return {
         "file": file,
         "action": decision.action.value,
+        "blocks_build": decision.blocks_build,
         "reason": decision.reason,
         "diagnostician": diag.model_dump(),
         "alert_id": alert_id,
