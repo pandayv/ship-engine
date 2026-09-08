@@ -18,7 +18,12 @@
     .tier.review { background: #e67e22; color: white; }
     .citation { font-family: monospace; background: #f5f5f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
     pre { background: #f5f5f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
-    .actions { margin-top: 0.75rem; }
+    .actions { margin-top: 0.9rem; padding-top: 0.85rem; border-top: 1px solid #eee; }
+    .actions label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+    .actions .hint { font-weight: 400; color: #666; }
+    .actions textarea { width: 100%; font: inherit; font-size: 0.88rem; padding: 0.5rem 0.6rem;
+      border: 1px solid #ccc; border-radius: 6px; resize: vertical; min-height: 3.4rem; margin-bottom: 0.6rem; }
+    .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     button { padding: 0.4rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.9rem; margin-right: 0.5rem; }
     .approve { background: #27ae60; color: white; }
     .reject { background: #c0392b; color: white; }
@@ -41,14 +46,21 @@
         <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
       <div>{{ alert.plain_english_summary }}</div>
       {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
-      <div class="actions">
-        <form method="post" action="/dashboard/{{ alert.alert_id }}/approve?token={{ token }}" style="display:inline">
-          <button class="approve" type="submit">Approve patch</button>
-        </form>
-        <form method="post" action="/dashboard/{{ alert.alert_id }}/reject?token={{ token }}" style="display:inline">
-          <button class="reject" type="submit">Reject</button>
-        </form>
-      </div>
+      <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve?token={{ token }}">
+        <label for="reason-{{ alert.alert_id }}">Your reason
+          <span class="hint">Posted on the pull request as the record of this decision.</span></label>
+        <textarea id="reason-{{ alert.alert_id }}" name="reason" required
+                  placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
+        <div class="btn-row">
+          <button class="approve" type="submit">
+            {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
+          </button>
+          <button class="reject" type="submit"
+                  formaction="/dashboard/{{ alert.alert_id }}/reject?token={{ token }}">
+            {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
+          </button>
+        </div>
+      </form>
     </div>
     {% endfor %}
   {% else %}

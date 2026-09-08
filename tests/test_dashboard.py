@@ -14,7 +14,7 @@ def _sample_alert(alert_id="a1"):
         alert_id=alert_id, repo="pandayv/micro-finance", pr_number=1, file="loans/ai_underwriting.py",
         taxonomy_id="PIIE-001", risk_score=9.1, plain_english_summary="Raw applicant PII sent to an external LLM.",
         citation="GDPR Art. 32(1)(a)", remediation_patch="# redact PII before building the prompt",
-        status="frozen", created_at="2026-09-04T00:00:00+00:00",
+        status="frozen", created_at="2026-09-04T00:00:00+00:00", head_sha="abc123sha",
     )
 
 
@@ -37,36 +37,89 @@ def test_renders_alert_details(monkeypatch):
     assert "loans/ai_underwriting.py" in response.text  # finding #60: file traceability
 
 
-def test_approve_calls_resolve_with_true(monkeypatch):
+def _wire_resolvable(monkeypatch, calls, alert=None):
+    """Stubs everything a decision touches: the lookup, the state change,
+    and both GitHub write-back calls (which must never reach the network
+    from a test)."""
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "get_alert", lambda alert_id: alert or _sample_alert(alert_id))
+    monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert",
+                        lambda alert_id, approved: calls.append((alert_id, approved)))
+    posted, synced = [], []
+    monkeypatch.setattr(dashboard_module, "post_pr_comment", lambda *a, **k: posted.append((a, k)))
+    monkeypatch.setattr(dashboard_module, "sync_pr_check", lambda *a, **k: synced.append((a, k)))
+    return posted, synced
+
+
+def test_approve_calls_resolve_with_true(monkeypatch):
     calls = []
-    monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", lambda alert_id, approved: calls.append((alert_id, approved)))
-    response = client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}", follow_redirects=False)
+    _wire_resolvable(monkeypatch, calls)
+    response = client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+                           data={"reason": "Fixture data only."}, follow_redirects=False)
     assert response.status_code == 303
     assert calls == [("a1", True)]
 
 
 def test_reject_calls_resolve_with_false(monkeypatch):
-    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     calls = []
-    monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", lambda alert_id, approved: calls.append((alert_id, approved)))
-    response = client.post(f"/dashboard/a1/reject?token={TEST_TOKEN}", follow_redirects=False)
+    _wire_resolvable(monkeypatch, calls)
+    response = client.post(f"/dashboard/a1/reject?token={TEST_TOKEN}",
+                           data={"reason": "Real problem, needs an allowlist."}, follow_redirects=False)
     assert response.status_code == 303
     assert calls == [("a1", False)]
+
+
+def test_decision_writes_back_to_the_pull_request(monkeypatch):
+    # The loop only closes if the human's decision reaches GitHub: a
+    # comment recording it, and a recomputed commit status. Without both,
+    # the merge stays blocked no matter what the reviewer decided here.
+    calls = []
+    posted, synced = _wire_resolvable(monkeypatch, calls)
+    client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+                data={"reason": "Fixture data only, tracked as LOAN-812."}, follow_redirects=False)
+
+    assert len(posted) == 1
+    repo, pr_number, body = posted[0][0]
+    assert repo == "pandayv/micro-finance" and pr_number == 1
+    assert "Risk accepted" in body
+    assert "Fixture data only, tracked as LOAN-812." in body
+
+    assert synced == [(("pandayv/micro-finance", 1, "abc123sha"), {})]
+
+
+def test_decision_without_a_reason_is_refused(monkeypatch):
+    # The reason IS the audit record — a decision with no stated basis
+    # must not resolve the alert at all.
+    calls = []
+    _wire_resolvable(monkeypatch, calls)
+    response = client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+                           data={"reason": "   "}, follow_redirects=False)
+    assert response.status_code == 400
+    assert calls == []
 
 
 def test_approve_conflict_returns_409(monkeypatch):
     # review finding #3/#4: resolving a bogus or already-resolved alert_id
     # used to either silently create a ghost row or silently overwrite a
     # prior decision — now it's a real 409, not a silent success.
-    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    calls = []
+    _wire_resolvable(monkeypatch, calls)
 
     def _raise(alert_id, approved):
         raise dashboard_module.alert_store.AlertNotFoundOrAlreadyResolved(alert_id)
 
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", _raise)
-    response = client.post(f"/dashboard/nonexistent/approve?token={TEST_TOKEN}", follow_redirects=False)
+    response = client.post(f"/dashboard/nonexistent/approve?token={TEST_TOKEN}",
+                           data={"reason": "already handled"}, follow_redirects=False)
     assert response.status_code == 409
+
+
+def test_unknown_alert_returns_404(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "get_alert", lambda alert_id: None)
+    response = client.post(f"/dashboard/ghost/approve?token={TEST_TOKEN}",
+                           data={"reason": "n/a"}, follow_redirects=False)
+    assert response.status_code == 404
 
 
 # --- Auth-specific tests (review finding #2: no auth at all previously) ---
@@ -88,7 +141,7 @@ def test_approve_without_token_rejected(monkeypatch):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     calls = []
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", lambda alert_id, approved: calls.append((alert_id, approved)))
-    response = client.post("/dashboard/a1/approve", follow_redirects=False)
+    response = client.post("/dashboard/a1/approve", data={"reason": "x"}, follow_redirects=False)
     assert response.status_code == 401
     assert calls == []  # the actual resolution must never have been attempted
 

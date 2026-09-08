@@ -92,7 +92,8 @@ from src.agents.diagnostician import diagnose
 from src.agents.screener import isolate_fragment, scan, split_diff_into_fragments
 from src.agents.triage import route
 from src.api.dashboard import router as dashboard_router
-from src.api.github_client import extract_pr_ref, fetch_pr_diff, is_pr_event
+from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_diff, is_pr_event
+from src.api.github_writeback import comment_for_finding, post_pr_comment, sync_pr_check
 from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
 
 app = FastAPI(title="SHIP")
@@ -139,7 +140,8 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fragment: str) -> dict:
+def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fragment: str,
+                     head_sha: str = "") -> dict:
     """
     Diagnose, route, and (if frozen) store the verdict for ONE already-
     escalated, already-isolated code fragment. This is the actual unit of
@@ -194,8 +196,18 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
             plain_english_summary=diag.plain_english_summary,
             citation=diag.citation, remediation_patch=diag.remediation_patch or "",
             severity=SEVERITY_BLOCKING if decision.blocks_build else SEVERITY_REVIEW,
+            head_sha=head_sha,
         )  # requires dynamodb:* permissions
         alert_id = alert.alert_id
+
+        # Put the finding where the work happens, then recompute the PR's
+        # commit status from every stored alert. Both calls fail soft by
+        # design (see src/api/github_writeback.py's FAILURE POLICY): the
+        # alert is already durably stored, and raising here would send this
+        # message back through SQS for a retry that re-runs the model call
+        # purely to redeliver a comment.
+        post_pr_comment(repo_full_name, pr_number, comment_for_finding(alert))
+        sync_pr_check(repo_full_name, pr_number, head_sha)
 
     log.info("fragment result: file=%s action=%s blocks_build=%s alert_id=%s",
              file, decision.action.value, decision.blocks_build, alert_id)
@@ -209,7 +221,7 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
     }
 
 
-def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
+def process_pr(repo_full_name: str, pr_number: int, code_diff: str, head_sha: str = "") -> dict:
     """
     Sequential local-fallback path: split into fragments, scan each, and
     call process_fragment() for every escalated one, one after another in
@@ -234,7 +246,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
 
         try:
             isolated = isolate_fragment(frag["text"], screener_result.matched_terms)
-            results.append(process_fragment(repo_full_name, pr_number, frag["file"], isolated))
+            results.append(process_fragment(repo_full_name, pr_number, frag["file"], isolated, head_sha))
         except Exception as e:
             # finding #8: a single fragment's failure (a transient AWS
             # hiccup, a schema-validation error from a malformed model
@@ -263,7 +275,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
     }
 
 
-def _dispatch_fragments(repo_full_name: str, pr_number: int, code_diff: str) -> dict:
+def _dispatch_fragments(repo_full_name: str, pr_number: int, code_diff: str, head_sha: str = "") -> dict:
     """
     Splits the diff, screens each fragment, and sends one SQS message per
     escalated fragment to the fragment-processing queue — each fragment
@@ -280,7 +292,7 @@ def _dispatch_fragments(repo_full_name: str, pr_number: int, code_diff: str) -> 
     LAMBDA_FUNCTION_NAME-unset fallback provided.
     """
     if not FRAGMENT_QUEUE_URL:
-        return process_pr(repo_full_name, pr_number, code_diff)
+        return process_pr(repo_full_name, pr_number, code_diff, head_sha)
 
     # Splitting + per-fragment screening now happens here instead of inside
     # process_pr() — finding #19, the old whole-diff-then-per-fragment
@@ -308,6 +320,7 @@ def _dispatch_fragments(repo_full_name: str, pr_number: int, code_diff: str) -> 
             "pr_number": pr_number,
             "file": frag["file"],
             "isolated_fragment": frag["isolated_fragment"],
+            "head_sha": head_sha,
         }).encode("utf-8")
 
         # finding #61 (re-applied per-message rather than per-whole-diff):
@@ -337,6 +350,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
 
     if is_pr_event(payload):
         repo_full_name, pr_number = extract_pr_ref(payload)
+        head_sha = extract_head_sha(payload)
         # finding #7: don't let a payload name an arbitrary repo and spend
         # this service's own GitHub token / Bedrock quota against it.
         if repo_full_name not in ALLOWED_REPOS:
@@ -359,6 +373,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
         # real GitHub webhook payload.
         repo_full_name, pr_number = "local-test", 0
         code_diff = payload.get("code_diff", "")
+        head_sha = ""
 
     if not code_diff:
         return {"action": "pass", "reason": "No diff content in the payload."}
@@ -367,6 +382,11 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     # nothing matches anywhere, skip fragment dispatch entirely rather than
     # spending the work to split and per-fragment-scan for nothing.
     if not scan(code_diff).matched:
+        # Report the pass on the PR too. Without this the check would sit
+        # pending forever on a clean PR, which reads as "still thinking"
+        # rather than "reviewed and fine" — and a required check that never
+        # reports blocks the merge just as effectively as a failing one.
+        sync_pr_check(repo_full_name, pr_number, head_sha)
         return {"action": "pass", "reason": "Screener found no trigger matches."}
 
     # finding #44: this used to call process_pr() synchronously inline for
@@ -377,4 +397,4 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     # same dispatch; _dispatch_fragments() itself falls back to the
     # sequential process_pr() path only when no fragment queue is
     # configured at all.
-    return _dispatch_fragments(repo_full_name, pr_number, code_diff)
+    return _dispatch_fragments(repo_full_name, pr_number, code_diff, head_sha)

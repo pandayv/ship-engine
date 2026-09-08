@@ -52,6 +52,12 @@ class Alert:
     # because a call site that forgets to pass it should fail toward
     # over-blocking, not toward silently letting a blocking finding through.
     severity: str = SEVERITY_BLOCKING
+    # The commit this finding was judged against. Stored because the
+    # dashboard needs it to update the PR's commit status when a human
+    # resolves the alert, long after the webhook payload that carried it
+    # is gone. Empty for rows written before this field existed, and for
+    # local-test runs that never had a real commit.
+    head_sha: str = ""
 
 
 # finding #16/#50: this used to build a fresh boto3 DynamoDB resource +
@@ -156,7 +162,7 @@ def _decode_item(item: dict) -> dict:
 
 def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str, risk_score: float,
               plain_english_summary: str, citation: str, remediation_patch: str,
-              severity: str = SEVERITY_BLOCKING) -> Alert:
+              severity: str = SEVERITY_BLOCKING, head_sha: str = "") -> Alert:
     # severity is deliberately NOT part of _deterministic_alert_id: a
     # re-diagnosis of the same violation that scores differently enough to
     # cross a band boundary must UPDATE that violation's existing row, not
@@ -174,6 +180,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
         status="frozen",
         created_at=datetime.now(timezone.utc).isoformat(),
         severity=severity,
+        head_sha=head_sha,
     )
     item = _encode_item(alert)
     try:
@@ -196,7 +203,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
     return alert
 
 
-def list_active_alerts() -> list[Alert]:
+def _scan_all(**scan_kwargs) -> list[dict]:
     # finding #14: DynamoDB Scan reads at most 1MB BEFORE applying
     # FilterExpression, then returns LastEvaluatedKey if more of the table
     # remains to be scanned - a single, unpaginated .scan() silently
@@ -205,40 +212,74 @@ def list_active_alerts() -> list[Alert]:
     # 1MB boundary. Loop until LastEvaluatedKey is actually absent.
     table = _table()
     items = []
-    scan_kwargs = {
-        "FilterExpression": "#s = :status",
-        "ExpressionAttributeNames": {"#s": "status"},
-        "ExpressionAttributeValues": {":status": "frozen"},
-    }
     while True:
         response = table.scan(**scan_kwargs)
         items.extend(response.get("Items", []))
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
-            break
+            return items
         scan_kwargs["ExclusiveStartKey"] = last_key
 
-    alerts = []
-    for item in items:
-        # DynamoDB's Number type has no int/float distinction — everything
-        # numeric comes back as Decimal; _decode_item() converts back to
-        # what the rest of the app (and JSON serialization) actually
-        # expects, generically off Alert's own field types (finding #27).
-        item = _decode_item(item)
-        # Tolerate rows written before a field existed (caught live,
-        # 2026-09-05: real rows from earlier this session predate the
-        # "file" field added for finding #60 and crashed this exact call
-        # with a missing-argument TypeError). Schema evolution tolerance
-        # like this is a real, general pattern — not specific to "file" —
-        # so any future field addition should get the same treatment here.
-        item.setdefault("file", "<unknown>")
-        # Same schema-evolution tolerance for severity, added 2026-09-07.
-        # Every row predating this field was written by the old binary
-        # freeze-or-nothing path, so "blocking" is the historically correct
-        # value for them — not just a safe filler.
-        item.setdefault("severity", SEVERITY_BLOCKING)
-        alerts.append(Alert(**item))
-    return alerts
+
+def _row_to_alert(item: dict) -> Alert:
+    """
+    One place where a stored row becomes an Alert, so every reader gets
+    the same schema-evolution tolerance. Adding a field to Alert means
+    adding its historical default here and nowhere else.
+    """
+    # DynamoDB's Number type has no int/float distinction — everything
+    # numeric comes back as Decimal; _decode_item() converts back to what
+    # the rest of the app (and JSON serialization) actually expects,
+    # generically off Alert's own field types (finding #27).
+    item = _decode_item(item)
+    # Tolerate rows written before a field existed (caught live,
+    # 2026-09-05: real rows from earlier that session predate the "file"
+    # field added for finding #60 and crashed with a missing-argument
+    # TypeError).
+    item.setdefault("file", "<unknown>")
+    # Rows predating severity were written by the old binary
+    # freeze-or-nothing path, so "blocking" is their historically correct
+    # value, not just a safe filler.
+    item.setdefault("severity", SEVERITY_BLOCKING)
+    # Rows predating head_sha have no commit to post a status against;
+    # the write-back path skips an empty sha rather than guessing.
+    item.setdefault("head_sha", "")
+    return Alert(**item)
+
+
+def list_active_alerts() -> list[Alert]:
+    items = _scan_all(
+        FilterExpression="#s = :status",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":status": "frozen"},
+    )
+    return [_row_to_alert(i) for i in items]
+
+
+def list_alerts_for_pr(repo: str, pr_number: int) -> list[Alert]:
+    """
+    Every alert for one PR, resolved ones included — the caller needs the
+    resolved rows to tell "decided and cleared" from "never found anything"
+    (src/api/github_writeback.py's sync_pr_check filters on status itself).
+
+    A Scan with a filter rather than a Query because alert_id is the only
+    key on this table. Correct, and fine at the scale this runs at; a
+    repo+pr global secondary index is the change to make if the table ever
+    grows past a scan being cheap.
+    """
+    # Both names aliased rather than inlined: DynamoDB's reserved-word list
+    # is long and a collision fails at runtime, not at write time.
+    items = _scan_all(
+        FilterExpression="#r = :repo AND #p = :pr",
+        ExpressionAttributeNames={"#r": "repo", "#p": "pr_number"},
+        ExpressionAttributeValues={":repo": repo, ":pr": pr_number},
+    )
+    return [_row_to_alert(i) for i in items]
+
+
+def get_alert(alert_id: str) -> Alert | None:
+    item = _table().get_item(Key={"alert_id": alert_id}).get("Item")
+    return _row_to_alert(item) if item else None
 
 
 class AlertNotFoundOrAlreadyResolved(Exception):

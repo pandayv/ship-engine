@@ -91,4 +91,4 @@ def test_main_py_dispatches_fragments_instead_of_self_invoking_lambda():
     # the new dispatch function is what the webhook route actually calls.
     main_source = (REPO_ROOT / "src" / "api" / "main.py").read_text()
     assert "ASYNC_MARKER" not in main_source
-    assert "_dispatch_fragments(repo_full_name, pr_number, code_diff)" in main_source
+    assert "_dispatch_fragments(repo_full_name, pr_number, code_diff, head_sha)" in main_source
