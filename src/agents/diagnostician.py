@@ -210,12 +210,16 @@ def _get_store():
     # against the installed functools implementation before relying on
     # this, not assumed).
     from src.rag.chunker import chunk_corpus
+    from src.rag.embedding_cache import default_cache_path
     from src.rag.vector_store import VectorStore
 
     corpus_dir = Path(__file__).resolve().parents[2] / "rag_corpus"
     chunks = chunk_corpus(corpus_dir)
     store = VectorStore()
-    store.build(chunks)  # calls Bedrock Titan embeddings — needs AWS credentials
+    # Uses the precomputed embeddings when they match this corpus and
+    # model; falls back to live Bedrock Titan calls otherwise (needs AWS
+    # credentials either way — queries are always embedded live).
+    store.build(chunks, cache_path=default_cache_path(corpus_dir))
     return store
 
 

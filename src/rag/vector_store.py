@@ -30,9 +30,11 @@ import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
+from src.rag import embedding_cache
 from src.rag.chunker import Chunk
 
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
@@ -112,6 +114,28 @@ def _embed_gemini(texts: list[str], is_query: bool) -> np.ndarray:
     return np.array([e.values for e in response.embeddings], dtype=np.float32)
 
 
+def active_embed_model_id() -> str:
+    """
+    Identifies the embedding space currently in use, backend included.
+
+    Backend is part of the identity, not just the model name: Titan,
+    Gemini and Ollama embeddings are mutually incompatible vector spaces,
+    and mixing precomputed vectors from one with live queries from another
+    produces no error — only silently wrong retrieval. This string goes
+    into the embedding cache's fingerprint so that mistake is impossible
+    rather than merely unlikely (see src/rag/embedding_cache.py).
+    """
+    backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
+    model = {
+        "bedrock": TITAN_EMBED_MODEL_ID,
+        "ollama": OLLAMA_EMBED_MODEL_ID,
+        "gemini": GEMINI_EMBED_MODEL_ID,
+    }.get(backend)
+    if model is None:
+        raise ValueError(f"Unknown SHIP_MODEL_BACKEND: {backend!r} (expected 'bedrock', 'ollama', or 'gemini')")
+    return f"{backend}:{model}"
+
+
 def embed_texts(texts: list[str], is_query: bool = False) -> np.ndarray:
     """
     is_query: whether these texts are a live search query (vs. corpus
@@ -141,9 +165,25 @@ class VectorStore:
         self._chunks: list[Chunk] = []
         self._vectors: np.ndarray | None = None
 
-    def build(self, chunks: list[Chunk]) -> None:
+    def build(self, chunks: list[Chunk], cache_path: Path | None = None) -> None:
+        """
+        cache_path: a precomputed-embeddings artifact to use if — and only
+        if — it provably matches these exact chunks and the active
+        embedding model. A missing, stale or mismatched cache is not an
+        error; it just means embedding live, which is slower but always
+        correct. See src/rag/embedding_cache.py for why that direction of
+        failure is the safe one.
+        """
         self._chunks = chunks
-        self._vectors = embed_texts([c.text for c in chunks], is_query=False)
+        texts = [c.text for c in chunks]
+
+        if cache_path is not None:
+            cached = embedding_cache.load(texts, active_embed_model_id(), cache_path)
+            if cached is not None:
+                self._vectors = cached
+                return
+
+        self._vectors = embed_texts(texts, is_query=False)
 
     def query(self, text: str, top_k: int = 3) -> list[RetrievedChunk]:
         if self._vectors is None or len(self._chunks) == 0:

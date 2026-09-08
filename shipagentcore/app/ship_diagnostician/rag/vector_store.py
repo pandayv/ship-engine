@@ -7,10 +7,12 @@ environment, so there's no reason for a local/Ollama fallback path here.
 
 import json
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
 from aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
+from rag import embedding_cache
 from rag.chunker import Chunk
 
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
@@ -45,14 +47,40 @@ def embed_texts(texts: list[str]) -> np.ndarray:
     return np.array(vectors, dtype=np.float32)
 
 
+def active_embed_model_id() -> str:
+    """
+    Mirrors src/rag/vector_store.py's function of the same name, but this
+    container is deliberately bedrock-only (see SHIP_REVIEW_DISPOSITIONS
+    #23/#47 — that is a design choice, not drift), so there is no backend
+    to look up. The "bedrock:" prefix is kept so a cache file produced by
+    the main repo's precompute script fingerprints identically here.
+    """
+    return f"bedrock:{TITAN_EMBED_MODEL_ID}"
+
+
 class VectorStore:
     def __init__(self):
         self._chunks: list[Chunk] = []
         self._vectors: np.ndarray | None = None
 
-    def build(self, chunks: list[Chunk]) -> None:
+    def build(self, chunks: list[Chunk], cache_path: Path | None = None) -> None:
+        """
+        cache_path: precomputed embeddings, used only if they provably
+        match these exact chunks and this model. This is what keeps a cold
+        start from re-embedding the whole static corpus through Bedrock —
+        the measured cause of a fragment blowing past Lambda's 900s
+        ceiling on 2026-09-08. See rag/embedding_cache.py.
+        """
         self._chunks = chunks
-        self._vectors = embed_texts([c.text for c in chunks])
+        texts = [c.text for c in chunks]
+
+        if cache_path is not None:
+            cached = embedding_cache.load(texts, active_embed_model_id(), cache_path)
+            if cached is not None:
+                self._vectors = cached
+                return
+
+        self._vectors = embed_texts(texts)
 
     def query(self, text: str, top_k: int = 3):
         if self._vectors is None or len(self._chunks) == 0:
