@@ -223,7 +223,18 @@ def _get_store():
     return store
 
 
-BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Overridable so a model can be swapped without editing code — the same
+# reasoning as finding #42's fix for the hardcoded AgentCore runtime ARN.
+# This exists for a concrete reason, not generality for its own sake: the
+# per-model Bedrock request-per-minute quota varies by a factor of twenty
+# on this account (Claude models are capped at 10/min, Amazon Nova Lite at
+# 200/min), and that ceiling — not token throughput — is what bounds how
+# many pull requests SHIP can review per minute. Being able to A/B a model
+# against the adversarial fixture set without a code change is what makes
+# that a measurable decision instead of a guess.
+BEDROCK_MODEL_ID = os.environ.get("SHIP_BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL_ID)
 # Account-wide 0.0 quota block resolved 2026-09-04 (see ship_roadmap.md for
 # the full saga). Legacy Claude 3 Haiku was tried first as the cheapest
 # option but rejected — Anthropic marks it Legacy and denies access to
