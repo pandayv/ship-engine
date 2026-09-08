@@ -28,6 +28,7 @@ from strands.models.bedrock import BedrockModel
 
 from aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 from rag.chunker import chunk_corpus
+from rag.embedding_cache import default_cache_path
 from rag.vector_store import VectorStore
 
 app = BedrockAgentCoreApp()
@@ -171,7 +172,10 @@ def _get_store() -> VectorStore:
     corpus_dir = Path(__file__).resolve().parent / "rag_corpus"
     chunks = chunk_corpus(corpus_dir)
     store = VectorStore()
-    store.build(chunks)
+    # Precomputed embeddings when they match; live Titan calls otherwise.
+    # This is the cold-start path that previously re-embedded the entire
+    # corpus in every container instance.
+    store.build(chunks, cache_path=default_cache_path(corpus_dir))
     return store
 
 

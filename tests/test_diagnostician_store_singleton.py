@@ -20,7 +20,7 @@ import src.agents.diagnostician as diagnostician_module
 class _FakeStore:
     build_attempts = 0
 
-    def build(self, chunks):
+    def build(self, chunks, cache_path=None):
         _FakeStore.build_attempts += 1
         if _FakeStore.build_attempts == 1:
             raise RuntimeError("simulated transient embedding failure")
