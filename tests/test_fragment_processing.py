@@ -27,6 +27,20 @@ def _matched_output(taxonomy_id="PIIE-001", risk_score=9.0):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """process_fragment() writes findings back to the pull request. Stub
+    both calls for every test in this module so none of them can reach
+    GitHub — an unstubbed one would silently depend on GITHUB_TOKEN being
+    absent from the environment to stay offline."""
+    monkeypatch.setattr("src.api.main.post_pr_comment", lambda *a, **k: True)
+    monkeypatch.setattr("src.api.main.sync_pr_check", lambda *a, **k: True)
+    # Also the comment builder: it reads real Alert fields, and it is
+    # evaluated as an argument to post_pr_comment before the stub above
+    # ever sees it. Its own output is covered in test_github_writeback.py.
+    monkeypatch.setattr("src.api.main.comment_for_finding", lambda alert: "stub comment")
+
+
 def test_process_fragment_stores_an_alert_when_frozen(monkeypatch):
     monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output())
     calls = []
@@ -118,6 +132,7 @@ def test_fragment_lambda_handler_calls_process_fragment_with_message_fields(monk
                     "pr_number": 42,
                     "file": "loans/apply.py",
                     "isolated_fragment": "logger.info(applicant.ssn)",
+                    "head_sha": "deadbeef",
                 })
             }
         ]
@@ -129,7 +144,23 @@ def test_fragment_lambda_handler_calls_process_fragment_with_message_fields(monk
         "pr_number": 42,
         "file": "loans/apply.py",
         "isolated_fragment": "logger.info(applicant.ssn)",
+        "head_sha": "deadbeef",
     }]
+
+
+def test_fragment_lambda_handler_tolerates_a_message_without_head_sha(monkeypatch):
+    # head_sha was added to the message shape after the queue was already
+    # live. A message enqueued by the previous version must still process
+    # rather than KeyError into the dead-letter queue.
+    calls = []
+    monkeypatch.setattr(fragment_lambda_handler, "process_fragment", lambda **kwargs: calls.append(kwargs))
+
+    fragment_lambda_handler.handler({"Records": [{"body": json.dumps({
+        "repo_full_name": "pandayv/micro-finance", "pr_number": 42,
+        "file": "loans/apply.py", "isolated_fragment": "logger.info(applicant.ssn)",
+    })}]}, None)
+
+    assert calls[0]["head_sha"] == ""
 
 
 def test_fragment_lambda_handler_propagates_process_fragment_failures(monkeypatch):

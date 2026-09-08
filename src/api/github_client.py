@@ -46,6 +46,22 @@ def extract_pr_ref(payload: dict) -> tuple[str, int]:
     return repo_full_name, pr_number
 
 
+def extract_head_sha(payload: dict) -> str:
+    """
+    The commit a verdict applies to. A commit status is posted against a
+    specific SHA, so this has to travel with the fragment all the way to
+    where the alert is written — the webhook payload is long gone by the
+    time a human resolves it.
+
+    Kept separate from extract_pr_ref() rather than widening its return
+    tuple: every existing caller stays untouched, and a payload shape
+    without a head ref (the simplified local-testing body) degrades to an
+    empty string, which the write-back path already treats as "no status
+    to post" instead of failing.
+    """
+    return payload.get("pull_request", {}).get("head", {}).get("sha", "")
+
+
 if __name__ == "__main__":
     # smoke test against the real, already-open PR #1
     import subprocess

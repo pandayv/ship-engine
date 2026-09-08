@@ -55,7 +55,8 @@ def test_sends_one_sqs_message_per_escalated_fragment_only(monkeypatch):
 def test_falls_back_to_process_pr_when_no_queue_configured(monkeypatch):
     monkeypatch.setattr(main_module, "FRAGMENT_QUEUE_URL", "")
     calls = []
-    monkeypatch.setattr(main_module, "process_pr", lambda repo, pr, diff: calls.append((repo, pr, diff)) or {"action": "pass"})
+    monkeypatch.setattr(main_module, "process_pr",
+                        lambda repo, pr, diff, sha="": calls.append((repo, pr, diff)) or {"action": "pass"})
 
     result = _dispatch_fragments("pandayv/micro-finance", 1, CODE_DIFF)
 

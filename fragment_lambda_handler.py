@@ -39,4 +39,10 @@ def handler(event, context):
             pr_number=body["pr_number"],
             file=body["file"],
             isolated_fragment=body["isolated_fragment"],
+            # .get() rather than [] deliberately: head_sha was added to the
+            # message shape after this queue was already live, so a message
+            # enqueued by the previous version must still process rather
+            # than KeyError its way into the dead-letter queue. An empty
+            # sha degrades to "no commit status posted", not a failure.
+            head_sha=body.get("head_sha", ""),
         )
