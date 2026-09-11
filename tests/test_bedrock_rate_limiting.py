@@ -27,9 +27,9 @@ from pathlib import Path
 from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MAIN_DIAGNOSTICIAN_SOURCE = (REPO_ROOT / "src" / "agents" / "diagnostician.py").read_text()
+MAIN_DETECTOR_SOURCE = (REPO_ROOT / "src" / "agents" / "detector.py").read_text()
 MAIN_VECTOR_STORE_SOURCE = (REPO_ROOT / "src" / "rag" / "vector_store.py").read_text()
-DEPLOYED_DIAGNOSTICIAN_SOURCE = (
+DEPLOYED_DETECTOR_SOURCE = (
     REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "main.py"
 ).read_text()
 DEPLOYED_VECTOR_STORE_SOURCE = (
@@ -65,13 +65,13 @@ def test_deployed_bedrock_session_also_exports_adaptive_retry_config():
 
 
 def test_main_bedrock_model_uses_adaptive_retry_config():
-    assert "BEDROCK_RETRY_CONFIG" in MAIN_DIAGNOSTICIAN_SOURCE
-    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in MAIN_DIAGNOSTICIAN_SOURCE
+    assert "BEDROCK_RETRY_CONFIG" in MAIN_DETECTOR_SOURCE
+    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in MAIN_DETECTOR_SOURCE
 
 
 def test_deployed_bedrock_model_uses_adaptive_retry_config():
-    assert "BEDROCK_RETRY_CONFIG" in DEPLOYED_DIAGNOSTICIAN_SOURCE
-    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in DEPLOYED_DIAGNOSTICIAN_SOURCE
+    assert "BEDROCK_RETRY_CONFIG" in DEPLOYED_DETECTOR_SOURCE
+    assert "boto_client_config=BEDROCK_RETRY_CONFIG" in DEPLOYED_DETECTOR_SOURCE
 
 
 def test_main_vector_store_embeddings_use_adaptive_retry_config():

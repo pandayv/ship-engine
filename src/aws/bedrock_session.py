@@ -4,7 +4,7 @@ Shared Bedrock session + retry configuration.
 Review finding #45 (original fix, 2026-09-04/05): a hand-placed
 time.sleep(7) between fragments in main.py's process_pr() loop assumed
 exactly one Bedrock call per fragment, which isn't how a tool-using
-Diagnostician agent behaves. The first fix moved to a custom, process-
+Detector agent behaves. The first fix moved to a custom, process-
 local SlidingWindowRateLimiter shared by every Bedrock caller — real
 improvement over a blind sleep, but it never solved (and was always
 documented as not solving) coordination ACROSS multiple concurrent

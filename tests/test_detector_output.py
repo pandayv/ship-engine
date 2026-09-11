@@ -1,5 +1,5 @@
 """
-Pure-logic tests for DiagnosticianOutput's validation — no AWS credentials
+Pure-logic tests for DetectorOutput's validation — no AWS credentials
 needed, since these test pydantic validation and Python control flow, not
 any live model call. Added 2026-09-05: these fixes (the model_validator,
 the singleton-poisoning fix) had been written but never actually verified
@@ -9,17 +9,17 @@ by a test — this closes that gap.
 import pytest
 from pydantic import ValidationError
 
-from src.agents.diagnostician import DiagnosticianOutput
+from src.agents.detector import DetectorOutput
 
 
 def test_matched_false_allows_all_fields_empty():
     # a dismissed false positive shouldn't need any of the other fields
-    result = DiagnosticianOutput(matched=False)
+    result = DetectorOutput(matched=False)
     assert result.taxonomy_id is None
 
 
 def test_matched_true_with_all_fields_populated_is_valid():
-    result = DiagnosticianOutput(
+    result = DetectorOutput(
         matched=True, taxonomy_id="PIIE-001", risk_score=9.0,
         citation="GDPR Art. 32(1)(a)", plain_english_summary="Raw PII sent externally.",
     )
@@ -40,4 +40,4 @@ def test_matched_true_missing_any_required_field_raises(missing_field):
     }
     fields[missing_field] = None
     with pytest.raises(ValidationError, match=missing_field):
-        DiagnosticianOutput(**fields)
+        DetectorOutput(**fields)

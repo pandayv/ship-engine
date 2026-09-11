@@ -9,7 +9,7 @@ tree with its own import root (`from rag...` only resolves inside this
 package), so a shared src/ import isn't reachable from here.
 
 This is actually the more important copy of the two: when the SHIP
-webhook Lambda runs with SHIP_DIAGNOSTICIAN_MODE=agentcore (the deployed
+webhook Lambda runs with SHIP_DETECTOR_MODE=agentcore (the deployed
 configuration), the Lambda itself makes no direct Bedrock calls at all —
 it only calls invoke_agent_runtime, a control-plane call with a different,
 much less restrictive quota than the 10-requests/minute model quota. The

@@ -14,7 +14,7 @@ introspection API (cache_info()) instead of a hand-rolled module global
 that no longer exists.
 """
 
-import src.agents.diagnostician as diagnostician_module
+import src.agents.detector as detector_module
 
 
 class _FakeStore:
@@ -29,7 +29,7 @@ class _FakeStore:
 
 def test_transient_build_failure_does_not_poison_the_singleton(monkeypatch):
     _FakeStore.build_attempts = 0
-    diagnostician_module._get_store.cache_clear()
+    detector_module._get_store.cache_clear()
 
     def fake_chunk_corpus(_dir):
         return ["fake chunk"]
@@ -43,24 +43,24 @@ def test_transient_build_failure_does_not_poison_the_singleton(monkeypatch):
     # silently return the poisoned store instead of retrying. lru_cache
     # must show the same not-poisoned behavior.
     try:
-        diagnostician_module._get_store()
+        detector_module._get_store()
         assert False, "expected the first call to raise"
     except RuntimeError:
         pass
 
-    assert diagnostician_module._get_store.cache_info().currsize == 0, (
+    assert detector_module._get_store.cache_info().currsize == 0, (
         "a failed build() must not leave a broken store cached"
     )
 
     # second call: build() succeeds this time — must actually retry, not
     # return a cached broken instance.
-    store = diagnostician_module._get_store()
+    store = detector_module._get_store()
     assert getattr(store, "built_ok", False) is True
-    assert diagnostician_module._get_store.cache_info().currsize == 1
+    assert detector_module._get_store.cache_info().currsize == 1
 
     # third call: must return the SAME cached instance, not rebuild again —
     # this is still meant to be a singleton, not "retry every time".
-    assert diagnostician_module._get_store() is store
+    assert detector_module._get_store() is store
     assert _FakeStore.build_attempts == 2, "a successful build() must be cached, not repeated on every call"
 
-    diagnostician_module._get_store.cache_clear()  # don't leak state into other tests
+    detector_module._get_store.cache_clear()  # don't leak state into other tests

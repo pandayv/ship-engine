@@ -1,6 +1,6 @@
 """
 Regression test for a real bug caught live during finding #45's deployment
-verification (2026-09-05): diagnose_via_agentcore()'s boto3 client used
+verification (2026-09-05): detect_via_agentcore()'s boto3 client used
 botocore's default 60s read timeout, but a real invoke_agent_runtime call
 can legitimately take several minutes once the deployed container's own
 Bedrock rate limiter is pacing a cold-start embedding burst plus the
@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.agents.diagnostician import diagnose_via_agentcore
+from src.agents.detector import detect_via_agentcore
 
 
 def test_agentcore_client_uses_a_read_timeout_with_real_margin_under_the_lambda_timeout(monkeypatch):
@@ -34,7 +34,7 @@ def test_agentcore_client_uses_a_read_timeout_with_real_margin_under_the_lambda_
         mock_client.invoke_agent_runtime.return_value = fake_response
         mock_boto_client.return_value = mock_client
 
-        diagnose_via_agentcore("isolated fragment text")
+        detect_via_agentcore("isolated fragment text")
 
         assert mock_boto_client.call_count == 1
         _, kwargs = mock_boto_client.call_args
@@ -52,4 +52,4 @@ def test_agentcore_client_uses_a_read_timeout_with_real_margin_under_the_lambda_
 def test_agentcore_client_raises_clearly_when_arn_is_unset(monkeypatch):
     monkeypatch.delenv("SHIP_AGENTCORE_RUNTIME_ARN", raising=False)
     with pytest.raises(RuntimeError, match="SHIP_AGENTCORE_RUNTIME_ARN"):
-        diagnose_via_agentcore("isolated fragment text")
+        detect_via_agentcore("isolated fragment text")

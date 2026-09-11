@@ -54,7 +54,7 @@ GITHUB_API_BASE = "https://api.github.com"
 STATUS_CONTEXT = "ship/compliance"
 REQUEST_TIMEOUT = 10
 
-# Set to the Attending dashboard's public URL so a status check links
+# Set to the Gate dashboard's public URL so a status check links
 # straight to the review console. Unset is fine — the status still posts.
 DASHBOARD_URL = os.environ.get("SHIP_DASHBOARD_URL", "")
 

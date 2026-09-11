@@ -16,12 +16,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import fragment_lambda_handler
-from src.agents.diagnostician import DiagnosticianOutput
+from src.agents.detector import DetectorOutput
 from src.api.main import process_fragment
 
 
 def _matched_output(taxonomy_id="PIIE-001", risk_score=9.0):
-    return DiagnosticianOutput(
+    return DetectorOutput(
         matched=True, taxonomy_id=taxonomy_id, risk_score=risk_score,
         plain_english_summary="summary", citation="citation", remediation_patch="patch",
     )
@@ -42,7 +42,7 @@ def _no_network(monkeypatch):
 
 
 def test_process_fragment_stores_an_alert_when_frozen(monkeypatch):
-    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output())
+    monkeypatch.setattr("src.api.main.detect", lambda text: _matched_output())
     calls = []
 
     class _FakeAlert:
@@ -65,7 +65,7 @@ def test_process_fragment_stores_a_non_blocking_alert_for_a_middle_band_finding(
     # (7.0) must still be PERSISTED for a human, but recorded as
     # non-blocking. Under the old two-band model this score produced no
     # alert row at all.
-    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=6.0))
+    monkeypatch.setattr("src.api.main.detect", lambda text: _matched_output(risk_score=6.0))
     calls = []
 
     class _FakeAlert:
@@ -83,7 +83,7 @@ def test_process_fragment_stores_a_non_blocking_alert_for_a_middle_band_finding(
 
 
 def test_process_fragment_records_a_blocking_finding_as_blocking(monkeypatch):
-    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=9.0))
+    monkeypatch.setattr("src.api.main.detect", lambda text: _matched_output(risk_score=9.0))
     calls = []
 
     class _FakeAlert:
@@ -99,7 +99,7 @@ def test_process_fragment_records_a_blocking_finding_as_blocking(monkeypatch):
 
 def test_process_fragment_does_not_store_an_alert_below_the_review_floor(monkeypatch):
     # A confirmed but trivial finding shouldn't clutter the human's queue.
-    monkeypatch.setattr("src.api.main.diagnose", lambda text: _matched_output(risk_score=2.0))
+    monkeypatch.setattr("src.api.main.detect", lambda text: _matched_output(risk_score=2.0))
     calls = []
     monkeypatch.setattr("src.api.main.put_alert", lambda **kwargs: calls.append(kwargs))
 
@@ -114,7 +114,7 @@ def test_process_fragment_raises_instead_of_swallowing_errors(monkeypatch):
     def _raise(text):
         raise RuntimeError("simulated transient Bedrock failure")
 
-    monkeypatch.setattr("src.api.main.diagnose", _raise)
+    monkeypatch.setattr("src.api.main.detect", _raise)
 
     with pytest.raises(RuntimeError, match="simulated transient Bedrock failure"):
         process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "logger.info(applicant.ssn)")

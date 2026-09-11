@@ -14,10 +14,10 @@ full reasoning — with per-fragment SQS dispatch to a separate Lambda
 processor). This handler no longer needs to know about that at all; it's
 purely the HTTP-facing entrypoint now.
 
-Deployed with SHIP_DIAGNOSTICIAN_MODE=agentcore so Diagnostician calls the
+Deployed with SHIP_DETECTOR_MODE=agentcore so Detector calls the
 already-deployed Bedrock AgentCore Runtime remotely instead of building a
 Strands Agent in-process — keeps this Lambda's own dependency footprint to
-fastapi/mangum/boto3/requests/jinja2 only (see diagnostician.py's lazy
+fastapi/mangum/boto3/requests/jinja2 only (see detector.py's lazy
 imports), small enough for a plain zip deployment with no container image
 and no local Docker needed.
 """

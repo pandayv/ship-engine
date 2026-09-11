@@ -8,7 +8,7 @@ by AWS Lambda's hard, non-negotiable 900-second function timeout.
 
 Each SQS message is exactly one already-escalated, already-isolated code
 fragment (queued by src/api/main.py's _dispatch_fragments()). This
-function's only job is to diagnose, route, and (if frozen) store it via
+function's only job is to detect, route, and (if frozen) store it via
 process_fragment() — the same function process_pr()'s local-fallback loop
 uses, so there is exactly one implementation of "what happens to one
 fragment," not two.
@@ -23,7 +23,7 @@ maxReceiveCount, the message moves to the dead-letter queue instead of
 being retried forever or silently dropped — the DLQ + backlog visibility
 the original architecture review (finding #40) flagged as missing.
 
-Deployed with SHIP_DIAGNOSTICIAN_MODE=agentcore, same as ship-webhook.
+Deployed with SHIP_DETECTOR_MODE=agentcore, same as ship-webhook.
 """
 
 import json
