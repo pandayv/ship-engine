@@ -4,7 +4,7 @@ in early drafts; renamed to avoid confusion with the unrelated Sentry.io brand).
 
 Runs on every commit. Regex/AST pattern matching only — no model calls, no
 network calls, no cost. If nothing matches, the build passes in milliseconds.
-If something matches, the fragment is isolated and handed to Diagnostician
+If something matches, the fragment is isolated and handed to Detector
 (the semantic evaluator) for a real judgment call.
 
 The Amazon Comprehend PII-NER pass (decided 2026-09-03, replacing the
@@ -41,7 +41,7 @@ SCREENER_TRIGGERS = {
                      "redis_client.set", ".setex("],
     # TLGP-002: an AI/LLM output directly drives a high-risk decision (status
     # mutation) with no apparent human-review step in between. Loose signal —
-    # co-occurrence with imports/egress is what actually matters; Diagnostician
+    # co-occurrence with imports/egress is what actually matters; Detector
     # does the real judgment on whether a human gate exists.
     "decision_mutation": [".status =", ".approved =", ".rejected =",
                            "= 'Approved'", '= "Approved"', "= 'Rejected'", '= "Rejected"'],
@@ -144,7 +144,7 @@ def _term_matches(text: str, term: str) -> bool:
 def scan(code_diff: str) -> ScreenerResult:
     """
     Binary trigger: scan a code diff's text for any Screener keyword.
-    No AST-only fields are hit here yet (that's Diagnostician's job) — this
+    No AST-only fields are hit here yet (that's Detector's job) — this
     is deliberately dumb and fast, string-level matching against the raw diff.
     """
     matched_buckets = []
@@ -165,7 +165,7 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
     Splits a multi-file diff into independent per-file, per-function
     fragments, so a PR touching several unrelated concerns (e.g. one file
     with a bias-in-scoring issue, another with an unscoped agent tool)
-    doesn't get isolated into one jumbled blob for Diagnostician to reason
+    doesn't get isolated into one jumbled blob for Detector to reason
     about. Real production diffs commonly touch multiple files/functions in
     one PR — this isn't a demo-only contrivance.
 
@@ -211,8 +211,8 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
         # constants, diff/hunk headers, any added top-level code before the
         # first def/class — was silently dropped from every fragment. A
         # fragment matched by Screener's whole-diff precheck but containing
-        # none of the actual triggering line would reach Diagnostician
-        # effectively un-diagnosed.
+        # none of the actual triggering line would reach Detector
+        # effectively undetected.
         if boundaries[0] != 0:
             boundaries = [0] + boundaries
         boundaries.append(len(lines))
@@ -225,7 +225,7 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
 def isolate_fragment(code_diff: str, matched_terms: list, context_lines: int = 3) -> str:
     """
     Given a diff and the terms that matched, return just the surrounding
-    lines (not the whole file) to hand to Diagnostician — keeps Tier 2's
+    lines (not the whole file) to hand to Detector — keeps Tier 2's
     context window small and its reasoning focused.
     """
     lines = code_diff.splitlines()

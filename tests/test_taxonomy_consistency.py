@@ -1,11 +1,11 @@
 """
 Automated consistency checks between src/taxonomy.py's REGISTRY and the
 three things that must actually agree with it: Screener's trigger buckets,
-Diagnostician's prompt text (both the in-process copy and the deployed
+Detector's prompt text (both the in-process copy and the deployed
 AgentCore copy), and the RAG corpus files on disk (both trees).
 
 This is the test that should have caught finding #29 (the deployed
-AgentCore Diagnostician silently drifting to a stale, PIIE-001-only
+AgentCore Detector silently drifting to a stale, PIIE-001-only
 prompt/corpus for a full day) the moment it happened, instead of a manual
 review catching it a day later. If this test suite is green, that specific
 failure class cannot recur silently.
@@ -27,8 +27,8 @@ from src.taxonomy import REGISTRY
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_CORPUS_DIR = REPO_ROOT / "rag_corpus"
 DEPLOYED_CORPUS_DIR = REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "rag_corpus"
-MAIN_DIAGNOSTICIAN_SOURCE = (REPO_ROOT / "src" / "agents" / "diagnostician.py").read_text()
-DEPLOYED_DIAGNOSTICIAN_SOURCE = (REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "main.py").read_text()
+MAIN_DETECTOR_SOURCE = (REPO_ROOT / "src" / "agents" / "detector.py").read_text()
+DEPLOYED_DETECTOR_SOURCE = (REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "main.py").read_text()
 
 
 def test_every_registry_entry_has_grounding_in_the_main_corpus():
@@ -52,9 +52,9 @@ def test_every_registry_entry_has_grounding_in_the_deployed_corpus():
 
 def test_every_registry_taxonomy_id_is_mentioned_in_the_main_prompt():
     for entry in REGISTRY:
-        assert entry.taxonomy_id in MAIN_DIAGNOSTICIAN_SOURCE, (
+        assert entry.taxonomy_id in MAIN_DETECTOR_SOURCE, (
             f"{entry.taxonomy_id} is in the taxonomy registry but not mentioned anywhere in "
-            f"src/agents/diagnostician.py's source (prompt or schema)"
+            f"src/agents/detector.py's source (prompt or schema)"
         )
 
 
@@ -62,7 +62,7 @@ def test_every_registry_taxonomy_id_is_mentioned_in_the_deployed_prompt():
     # This is the specific check that would have caught #29: the deployed
     # copy's prompt had silently stopped mentioning 5 of 6 taxonomy IDs.
     for entry in REGISTRY:
-        assert entry.taxonomy_id in DEPLOYED_DIAGNOSTICIAN_SOURCE, (
+        assert entry.taxonomy_id in DEPLOYED_DETECTOR_SOURCE, (
             f"{entry.taxonomy_id} is in the taxonomy registry but not mentioned anywhere in the "
             f"DEPLOYED shipagentcore/app/ship_diagnostician/main.py source — the live runtime "
             f"cannot detect this ID even if Screener flags a fragment for it."
@@ -76,7 +76,7 @@ def test_every_registry_screener_bucket_is_a_real_screener_bucket():
         for bucket in entry.screener_buckets:
             assert bucket in SCREENER_TRIGGERS, (
                 f"{entry.taxonomy_id} references Screener bucket {bucket!r}, which doesn't exist "
-                f"in SCREENER_TRIGGERS — this ID can never actually be escalated to Diagnostician."
+                f"in SCREENER_TRIGGERS — this ID can never actually be escalated to Detector."
             )
 
 
@@ -88,9 +88,9 @@ def test_every_registry_block_threshold_is_mentioned_in_the_main_prompt():
     # against a number Triage doesn't use" problem #41 was about.
     for entry in REGISTRY:
         threshold_text = f">= {entry.block_threshold}"
-        assert threshold_text in MAIN_DIAGNOSTICIAN_SOURCE, (
+        assert threshold_text in MAIN_DETECTOR_SOURCE, (
             f"{entry.taxonomy_id}'s threshold ({entry.block_threshold}) from src/taxonomy.py isn't "
-            f"mentioned in src/agents/diagnostician.py's SYSTEM_PROMPT — the model may be calibrating "
+            f"mentioned in src/agents/detector.py's SYSTEM_PROMPT — the model may be calibrating "
             f"against a stale number Triage doesn't actually use."
         )
 
@@ -98,7 +98,7 @@ def test_every_registry_block_threshold_is_mentioned_in_the_main_prompt():
 def test_every_registry_block_threshold_is_mentioned_in_the_deployed_prompt():
     for entry in REGISTRY:
         threshold_text = f">= {entry.block_threshold}"
-        assert threshold_text in DEPLOYED_DIAGNOSTICIAN_SOURCE, (
+        assert threshold_text in DEPLOYED_DETECTOR_SOURCE, (
             f"{entry.taxonomy_id}'s threshold ({entry.block_threshold}) from src/taxonomy.py isn't "
             f"mentioned in the DEPLOYED shipagentcore prompt — the deployed model may be calibrating "
             f"against a stale number."
@@ -111,9 +111,9 @@ def test_deployed_and_main_prompts_mention_the_same_taxonomy_ids():
     # other doesn't" — catches drift in either direction, including a
     # taxonomy ID added to one copy and never ported to the other.
     for entry in REGISTRY:
-        in_main = entry.taxonomy_id in MAIN_DIAGNOSTICIAN_SOURCE
-        in_deployed = entry.taxonomy_id in DEPLOYED_DIAGNOSTICIAN_SOURCE
+        in_main = entry.taxonomy_id in MAIN_DETECTOR_SOURCE
+        in_deployed = entry.taxonomy_id in DEPLOYED_DETECTOR_SOURCE
         assert in_main == in_deployed, (
-            f"{entry.taxonomy_id} is mentioned in one Diagnostician copy but not the other "
+            f"{entry.taxonomy_id} is mentioned in one Detector copy but not the other "
             f"(main={in_main}, deployed={in_deployed}) — the two have drifted apart."
         )

@@ -29,7 +29,7 @@ def test_two_different_violations_same_taxonomy_and_file_get_different_ids():
 
 
 def test_a_real_retry_of_the_same_violation_still_produces_the_same_id():
-    # finding #6's original guarantee must still hold: re-diagnosing the
+    # finding #6's original guarantee must still hold: re-detecting the
     # identical fragment (a webhook redelivery, a Lambda async retry) must
     # still derive the identical id, so the retry overwrites the same row
     # instead of creating a duplicate.

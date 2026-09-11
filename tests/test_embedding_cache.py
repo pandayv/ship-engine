@@ -136,7 +136,7 @@ def test_the_two_embedding_cache_modules_are_byte_identical():
     # embedding_cache.py imports nothing project-relative, so the deployed
     # mirror can be an exact copy. Asserting that here removes a whole
     # drift surface: the two files cannot diverge unnoticed the way the
-    # Diagnostician prompt copies once did.
+    # Detector prompt copies once did.
     main = (REPO_ROOT / "src" / "rag" / "embedding_cache.py").read_bytes()
     deployed = (REPO_ROOT / "shipagentcore" / "app" / "ship_diagnostician" / "rag" / "embedding_cache.py").read_bytes()
     assert main == deployed, "the deployed embedding_cache.py has drifted from src/rag/embedding_cache.py"

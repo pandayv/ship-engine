@@ -4,10 +4,10 @@ regulation source file(s) ground each one, and which Screener trigger
 bucket(s) can indicate each one.
 
 Built 2026-09-05 specifically to prevent a repeat of architecture-review
-finding #29/#38: the deployed AgentCore Diagnostician silently drifted out
+finding #29/#38: the deployed AgentCore Detector silently drifted out
 of sync with the in-process one (stale prompt, missing corpus files) for a
 full day with no error anywhere, because nothing enforced that three things
-stay consistent: SCREENER_TRIGGERS' buckets, Diagnostician's taxonomy_id
+stay consistent: SCREENER_TRIGGERS' buckets, Detector's taxonomy_id
 values, and what's actually grounded in rag_corpus/. A human review caught
 it a day later; that's not good enough for something that silently
 disables detectors with zero error.
@@ -19,7 +19,7 @@ depending on someone remembering to run a manual multi-agent review.
 
 Deliberately NOT trying to make this the actual runtime source of
 SCREENER_TRIGGERS or the SYSTEM_PROMPT text — those still live where they
-always did, since Screener's triggers and Diagnostician's prompt prose
+always did, since Screener's triggers and Detector's prompt prose
 serve different purposes (fast regex matching vs. natural-language
 instruction to an LLM) and forcing them through one generated
 representation would make both harder to read for the sake of a DRY-ness
@@ -44,7 +44,7 @@ from dataclasses import dataclass
 # Honest note on what risk_score actually measures: it is a SEVERITY score
 # ("how bad is this if it's real"), and the review band is using it as a
 # proxy for CONFIDENCE ("how sure are we it's real"). Those are genuinely
-# different axes, and the more correct design gives Diagnostician a
+# different axes, and the more correct design gives Detector a
 # separate confidence field. That's a schema + prompt change requiring
 # every detector's true/false-positive cases to be re-verified against the
 # new field, so it is deliberately NOT being done under deadline — the
@@ -71,7 +71,7 @@ from dataclasses import dataclass
 #     a confirmed violation means the system's core "human stays in the
 #     loop" premise is broken, not a matter of degree.
 #   - ALBP-001 (bias/protected characteristic affecting scoring) — kept at
-#     default. Diagnostician's prompt already holds this ID to a strict
+#     default. Detector's prompt already holds this ID to a strict
 #     evidence bar before matched=true is even set (see finding #64's
 #     note); stacking a second, harsher decision-stage bar on top of an
 #     already-strict detection-stage bar isn't principled, just stricter.
@@ -111,8 +111,8 @@ class TaxonomyEntry:
     review_threshold: float = DEFAULT_REVIEW_THRESHOLD  # score at/above which a human is asked to look
 
 
-# Every ID Diagnostician's SYSTEM_PROMPT currently covers (both the
-# in-process src/agents/diagnostician.py copy and the deployed
+# Every ID Detector's SYSTEM_PROMPT currently covers (both the
+# in-process src/agents/detector.py copy and the deployed
 # shipagentcore/app/ship_diagnostician/main.py copy — they must match).
 REGISTRY: tuple[TaxonomyEntry, ...] = (
     TaxonomyEntry(

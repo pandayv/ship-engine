@@ -1,7 +1,7 @@
 """
-Triage — routes the build based on Diagnostician's risk score.
+Triage — routes the build based on Detector's risk score.
 Pure conditional logic, no judgment of its own, no AWS dependency (beyond
-importing src.taxonomy and src.agents.diagnostician.DiagnosticianOutput,
+importing src.taxonomy and src.agents.detector.DetectorOutput,
 neither of which pull in strands/numpy/boto3 — see their own docstrings
 for why those heavier imports are deliberately lazy elsewhere).
 
@@ -24,13 +24,13 @@ threshold actually stop anything. See src/taxonomy.py for the band
 definitions and for an honest note on severity being used as a proxy for
 confidence here.
 
-Finding #24: this module used to define its own DiagnosticianVerdict
-dataclass, a hand-copied, field-by-field duplicate of Diagnostician's real
-DiagnosticianOutput (same six fields, same order) — the docstring's
-original justification ("so Triage can be tested before Diagnostician
-exists") no longer applies now that Diagnostician has existed for a while.
-route() now takes the real DiagnosticianOutput directly: one schema, one
-place fields can drift, and route() gets DiagnosticianOutput's own
+Finding #24: this module used to define its own DetectorVerdict
+dataclass, a hand-copied, field-by-field duplicate of Detector's real
+DetectorOutput (same six fields, same order) — the docstring's
+original justification ("so Triage can be tested before Detector
+exists") no longer applies now that Detector has existed for a while.
+route() now takes the real DetectorOutput directly: one schema, one
+place fields can drift, and route() gets DetectorOutput's own
 "matched implies populated" pydantic validation (finding #46) for free
 instead of trusting every caller to construct a valid shape.
 """
@@ -38,7 +38,7 @@ instead of trusting every caller to construct a valid shape.
 from dataclasses import dataclass
 from enum import Enum
 
-from src.agents.diagnostician import DiagnosticianOutput
+from src.agents.detector import DetectorOutput
 from src.taxonomy import BLOCK_THRESHOLDS, REVIEW_THRESHOLDS
 
 
@@ -77,12 +77,12 @@ class TriageDecision:
         return self.action in ALERTING_ACTIONS
 
 
-def route(verdict: DiagnosticianOutput) -> TriageDecision:
+def route(verdict: DetectorOutput) -> TriageDecision:
     if not verdict.matched:
         return TriageDecision(action=BuildAction.PASS, reason="No violation detected.")
 
     if verdict.risk_score is None:
-        raise ValueError("Diagnostician matched a violation but returned no risk_score — cannot route.")
+        raise ValueError("Detector matched a violation but returned no risk_score — cannot route.")
 
     block_at = BLOCK_THRESHOLDS.get(verdict.taxonomy_id, FALLBACK_BLOCK_THRESHOLD)
     review_at = REVIEW_THRESHOLDS.get(verdict.taxonomy_id, FALLBACK_REVIEW_THRESHOLD)
@@ -91,7 +91,7 @@ def route(verdict: DiagnosticianOutput) -> TriageDecision:
         return TriageDecision(
             action=BuildAction.FREEZE,
             reason=f"{verdict.taxonomy_id} scored {verdict.risk_score} (>= {block_at}). "
-                   f"Build frozen pending Attending review.",
+                   f"Build frozen pending Gate review.",
         )
 
     if verdict.risk_score >= review_at:
@@ -110,14 +110,14 @@ def route(verdict: DiagnosticianOutput) -> TriageDecision:
 
 
 if __name__ == "__main__":
-    clean = DiagnosticianOutput(matched=False)
-    low = DiagnosticianOutput(matched=True, taxonomy_id="PIIE-001", risk_score=4.0,
+    clean = DetectorOutput(matched=False)
+    low = DetectorOutput(matched=True, taxonomy_id="PIIE-001", risk_score=4.0,
                                plain_english_summary="Applicant email is stored but never sent externally.",
                                citation="GDPR Art. 32(1)(a)", remediation_patch="")
-    middling = DiagnosticianOutput(matched=True, taxonomy_id="PIIE-001", risk_score=6.0,
+    middling = DetectorOutput(matched=True, taxonomy_id="PIIE-001", risk_score=6.0,
                                     plain_english_summary="Applicant email reaches a third-party analytics call.",
                                     citation="GDPR Art. 32(1)(a)", remediation_patch="")
-    high = DiagnosticianOutput(matched=True, taxonomy_id="PIIE-001", risk_score=9.2,
+    high = DetectorOutput(matched=True, taxonomy_id="PIIE-001", risk_score=9.2,
                                 plain_english_summary="Raw applicant PII sent to an external LLM.",
                                 citation="GDPR Art. 32(1)(a)", remediation_patch="")
 

@@ -3,7 +3,7 @@ Source: OWASP Gen AI Security Project
 Retrieved verbatim from https://genai.owasp.org/llmrisk/llm062025-excessive-agency/ on 2026-09-04.
 
 Note: this is an industry security standard, NOT a legal statute like GDPR or
-the EU AI Act. Diagnostician must present citations to this source honestly
+the EU AI Act. Detector must present citations to this source honestly
 as a recognized security best-practice/anti-pattern reference, not imply
 legal force it doesn't carry — see ship_roadmap.md's TLGP-001 design note.
 

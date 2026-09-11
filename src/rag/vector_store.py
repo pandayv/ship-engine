@@ -23,7 +23,7 @@ three need to work completely — including embeddings, not just the LLM
 call — or "switch to Gemini" as a real fallback plan doesn't actually work
 when it's needed. gemini embeddings use Google's `gemini-embedding-001`
 model via the same google-genai client/GEMINI_API_KEY already required for
-Diagnostician's Gemini LLM path.
+Detector's Gemini LLM path.
 """
 
 import json
@@ -48,12 +48,12 @@ GEMINI_EMBED_MODEL_ID = "gemini-embedding-001"  # text-only; confirmed current v
 @lru_cache(maxsize=1)
 def _bedrock_runtime_client():
     # Independent review (2026-09-05) caught a real gap: the #16/#50
-    # cleanup pass cached alert_store._table() and both Diagnostician
+    # cleanup pass cached alert_store._table() and both Detector
     # copies' _get_store() to avoid rebuilding a client on every call in
     # the hot per-fragment loop, but missed this one — _embed_bedrock()
     # still built a fresh boto3 client from the (already-cached) session
     # on every single RAG query, including every retrieve_regulation_text
-    # tool call during a fragment's diagnosis. Cached the same way now.
+    # tool call during a fragment's detection. Cached the same way now.
     from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session  # lazy import, same reasoning as before
 
     return bedrock_session().client("bedrock-runtime", config=BEDROCK_RETRY_CONFIG)
@@ -63,7 +63,7 @@ def _embed_bedrock(texts: list[str]) -> np.ndarray:
     # finding #45 (updated 2026-09-05): built with adaptive retry config
     # (BEDROCK_RETRY_CONFIG) so a cold-start VectorStore.build() burst (one
     # call per corpus chunk), or concurrent traffic from other fragments'
-    # own diagnosis running at the same time, backs off and retries
+    # own detection running at the same time, backs off and retries
     # automatically if the real account-wide quota is hit, instead of
     # either being unpaced entirely or pre-emptively delayed by a local
     # limiter that can't see other processes' traffic anyway.

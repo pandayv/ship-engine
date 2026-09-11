@@ -1,13 +1,13 @@
 """
-Diagnostician — SHIP's semantic evaluator (formerly "Tier 2"). Runs only on
+Detector — SHIP's semantic evaluator (formerly "Tier 2"). Runs only on
 fragments Screener has already flagged. A Strands Agent, RAG-grounded
 against real regulation text (never unaided model recollection).
 
 Model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama" |
 "gemini", default "bedrock" — the account-wide quota block that once made
 this default to "ollama" was resolved 2026-09-04, see ship_roadmap.md).
-Diagnostician itself is also switchable via SHIP_DIAGNOSTICIAN_MODE
-("in_process" default | "agentcore", see diagnose() below) — "agentcore"
+Detector itself is also switchable via SHIP_DETECTOR_MODE
+("in_process" default | "agentcore", see detect() below) — "agentcore"
 calls the real deployed Bedrock AgentCore Runtime over the network instead
 of building the Strands Agent in this process, which is why strands/numpy
 imports in this file are deliberately lazy (see the import block below).
@@ -15,14 +15,14 @@ imports in this file are deliberately lazy (see the import block below).
 IMPORTANT scoping note (per ship_roadmap.md): this prompt covers PIIE-001/
 002/003 (GDPR Art. 32), TLGP-002 (EU AI Act Art. 14), ALBP-001 (EU AI Act
 Art. 10 + Annex III Section 5(b)), and TLGP-001 (OWASP LLM06:2025 Excessive
-Agency — an industry security standard, not a law; Diagnostician must be
+Agency — an industry security standard, not a law; Detector must be
 honest about that distinction in its output). Still deliberately NOT
 widened to DPSL-002/003 or TLGP-003, which are structurally undetectable
 from a single code diff (need infra/deployment config or multi-file/
 temporal observation, not something a diff-scanning architecture can see)
 regardless of grounding — see roadmap. Only widen further for a category
 that's both diff-detectable AND has a sourced grounding corpus — asking
-Diagnostician to judge anything else would risk the hallucinated-citation
+Detector to judge anything else would risk the hallucinated-citation
 failure "Trust but Verify" exists to prevent.
 """
 
@@ -37,14 +37,14 @@ if TYPE_CHECKING:
     from strands import Agent
 
 # strands/numpy (via src.rag.vector_store) are DELIBERATELY NOT imported at
-# module level — only diagnose_in_process()'s path needs them. This lets a
-# caller that only ever uses diagnose_via_agentcore() (e.g. the public
+# module level — only detect_in_process()'s path needs them. This lets a
+# caller that only ever uses detect_via_agentcore() (e.g. the public
 # webhook deployment, which delegates the heavy lifting to the already-
 # deployed AgentCore runtime over the network) import this module without
 # pulling in strands-agents/numpy's dependency tree at all — the difference
 # between a plain zip-based Lambda deployment and needing a container.
 
-SYSTEM_PROMPT = """You are the SHIP Diagnostician, a compliance auditor for a small \
+SYSTEM_PROMPT = """You are the SHIP Detector, a compliance auditor for a small \
 fintech startup's engineering team. You analyze a single isolated code fragment \
 that has already been flagged by a fast keyword pre-filter (Screener) as \
 POTENTIALLY containing one of these violations:
@@ -158,7 +158,7 @@ If Screener's match was a false positive, set matched=false and leave the other 
 fields empty — do not invent a violation to justify the escalation."""
 
 
-class DiagnosticianOutput(BaseModel):
+class DetectorOutput(BaseModel):
     # finding #39 (review, 2026-09-05): this description said "PIIE-001"
     # only, contradicting the prompt above on every non-PIIE fragment — the
     # model receives literally contradictory instructions in the same
@@ -173,7 +173,7 @@ class DiagnosticianOutput(BaseModel):
     remediation_patch: str | None = None
 
     @model_validator(mode="after")
-    def _matched_implies_populated(self) -> "DiagnosticianOutput":
+    def _matched_implies_populated(self) -> "DetectorOutput":
         # finding #46: "matched implies all four fields populated" was only
         # prose in the prompt, never enforced — every caller had to
         # separately re-derive it (finding #9's `or` fallbacks) with no
@@ -223,7 +223,28 @@ def _get_store():
     return store
 
 
-DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-lite-v1:0"
+# Switched from Claude Haiku 4.5 on 2026-09-08, on measured evidence
+# rather than preference (scripts/benchmark_models.py, run against the
+# real planted violations in micro-finance PRs #1 and #2):
+#
+#   model              violations caught   look-alikes dismissed   median   req/min
+#   nova-lite                        6/6                     4/4     3.1s       200
+#   nova-pro                         6/6                     4/4     4.5s        25
+#   qwen3-235b                       6/6                     4/4     4.5s       100
+#   glm-5                            6/6                     4/4     7.4s       100
+#   claude-haiku-4-5                 6/6                     4/4    13.4s        10
+#   deepseek-v3.2                    6/6                     4/4    18.7s       100
+#
+# Identical accuracy, four times faster, twenty times the request quota —
+# and requests per minute, not tokens, is what bounds how many pull
+# requests SHIP can review (tokens/min sits at 5,000,000 and is never the
+# limit). Being first-party Amazon also keeps the whole path AWS-native.
+# No "us." inference-profile prefix needed, unlike the Anthropic models.
+#
+# Honest scope of that evidence: one pass per case, on fixtures built to
+# be unambiguous. It shows nova-lite is not worse on these ten cases, not
+# that all six models are equivalent in general.
 
 # Overridable so a model can be swapped without editing code — the same
 # reasoning as finding #42's fix for the hardcoded AgentCore runtime ARN.
@@ -301,11 +322,11 @@ def build_agent() -> "Agent":
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=[retrieve_regulation_text],
-        structured_output_model=DiagnosticianOutput,
+        structured_output_model=DetectorOutput,
     )
 
 
-def diagnose_in_process(isolated_fragment: str) -> DiagnosticianOutput:
+def detect_in_process(isolated_fragment: str) -> DetectorOutput:
     """Builds and runs the Strands Agent directly in this process. Faster,
     no network hop, no dependency on the deployed AgentCore runtime being
     healthy — used for the demo/dev path."""
@@ -326,19 +347,19 @@ def _agentcore_runtime_arn() -> str:
     # runtime with no error anywhere — exactly the "fail silent" failure
     # class the whole review pass has been about eliminating. Required env
     # var, no fallback default: a missing/wrong value now fails LOUDLY the
-    # first time diagnose_via_agentcore() is actually called, instead of
+    # first time detect_via_agentcore() is actually called, instead of
     # silently invoking whatever the constant happened to say.
     arn = os.environ.get("SHIP_AGENTCORE_RUNTIME_ARN")
     if not arn:
         raise RuntimeError(
-            "SHIP_AGENTCORE_RUNTIME_ARN is not set — diagnose_via_agentcore() has no runtime to "
+            "SHIP_AGENTCORE_RUNTIME_ARN is not set — detect_via_agentcore() has no runtime to "
             "call. Set it to the current runtime ARN (visible in `agentcore status` or the "
             "deploy output) after every `agentcore deploy`, since redeploys can mint a new ARN."
         )
     return arn
 
 
-def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
+def detect_via_agentcore(isolated_fragment: str) -> DetectorOutput:
     """Calls the real deployed Bedrock AgentCore Runtime (shipagentcore/) over
     the network instead of running the agent in this process — the
     architecturally "complete" path: webhook -> deployed AgentCore runtime,
@@ -383,20 +404,20 @@ def diagnose_via_agentcore(isolated_fragment: str) -> DiagnosticianOutput:
     # main.py's deployed invoke() returns result.structured_output.model_dump()
     # (see shipagentcore/app/ship_diagnostician/main.py) as a single JSON
     # object, confirmed empirically against the real deployed runtime
-    return DiagnosticianOutput(**json.loads(body))
+    return DetectorOutput(**json.loads(body))
 
 
-def diagnose(isolated_fragment: str) -> DiagnosticianOutput:
+def detect(isolated_fragment: str) -> DetectorOutput:
     """Entry point Triage/the webhook route call. Needs AWS credentials
-    configured. Toggled via SHIP_DIAGNOSTICIAN_MODE ("in_process" | "agentcore",
-    default "in_process" for demo reliability) — see diagnose_in_process vs
-    diagnose_via_agentcore above for the tradeoff."""
-    mode = os.environ.get("SHIP_DIAGNOSTICIAN_MODE", "in_process")
+    configured. Toggled via SHIP_DETECTOR_MODE ("in_process" | "agentcore",
+    default "in_process" for demo reliability) — see detect_in_process vs
+    detect_via_agentcore above for the tradeoff."""
+    mode = os.environ.get("SHIP_DETECTOR_MODE", "in_process")
     if mode == "in_process":
-        return diagnose_in_process(isolated_fragment)
+        return detect_in_process(isolated_fragment)
     elif mode == "agentcore":
-        return diagnose_via_agentcore(isolated_fragment)
-    raise ValueError(f"Unknown SHIP_DIAGNOSTICIAN_MODE: {mode!r} (expected 'in_process' or 'agentcore')")
+        return detect_via_agentcore(isolated_fragment)
+    raise ValueError(f"Unknown SHIP_DETECTOR_MODE: {mode!r} (expected 'in_process' or 'agentcore')")
 
 
 if __name__ == "__main__":
@@ -422,6 +443,6 @@ def get_underwriting_opinion(client):
 '''
     screener_result = scan(bad_sample)
     fragment = isolate_fragment(bad_sample, screener_result.matched_terms)
-    print("Screener isolated fragment, handing to Diagnostician:\n", fragment)
-    verdict = diagnose(fragment)
+    print("Screener isolated fragment, handing to Detector:\n", fragment)
+    verdict = detect(fragment)
     print(verdict.model_dump_json(indent=2))

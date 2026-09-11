@@ -23,7 +23,7 @@ def _bedrock_runtime_client():
     # Independent review (2026-09-05, mirrors the main ship-engine copy's
     # same fix): embed_texts() used to build a fresh boto3 client from the
     # already-cached session on every single call, including every
-    # retrieve_regulation_text tool call during a fragment's diagnosis —
+    # retrieve_regulation_text tool call during a fragment's detection —
     # the exact hot-loop client-construction overhead findings #16/#50
     # fixed elsewhere but missed here.
     return bedrock_session().client("bedrock-runtime", config=BEDROCK_RETRY_CONFIG)

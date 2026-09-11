@@ -1,23 +1,23 @@
 import pytest
 
-from src.agents.diagnostician import DiagnosticianOutput
+from src.agents.detector import DetectorOutput
 from src.agents.triage import BuildAction, route
 
 
-def _matched(taxonomy_id: str, risk_score: float) -> DiagnosticianOutput:
-    # finding #24: route() takes the real DiagnosticianOutput directly now
-    # (no more hand-copied DiagnosticianVerdict duplicate) - its own
+def _matched(taxonomy_id: str, risk_score: float) -> DetectorOutput:
+    # finding #24: route() takes the real DetectorOutput directly now
+    # (no more hand-copied DetectorVerdict duplicate) - its own
     # "matched implies populated" validator (finding #46) requires these
     # fields whenever matched=True, so tests construct a fully valid
     # instance rather than a bare partial one.
-    return DiagnosticianOutput(
+    return DetectorOutput(
         matched=True, taxonomy_id=taxonomy_id, risk_score=risk_score,
         plain_english_summary="test summary", citation="test citation", remediation_patch="",
     )
 
 
 def test_no_violation_passes():
-    decision = route(DiagnosticianOutput(matched=False))
+    decision = route(DetectorOutput(matched=False))
     assert decision.action == BuildAction.PASS
 
 
@@ -66,15 +66,15 @@ def test_matched_without_score_raises_at_construction():
     # being constructed in the first place — a stronger guarantee than the
     # old "route() happens to check for it" behavior.
     with pytest.raises(ValueError):
-        DiagnosticianOutput(matched=True, taxonomy_id="PIIE-001", risk_score=None)
+        DetectorOutput(matched=True, taxonomy_id="PIIE-001", risk_score=None)
 
 
 def test_route_still_defends_against_a_missing_score_directly():
     # Defense in depth: even if an invalid instance reaches route() by
     # bypassing pydantic validation (model_construct, or a future caller
-    # that isn't actually a DiagnosticianOutput), route() must not crash
+    # that isn't actually a DetectorOutput), route() must not crash
     # several frames away from the real cause (finding #51).
-    invalid = DiagnosticianOutput.model_construct(matched=True, taxonomy_id="PIIE-001", risk_score=None)
+    invalid = DetectorOutput.model_construct(matched=True, taxonomy_id="PIIE-001", risk_score=None)
     with pytest.raises(ValueError):
         route(invalid)
 
