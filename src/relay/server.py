@@ -54,6 +54,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 
 from src.relay.modality import Modality, Spoken
 from src.relay.readmodel import findings_detail as _findings_detail
@@ -70,19 +71,36 @@ CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
 # unconfigured server returned "Invalid Host header" for a completely
 # valid request.
 #
-# The Lambda Function URL's hostname does not exist until after the
-# function itself is created, so — same pattern as finding #42's
-# SHIP_AGENTCORE_RUNTIME_ARN fix — this is read from an environment
-# variable set post-deploy, never guessed or hardcoded. A comma-separated
-# list because a real deployment plausibly has more than one valid host
-# (the raw Function URL during setup, then a custom domain once one
-# exists).
+# allowed_hosts and allowed_origins are DELIBERATELY two separate
+# variables, not one shared list — confirmed necessary by a real failure,
+# not assumed. Host is the address a request is sent TO (always this
+# Lambda's own Function URL hostname, regardless of caller); Origin is the
+# page a BROWSER request came FROM (a completely different value once a
+# real web client — the Alexa+ simulator page — calls this endpoint via
+# fetch()). Treating them as one list worked fine until a cross-origin
+# browser call was actually tried: it came back 403 with zero CORS
+# headers, which traced to this exact security check correctly rejecting
+# an origin that was never allowlisted, because allowed_origins had been
+# silently set to the same single value as allowed_hosts.
+#
+# Both hostnames don't exist until after their respective resources are
+# created (the Function URL; the page's real hosting URL), so both are
+# read from environment variables set post-deploy — same pattern as
+# finding #42's SHIP_AGENTCORE_RUNTIME_ARN fix, never guessed or
+# hardcoded. Comma-separated since a real deployment plausibly has more
+# than one valid value for either (the raw Function URL during setup vs.
+# a custom domain later; a GitHub Pages origin vs. a custom domain for
+# the simulator).
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("SHIP_RELAY_ALLOWED_HOSTS", "").split(",") if h.strip()]
+ALLOWED_ORIGINS = [h.strip() for h in os.environ.get("SHIP_RELAY_ALLOWED_ORIGINS", "").split(",") if h.strip()]
 if not ALLOWED_HOSTS:
     # Local dev / test only. A real deployment MUST set
     # SHIP_RELAY_ALLOWED_HOSTS or every request is rejected at the
     # transport layer before reaching any tool — fails safe, not silently.
     ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+if not ALLOWED_ORIGINS:
+    # Local dev / test only, same reasoning as ALLOWED_HOSTS above.
+    ALLOWED_ORIGINS = ["http://localhost", "http://127.0.0.1"]
 
 INSTRUCTIONS = (
     "SHIP reviews pull requests for AI-compliance risk and can block a merge. "
@@ -235,7 +253,7 @@ def create_app() -> Starlette:
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=ALLOWED_HOSTS,
-            allowed_origins=ALLOWED_HOSTS,
+            allowed_origins=ALLOWED_ORIGINS,
         ),
         # Relay holds no state of its own — every tool re-reads storage
         # fresh on every call — so there is nothing a cross-request
@@ -262,7 +280,26 @@ def create_app() -> Starlette:
     )
     for fn in TOOLS:
         fresh.tool()(fn)
-    return fresh.streamable_http_app()
+    raw_app = fresh.streamable_http_app()
+
+    # transport_security (above) is a DENY GATE — it rejects a disallowed
+    # Host/Origin with 403/421, but confirmed by a real local test NOT to
+    # add the Access-Control-Allow-Origin response header even for an
+    # ALLOWED origin. A browser enforces CORS independently of whatever
+    # the server permits: without this header, a genuine cross-origin
+    # fetch() from the Alexa+ simulator page would succeed at the network
+    # level and then be silently blocked from JavaScript reading the
+    # response, in the browser console only — invisible to curl, and
+    # exactly the kind of gap a local request-level test alone would
+    # have missed here. CORSMiddleware adds the actual response headers;
+    # transport_security still does the deeper Host-based rebinding
+    # check underneath it.
+    return CORSMiddleware(
+        raw_app,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_methods=["POST", "GET", "OPTIONS"],
+        allow_headers=["content-type", "mcp-session-id", "mcp-protocol-version", "accept"],
+    )
 
 
 # Module-level instance for local development (`uvicorn src.relay.server:app`)
@@ -272,9 +309,14 @@ def create_app() -> Starlette:
 mcp = FastMCP(
     "ship-relay", instructions=INSTRUCTIONS, stateless_http=True, json_response=True,
     transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True, allowed_hosts=ALLOWED_HOSTS, allowed_origins=ALLOWED_HOSTS,
+        enable_dns_rebinding_protection=True, allowed_hosts=ALLOWED_HOSTS, allowed_origins=ALLOWED_ORIGINS,
     ),
 )
 for _fn in TOOLS:
     mcp.tool()(_fn)
-app = mcp.streamable_http_app()
+app = CORSMiddleware(
+    mcp.streamable_http_app(),
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["content-type", "mcp-session-id", "mcp-protocol-version", "accept"],
+)
