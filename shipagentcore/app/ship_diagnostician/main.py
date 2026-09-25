@@ -1,7 +1,7 @@
 """
-SHIP Diagnostician, deployed on Bedrock AgentCore Runtime.
+SHIP Detector, deployed on Bedrock AgentCore Runtime.
 
-This is the deployed counterpart of src/agents/diagnostician.py in the main
+This is the deployed counterpart of src/agents/detector.py in the main
 ship-engine repo — same system prompt, same RAG-grounded tool, same
 structured output schema. Kept as a separate, simplified copy (Bedrock-only,
 no multi-backend switch, no session/conversation caching — each invocation
@@ -9,15 +9,16 @@ is a single stateless classification, not a chat) because AgentCore's
 generated project template lives in its own package/dependency tree.
 
 SYNC WARNING (see architecture review finding #29, 2026-09-05): this file
-drifted out of sync with src/agents/diagnostician.py once already — it sat
+drifted out of sync with src/agents/detector.py once already — it sat
 frozen at the original PIIE-001-only prompt/schema for a full day after the
 source of truth expanded to 6 taxonomy IDs, silently making 5 of 6
 detectors no-ops in the actually-deployed path with no error anywhere. If
-you change SYSTEM_PROMPT, DiagnosticianOutput, or rag_corpus/ in
-src/agents/diagnostician.py, you MUST make the same change here and run
+you change SYSTEM_PROMPT, DetectorOutput, or rag_corpus/ in
+src/agents/detector.py, you MUST make the same change here and run
 `agentcore deploy` again — nothing currently automates or verifies this.
 """
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,9 +35,15 @@ from rag.vector_store import VectorStore
 app = BedrockAgentCoreApp()
 log = app.logger
 
-BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# Mirrors src/agents/detector.py — see that file for the benchmark
+# table behind this choice. Summary: identical accuracy to Claude Haiku 4.5
+# on the adversarial fixture set, four times faster, and a 200/min request
+# quota against Haiku's 10/min, which is the ceiling that actually bounds
+# review throughput. Overridable so this container can be A/B'd without a
+# rebuild, same reasoning as finding #42's runtime-ARN fix.
+BEDROCK_MODEL_ID = os.environ.get("SHIP_BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 
-SYSTEM_PROMPT = """You are the SHIP Diagnostician, a compliance auditor for a small \
+SYSTEM_PROMPT = """You are the SHIP Detector, a compliance auditor for a small \
 fintech startup's engineering team. You analyze a single isolated code fragment \
 that has already been flagged by a fast keyword pre-filter (Screener) as \
 POTENTIALLY containing one of these violations:
@@ -150,7 +157,7 @@ If Screener's match was a false positive, set matched=false and leave the other 
 fields empty — do not invent a violation to justify the escalation."""
 
 
-class DiagnosticianOutput(BaseModel):
+class DetectorOutput(BaseModel):
     matched: bool = Field(description="True only if a real violation was confirmed (any of PIIE-001/002/003, TLGP-001, TLGP-002, ALBP-001), not just Screener's keyword match")
     taxonomy_id: str | None = Field(default=None, description="'PIIE-001', 'PIIE-002', 'PIIE-003', 'TLGP-001', 'TLGP-002', or 'ALBP-001'")
     risk_score: float | None = Field(default=None, ge=1, le=10)
@@ -191,10 +198,10 @@ def retrieve_regulation_text(query: str) -> str:
 async def invoke(payload: dict, context) -> dict:
     """
     payload shape: {"fragment": "<isolated code fragment from Screener>"}
-    Returns the DiagnosticianOutput fields as a plain dict — a single
+    Returns the DetectorOutput fields as a plain dict — a single
     stateless call, not a streamed chat response.
     """
-    log.info("Diagnostician invoked")
+    log.info("Detector invoked")
     # "fragment" is our real calling convention (used by the SHIP webhook via
     # direct boto3 invoke_agent_runtime); "prompt" is accepted as an alias
     # purely so `agentcore invoke --prompt "..."` works for quick manual
@@ -223,7 +230,7 @@ async def invoke(payload: dict, context) -> dict:
         ),
         system_prompt=SYSTEM_PROMPT,
         tools=[retrieve_regulation_text],
-        structured_output_model=DiagnosticianOutput,
+        structured_output_model=DetectorOutput,
     )
     # finding #11: this used to be the synchronous `agent(...)` call inside
     # an `async def` entrypoint - a plain blocking call, not a real

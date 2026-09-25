@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import src.api.dashboard as dashboard_module
@@ -7,6 +8,18 @@ from src.storage.alert_store import Alert
 client = TestClient(app)
 
 TEST_TOKEN = "test-dashboard-token"
+
+
+@pytest.fixture(autouse=True)
+def _clear_session_cookie():
+    # `client` is one shared TestClient for the whole module, so a session
+    # cookie set by one test (via a Set-Cookie response, or set directly)
+    # would otherwise silently persist into every test that runs after it
+    # — turning "requires a token" tests into false passes and letting
+    # unmocked store calls fire for real. Every test starts and ends clean.
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
 
 
 def _sample_alert(alert_id="a1"):
@@ -44,7 +57,7 @@ def _wire_resolvable(monkeypatch, calls, alert=None):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     monkeypatch.setattr(dashboard_module.alert_store, "get_alert", lambda alert_id: alert or _sample_alert(alert_id))
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert",
-                        lambda alert_id, approved: calls.append((alert_id, approved)))
+                        lambda alert_id, approved, reason="", resolved_by="": calls.append((alert_id, approved)))
     posted, synced = [], []
     monkeypatch.setattr(dashboard_module, "post_pr_comment", lambda *a, **k: posted.append((a, k)))
     monkeypatch.setattr(dashboard_module, "sync_pr_check", lambda *a, **k: synced.append((a, k)))
@@ -105,7 +118,7 @@ def test_approve_conflict_returns_409(monkeypatch):
     calls = []
     _wire_resolvable(monkeypatch, calls)
 
-    def _raise(alert_id, approved):
+    def _raise(alert_id, approved, reason="", resolved_by=""):
         raise dashboard_module.alert_store.AlertNotFoundOrAlreadyResolved(alert_id)
 
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", _raise)
@@ -122,25 +135,98 @@ def test_unknown_alert_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
+# --- Session cookie / login page (2026-09-10) ---
+
+
+def test_login_page_renders_without_auth():
+    # The one page reachable with zero credentials, by design.
+    response = client.get("/dashboard/login")
+    assert response.status_code == 200
+    assert "Access token" in response.text
+
+
+def test_login_with_correct_token_sets_session_cookie_and_redirects(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    response = client.post("/dashboard/login", data={"token": TEST_TOKEN, "next": "/dashboard"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard"
+    assert response.cookies.get(dashboard_module.SESSION_COOKIE) == TEST_TOKEN
+
+
+def test_login_with_wrong_token_shows_error_and_sets_no_cookie(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    response = client.post("/dashboard/login", data={"token": "wrong", "next": "/dashboard"},
+                           follow_redirects=False)
+    assert response.status_code == 401
+    assert "That token" in response.text  # Jinja escapes the apostrophe to &#39;
+    assert dashboard_module.SESSION_COOKIE not in response.cookies
+
+
+def test_session_cookie_grants_access_with_no_query_token(monkeypatch):
+    # The actual point of the cookie: one link, then normal browsing with
+    # no secret reappearing in the URL bar.
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [])
+    client.cookies.set(dashboard_module.SESSION_COOKIE, TEST_TOKEN)
+    try:
+        response = client.get("/dashboard")
+        assert response.status_code == 200
+    finally:
+        client.cookies.delete(dashboard_module.SESSION_COOKIE)
+
+
+def test_a_link_carrying_the_token_establishes_the_session_cookie(monkeypatch):
+    # A shared "/dashboard?token=..." link — the very first hit — should
+    # log the visitor in for everything after, not just that one request.
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [])
+    response = client.get(f"/dashboard?token={TEST_TOKEN}")
+    assert response.status_code == 200
+    assert response.cookies.get(dashboard_module.SESSION_COOKIE) == TEST_TOKEN
+
+
+def test_logout_tells_the_browser_to_forget_the_cookie(monkeypatch):
+    # Logout can only instruct the client to discard the cookie — the
+    # cookie holds the actual shared token, not a server-side session id,
+    # so there is nothing here to revoke server-side. Assert on the
+    # Set-Cookie contract itself (expired, emptied) rather than on the
+    # test client's cookie jar reflecting that, since a bearer value a
+    # caller already captured separately would still work regardless of
+    # what any one browser's jar does with an expiry header.
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    response = client.get("/dashboard/logout", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard/login"
+    set_cookie = response.headers["set-cookie"]
+    assert f'{dashboard_module.SESSION_COOKIE}=""' in set_cookie
+    assert "Max-Age=0" in set_cookie
+
+
 # --- Auth-specific tests (review finding #2: no auth at all previously) ---
 
 
 def test_missing_token_rejected(monkeypatch):
+    # No cookie, no query token: sent to the login page rather than a raw
+    # 401 — this is a browser-facing page, not an API.
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
-    response = client.get("/dashboard")
-    assert response.status_code == 401
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")
 
 
 def test_wrong_token_rejected(monkeypatch):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
-    response = client.get("/dashboard?token=wrong-token")
-    assert response.status_code == 401
+    response = client.get("/dashboard?token=wrong-token", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")
 
 
 def test_approve_without_token_rejected(monkeypatch):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     calls = []
-    monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", lambda alert_id, approved: calls.append((alert_id, approved)))
+    monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert",
+                        lambda alert_id, approved, reason="", resolved_by="": calls.append((alert_id, approved)))
     response = client.post("/dashboard/a1/approve", data={"reason": "x"}, follow_redirects=False)
     assert response.status_code == 401
     assert calls == []  # the actual resolution must never have been attempted
@@ -181,6 +267,116 @@ def test_dashboard_auth_env_var_is_independent_of_the_webhook_signature_flag():
     assert 'os.environ.get("SHIP_ALLOW_UNSIGNED"' not in dashboard_source
 
 
+# --- History (dispositions) ---
+
+
+def _sample_resolved_alert(alert_id="a1", resolution="approved"):
+    return Alert(
+        alert_id=alert_id, repo="pandayv/micro-finance", pr_number=1, file="loans/ai_underwriting.py",
+        taxonomy_id="PIIE-001", risk_score=9.1, plain_english_summary="Raw applicant PII sent to an external LLM.",
+        citation="GDPR Art. 32(1)(a)", remediation_patch="# redact PII before building the prompt",
+        status="resolved", created_at="2026-09-04T00:00:00+00:00", head_sha="abc123sha",
+        resolution=resolution, resolved_at="2026-09-05T00:00:00+00:00",
+        resolution_reason="Fixture data only, tracked as LOAN-812.", resolved_by="the SHIP reviewer",
+    )
+
+
+def test_history_empty_state(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_resolved_alerts", lambda: [])
+    response = client.get(f"/dashboard/history?token={TEST_TOKEN}")
+    assert response.status_code == 200
+    assert "Nothing resolved yet" in response.text
+
+
+def test_history_renders_the_disposition(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_resolved_alerts", lambda: [_sample_resolved_alert()])
+    response = client.get(f"/dashboard/history?token={TEST_TOKEN}")
+    assert response.status_code == 200
+    assert "approved" in response.text
+    assert "Fixture data only, tracked as LOAN-812." in response.text
+    assert "the SHIP reviewer" in response.text
+
+
+def test_history_requires_token(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    response = client.get("/dashboard/history", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")
+
+
+# --- Connected repos ---
+
+
+def test_repos_empty_state(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.repo_store, "list_repos", lambda: [])
+    response = client.get(f"/dashboard/repos?token={TEST_TOKEN}")
+    assert response.status_code == 200
+    assert "No repositories connected yet" in response.text
+
+
+def test_repos_lists_connected_repos(monkeypatch):
+    from src.storage.repo_store import STATUS_WATCHING, WatchedRepo
+
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    repo = WatchedRepo(repo_full_name="pandayv/micro-finance", status=STATUS_WATCHING,
+                       connected_at="2026-09-08T00:00:00+00:00", connected_by="the SHIP reviewer")
+    monkeypatch.setattr(dashboard_module.repo_store, "list_repos", lambda: [repo])
+    response = client.get(f"/dashboard/repos?token={TEST_TOKEN}")
+    assert response.status_code == 200
+    assert "pandayv/micro-finance" in response.text
+    assert "the SHIP reviewer" in response.text
+
+
+def test_connect_repo_calls_the_store(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    calls = []
+    monkeypatch.setattr(dashboard_module.repo_store, "connect_repo",
+                        lambda name, connected_by="": calls.append((name, connected_by)))
+    response = client.post(f"/dashboard/repos/connect?token={TEST_TOKEN}",
+                           data={"repo_full_name": "someone/else"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert calls == [("someone/else", "the SHIP reviewer")]
+
+
+def test_connect_repo_rejects_a_malformed_name(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    calls = []
+    monkeypatch.setattr(dashboard_module.repo_store, "connect_repo", lambda name, connected_by="": calls.append(name))
+    response = client.post(f"/dashboard/repos/connect?token={TEST_TOKEN}",
+                           data={"repo_full_name": "not-a-repo-name"}, follow_redirects=False)
+    assert response.status_code == 400
+    assert calls == []
+
+
+def test_disconnect_repo_calls_the_store(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    calls = []
+    monkeypatch.setattr(dashboard_module.repo_store, "disconnect_repo", lambda name: calls.append(name))
+    response = client.post(f"/dashboard/repos/pandayv/micro-finance/disconnect?token={TEST_TOKEN}",
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert calls == ["pandayv/micro-finance"]
+
+
+def test_repos_requires_token(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    response = client.get("/dashboard/repos", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")
+
+
+def test_connect_repo_requires_token(monkeypatch):
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    calls = []
+    monkeypatch.setattr(dashboard_module.repo_store, "connect_repo", lambda name, connected_by="": calls.append(name))
+    response = client.post("/dashboard/repos/connect", data={"repo_full_name": "someone/else"}, follow_redirects=False)
+    assert response.status_code == 401
+    assert calls == []
+
+
 def test_wrong_token_uses_constant_time_comparison(monkeypatch):
     # Independent review (2026-09-05): the token check used a plain `!=`
     # rather than hmac.compare_digest, unlike the sibling webhook HMAC
@@ -191,9 +387,10 @@ def test_wrong_token_uses_constant_time_comparison(monkeypatch):
     # the source, asserted via inspection below).
     import inspect
 
-    source = inspect.getsource(dashboard_module._require_token)
+    source = inspect.getsource(dashboard_module._authenticated)
     assert "hmac.compare_digest" in source
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [])
-    response = client.get("/dashboard", params={"token": "x" * len(TEST_TOKEN)})
-    assert response.status_code == 401
+    response = client.get("/dashboard", params={"token": "x" * len(TEST_TOKEN)}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")

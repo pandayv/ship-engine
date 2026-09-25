@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>SHIP — Attending</title>
+  <title>SHIP — Gate</title>
   <style>
     body { font-family: -apple-system, sans-serif; max-width: 780px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
     h1 { font-size: 1.3rem; }
@@ -28,10 +28,19 @@
     .approve { background: #27ae60; color: white; }
     .reject { background: #c0392b; color: white; }
     .empty { color: #666; padding: 2rem 0; text-align: center; }
+    .nav { margin-bottom: 1.25rem; font-size: 0.9rem; }
+    .nav a { color: #666; text-decoration: none; margin-right: 1rem; }
+    .nav a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <h1>SHIP — Attending</h1>
+  <h1>SHIP — Gate</h1>
+  <div class="nav">
+    <a href="/dashboard"><strong>Active</strong></a>
+    <a href="/dashboard/history">History</a>
+    <a href="/dashboard/repos">Connected repos</a>
+    <a href="/dashboard/logout" style="float:right">Sign out</a>
+  </div>
   <div class="subtitle">Findings awaiting your decision. Blocking findings stop the merge; flagged findings do not.</div>
 
   {% if alerts %}
@@ -46,7 +55,7 @@
         <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
       <div>{{ alert.plain_english_summary }}</div>
       {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
-      <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve?token={{ token }}">
+      <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
         <label for="reason-{{ alert.alert_id }}">Your reason
           <span class="hint">Posted on the pull request as the record of this decision.</span></label>
         <textarea id="reason-{{ alert.alert_id }}" name="reason" required
@@ -56,7 +65,7 @@
             {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
           </button>
           <button class="reject" type="submit"
-                  formaction="/dashboard/{{ alert.alert_id }}/reject?token={{ token }}">
+                  formaction="/dashboard/{{ alert.alert_id }}/reject">
             {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
           </button>
         </div>

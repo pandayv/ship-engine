@@ -1,5 +1,5 @@
 """
-DynamoDB persistence for alerts Triage has frozen — this is what Attending
+DynamoDB persistence for alerts Triage has frozen — this is what Gate
 reads from. Live-tested against the real table (2026-09-04).
 
 Table schema (single table, on-demand billing to avoid provisioning
@@ -47,6 +47,14 @@ class Alert:
     created_at: str
     resolution: str | None = None  # "approved" | "rejected"
     resolved_at: str | None = None
+    # The dispositions history needs these two to mean anything — before
+    # this, the reason a human gave lived ONLY in the PR comment
+    # (comment_for_decision), and the audit record dashboard.py itself
+    # calls load-bearing ("the reason IS the audit record") existed nowhere
+    # this service could read back. Empty for rows resolved before this
+    # field existed.
+    resolution_reason: str = ""
+    resolved_by: str = ""
     # "blocking" defaults here rather than being required because every row
     # written before this field existed (2026-09-07) was a FREEZE, and
     # because a call site that forgets to pass it should fail toward
@@ -121,7 +129,7 @@ def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: s
     block a genuinely new future violation of the same taxonomy_id/file
     from ever being persisted at all, with put_alert() returning as if it
     had succeeded. Fixed by including the isolated fragment's own text in
-    the key: a real retry of the SAME violation re-diagnoses the SAME
+    the key: a real retry of the SAME violation re-detects the SAME
     fragment text (still collides/overwrites correctly, preserving finding
     #6's idempotency guarantee), while two DIFFERENT violations produce
     different fragment text and therefore different ids.
@@ -164,7 +172,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
               plain_english_summary: str, citation: str, remediation_patch: str,
               severity: str = SEVERITY_BLOCKING, head_sha: str = "") -> Alert:
     # severity is deliberately NOT part of _deterministic_alert_id: a
-    # re-diagnosis of the same violation that scores differently enough to
+    # re-detection of the same violation that scores differently enough to
     # cross a band boundary must UPDATE that violation's existing row, not
     # create a second row for the same finding at a different severity.
     alert = Alert(
@@ -196,7 +204,7 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
         )
     except Exception as e:
         if type(e).__name__ == "ConditionalCheckFailedException":
-            # Already resolved by a human — a retry re-diagnosing the same
+            # Already resolved by a human — a retry re-detecting the same
             # violation is not an error, just a no-op on the stored state.
             return alert
         raise
@@ -244,6 +252,10 @@ def _row_to_alert(item: dict) -> Alert:
     # Rows predating head_sha have no commit to post a status against;
     # the write-back path skips an empty sha rather than guessing.
     item.setdefault("head_sha", "")
+    # Rows resolved before resolution_reason/resolved_by existed: the
+    # reason still went to the PR comment at the time, just not here.
+    item.setdefault("resolution_reason", "")
+    item.setdefault("resolved_by", "")
     return Alert(**item)
 
 
@@ -254,6 +266,21 @@ def list_active_alerts() -> list[Alert]:
         ExpressionAttributeValues={":status": "frozen"},
     )
     return [_row_to_alert(i) for i in items]
+
+
+def list_resolved_alerts() -> list[Alert]:
+    """
+    The Gate's dispositions view: what a human already decided, and why.
+    Most-recent-first, same reasoning as repo_store.list_repos() ordering
+    a list for a human to scan rather than leaving it in scan order.
+    """
+    items = _scan_all(
+        FilterExpression="#s = :status",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":status": "resolved"},
+    )
+    alerts = [_row_to_alert(i) for i in items]
+    return sorted(alerts, key=lambda a: a.resolved_at or "", reverse=True)
 
 
 def list_alerts_for_pr(repo: str, pr_number: int) -> list[Alert]:
@@ -292,17 +319,22 @@ class AlertNotFoundOrAlreadyResolved(Exception):
     conflict detection and no record the first decision ever happened."""
 
 
-def resolve_alert(alert_id: str, approved: bool) -> None:
+def resolve_alert(alert_id: str, approved: bool, reason: str = "", resolved_by: str = "") -> None:
     try:
         _table().update_item(
             Key={"alert_id": alert_id},
-            UpdateExpression="SET #s = :status, resolution = :resolution, resolved_at = :resolved_at",
+            UpdateExpression=(
+                "SET #s = :status, resolution = :resolution, resolved_at = :resolved_at, "
+                "resolution_reason = :reason, resolved_by = :resolved_by"
+            ),
             ConditionExpression="attribute_exists(alert_id) AND #s = :frozen",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":status": "resolved",
                 ":resolution": "approved" if approved else "rejected",
                 ":resolved_at": datetime.now(timezone.utc).isoformat(),
+                ":reason": reason,
+                ":resolved_by": resolved_by,
                 ":frozen": "frozen",
             },
         )
