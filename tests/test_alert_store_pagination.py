@@ -69,3 +69,35 @@ def test_list_active_alerts_stops_after_a_single_page_when_no_more_data(monkeypa
 
     assert fake_table.scan_call_count == 1, "must not call scan() again once LastEvaluatedKey is absent"
     assert len(alerts) == 1
+
+
+def _resolved_item(n: int, resolved_at: str) -> dict:
+    item = _raw_item(n)
+    item.update(status="resolved", resolution="approved", resolved_at=resolved_at,
+                resolution_reason="fine", resolved_by="the SHIP reviewer")
+    return item
+
+
+def test_list_resolved_alerts_orders_most_recent_first(monkeypatch):
+    older = _resolved_item(1, "2026-09-04T00:00:00+00:00")
+    newer = _resolved_item(2, "2026-09-06T00:00:00+00:00")
+    fake_table = _FakePaginatedTable([[older, newer]])
+    monkeypatch.setattr(alert_store, "_table", lambda: fake_table)
+
+    alerts = alert_store.list_resolved_alerts()
+
+    assert [a.alert_id for a in alerts] == ["alert-2", "alert-1"]
+
+
+def test_list_resolved_alerts_tolerates_rows_predating_the_reason_fields(monkeypatch):
+    # Rows resolved before resolution_reason/resolved_by existed - the
+    # reason went only to the PR comment at the time, not to this table.
+    legacy = _raw_item(1)
+    legacy.update(status="resolved", resolution="approved", resolved_at="2026-09-04T00:00:00+00:00")
+    fake_table = _FakePaginatedTable([[legacy]])
+    monkeypatch.setattr(alert_store, "_table", lambda: fake_table)
+
+    alerts = alert_store.list_resolved_alerts()
+
+    assert alerts[0].resolution_reason == ""
+    assert alerts[0].resolved_by == ""

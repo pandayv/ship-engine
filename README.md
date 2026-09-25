@@ -6,9 +6,7 @@ opens, catches the ones that quietly cross a real legal line, and only
 ever interrupts a human when it's actually found something.
 
 Built for the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
-(Strands Agents SDK, Professional Agents track); the same engine is the
-foundation for a second phase (Amazon AppDev 2026) that adds a voice/screen
-surface on top without changing anything described here.
+(Strands Agents SDK, Professional Agents track).
 
 ---
 
@@ -44,10 +42,10 @@ as it always would have.
 ## Guiding principles
 
 ### Trust, but verify
-- Diagnostician's every citation is grounded in retrieved regulation text
+- Detector's every citation is grounded in retrieved regulation text
   (GDPR, EU AI Act, OWASP), never a model's unaided recollection — it must
   call its retrieval tool before judging anything.
-- Screener's keyword match is a *signal*, not a verdict — Diagnostician
+- Screener's keyword match is a *signal*, not a verdict — Detector
   independently judges whether it's a real violation or a false positive,
   verified against both genuine violations and deliberate look-alikes
   designed to trip a naive pattern match, not just the easy cases.
@@ -60,11 +58,11 @@ as it always would have.
 ### A human always makes the call
 - Triage only ever proposes an action — log-and-continue, or freeze. It
   never resolves anything by itself.
-- Attending (the review dashboard, gated behind its own credential
-  separate from the webhook's) is the only place a frozen alert gets
-  resolved. Approve/Reject is a one-way, guarded transition: a retry or a
-  duplicate webhook delivery cannot silently re-open or overwrite a
-  decision a human already made.
+- Gate (the review console, gated behind its own credential separate from
+  the webhook's) is the only place a frozen alert gets resolved.
+  Approve/Reject is a one-way, guarded transition: a retry or a duplicate
+  webhook delivery cannot silently re-open or overwrite a decision a human
+  already made.
 
 ### AI-specific scope, on purpose
 The pipeline underneath is mechanically generic enough to flag other
@@ -90,27 +88,33 @@ asserted from a passing test suite alone.
    if nothing matches, the PR passes in milliseconds and never costs a
    model call. A match doesn't mean a violation — it means "worth a real
    look."
-2. **Diagnostician** — a Strands Agent, RAG-grounded against real,
-   sourced regulation text. Runs only on the fragments Screener actually
-   flagged, one fragment at a time, and returns a structured verdict:
-   matched or not, which category, a 1–10 risk score, a plain-English
-   explanation, the exact citation, and a draft remediation patch.
+2. **Detector** — a Strands Agent, RAG-grounded against real, sourced
+   regulation text. Runs only on the fragments Screener actually flagged,
+   one fragment at a time, and returns a structured verdict: matched or
+   not, which category, a 1–10 risk score, a plain-English explanation,
+   the exact citation, and a draft remediation patch.
 3. **Triage** — routes the verdict. Below the threshold: logged, nothing
    else happens. At or above it: frozen — an alert is created, pending
-   human review. The threshold is per-category, not one number for
-   everything — a confirmed violation that breaks a required safety
-   guarantee (unmasked PII reaching an external service, an automated
-   decision with no human checkpoint at all) is held to a lower bar than
-   one that's more a matter of degree. (Today, "frozen" means an alert on
-   the dashboard — it doesn't yet set a GitHub check that blocks the PR's
-   own merge button; see [Status & what's next](#status--whats-next).)
-4. **Attending** — the review console. Every frozen alert shows the file,
-   the category, the risk score, the plain-English summary, the exact
+   human review, and the PR's own commit status turns red (`ship/compliance`,
+   promotable to a required check in branch protection — this is what
+   actually blocks the merge button, not just a dashboard entry). The
+   threshold is per-category, not one number for everything — a confirmed
+   violation that breaks a required safety guarantee (unmasked PII
+   reaching an external service, an automated decision with no human
+   checkpoint at all) is held to a lower bar than one that's more a matter
+   of degree.
+4. **Gate** — the review console. Every frozen alert shows the file, the
+   category, the risk score, the plain-English summary, the exact
    regulatory citation, and the suggested patch. A human clicks Approve or
    Reject; that decision is recorded as the one-way resolution of the
-   alert. (Actually pushing the approved patch back to the PR via the
-   GitHub API is a scoped-out next step, not yet wired in — today, a
-   human still applies the fix themselves once they've reviewed it here.)
+   alert, posted back to the PR as a comment, and folded into the recomputed
+   commit status — resolving the last blocking finding is what turns the
+   check green. (Actually pushing the approved patch back to the PR via the
+   GitHub API is a scoped-out next step, not yet wired in — today, a human
+   still applies the fix themselves once they've reviewed it here.) Gate
+   also has a **history** view of every past disposition with the reason a
+   human gave, and a **connected-repos** view — connecting a repository is
+   a form submission here, not a redeploy (see [Tech stack](#tech-stack)).
 
 ### Detectors
 
@@ -170,15 +174,21 @@ silently dropped.
 ## Tech stack
 
 - **Agent framework:** [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
-- **Models:** Amazon Bedrock (Claude Haiku 4.5) as the primary backend;
-  Google Gemini as a credit-exhaustion fallback; a local Ollama model as a
-  fully-offline reliability fallback — switchable via one env var, all
-  three genuinely functional, not just Bedrock with the others as
-  unverified stretch goals
-- **Agent runtime:** Amazon Bedrock AgentCore Runtime — the same
-  Diagnostician logic deployed to a real managed runtime
-  ([`shipagentcore/`](shipagentcore/)), callable in-process for local
-  development or remotely for the deployed path, toggled the same way
+- **Models:** Amazon Nova Lite as the primary Bedrock backend — chosen on
+  measured evidence, not preference: benchmarked against Claude Haiku 4.5,
+  Nova Pro, Qwen3-235B, GLM-5, and DeepSeek-V3.2 on the real adversarial
+  fixtures below, all six caught every genuine violation and dismissed
+  every look-alike, but per-model request-per-minute quota is what
+  actually bounds review throughput on this account (10/min for Claude
+  models vs. 200/min for Nova Lite) — see the benchmark table in
+  [`src/agents/detector.py`](src/agents/detector.py). Google Gemini as a
+  credit-exhaustion fallback; a local Ollama model as a fully-offline
+  reliability fallback — switchable via one env var, all genuinely
+  functional, not unverified stretch goals.
+- **Agent runtime:** Amazon Bedrock AgentCore Runtime — the same Detector
+  logic deployed to a real managed runtime ([`shipagentcore/`](shipagentcore/)),
+  callable in-process for local development or remotely for the deployed
+  path, toggled the same way
 - **Retrieval:** Amazon Bedrock Titan Embeddings, a small local
   numpy cosine-similarity store (the sourced regulation corpus is a
   few dozen chunks — a hosted vector database would be pure overhead
@@ -189,10 +199,13 @@ silently dropped.
 - **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
   fail repeatedly and a concurrency cap on the processor so parallel
   reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB — every alert write is idempotent (a webhook
-  redelivery or a retried job can't create a duplicate, and can't silently
-  re-open a decision a human already made)
-- **Web:** FastAPI (the webhook route and the Attending dashboard, one
+- **State:** Amazon DynamoDB, two tables — `ship-alerts` (every write
+  idempotent: a webhook redelivery or a retried job can't create a
+  duplicate, and can't silently re-open a decision a human already made)
+  and `ship-repos` (which repositories SHIP watches — connecting one is a
+  point write from Gate's dashboard, not an environment-variable redeploy;
+  see `src/storage/repo_store.py`)
+- **Web:** FastAPI (the webhook route and the Gate console, one
   deployable app, wrapped for Lambda via Mangum)
 
 ## Setting this up yourself
@@ -232,8 +245,8 @@ to join.
 
 ```bash
 export SHIP_MODEL_BACKEND=bedrock
-export SHIP_DIAGNOSTICIAN_MODE=in_process
-python3 -m src.agents.diagnostician
+export SHIP_DETECTOR_MODE=in_process
+python3 -m src.agents.detector
 ```
 
 This runs a hardcoded violation through the real agent end to end and
@@ -244,18 +257,20 @@ in the Bedrock console first (Model access → request access), and a
 brand-new AWS account specifically may need its own quota raised via a
 support case — this is an account-activation gate, not a code problem.
 
-### 4. Create the DynamoDB table
+### 4. Create the DynamoDB tables
 
 ```bash
 python3 -m src.storage.alert_store
+python3 -m src.storage.repo_store
 ```
 
-Running this module directly calls `create_table_if_not_exists()` and
-then a self-test write/read/resolve cycle against the real table — needs
-`dynamodb:CreateTable` plus the basic item-level actions on your IAM
-identity first.
+`alert_store` calls `create_table_if_not_exists()` and then a self-test
+write/read/resolve cycle against the real `ship-alerts` table.
+`repo_store` creates `ship-repos`, the table backing Gate's
+connected-repos view — needs `dynamodb:CreateTable` plus the basic
+item-level actions on your IAM identity first.
 
-### 5. Deploy Diagnostician to a real AgentCore Runtime
+### 5. Deploy Detector to a real AgentCore Runtime
 
 ```bash
 npm install -g @aws/agentcore
@@ -264,12 +279,16 @@ agentcore deploy --yes
 ```
 
 Note the deployed runtime ARN from the output — you'll need it in step 7.
-**If Diagnostician's prompt, schema, or RAG corpus ever changes, both
-`src/agents/diagnostician.py` and `shipagentcore/app/ship_diagnostician/main.py`
+**If Detector's prompt, schema, or RAG corpus ever changes, both
+`src/agents/detector.py` and `shipagentcore/app/ship_diagnostician/main.py`
 need the same change and a fresh deploy** — see
 [`tests/test_taxonomy_consistency.py`](tests/test_taxonomy_consistency.py),
 which exists specifically to catch the two copies drifting apart before
-that reaches production silently.
+that reaches production silently. (The AgentCore app's own folder/runtime
+name, `ship_diagnostician`, predates this project's Detector naming pass —
+left as-is deliberately, since renaming it mints a brand-new runtime ARN
+for no visible benefit; it's internal deployment plumbing, not something
+this README's naming otherwise touches.)
 
 ### 6. Create the fragment queue, its dead-letter queue, and the fragment-processor Lambda
 
@@ -314,7 +333,7 @@ aws lambda create-function --function-name ship-fragment-processor \
   --handler fragment_lambda_handler.handler \
   --timeout 900 --memory-size 512 \
   --zip-file fileb://ship-webhook.zip \
-  --environment "Variables={SHIP_DIAGNOSTICIAN_MODE=agentcore,SHIP_MODEL_BACKEND=bedrock,SHIP_AGENTCORE_RUNTIME_ARN=<ARN_FROM_STEP_5>}"
+  --environment "Variables={SHIP_DETECTOR_MODE=agentcore,SHIP_MODEL_BACKEND=bedrock,SHIP_AGENTCORE_RUNTIME_ARN=<ARN_FROM_STEP_5>}"
 
 aws lambda create-event-source-mapping --function-name ship-fragment-processor \
   --event-source-arn <FRAGMENT_QUEUE_ARN> --batch-size 1 \
@@ -340,11 +359,10 @@ aws lambda create-function --function-name ship-webhook \
   --timeout 30 --memory-size 512 \
   --zip-file fileb://ship-webhook.zip \
   --environment "Variables={
-    SHIP_DIAGNOSTICIAN_MODE=agentcore,
+    SHIP_DETECTOR_MODE=agentcore,
     SHIP_MODEL_BACKEND=bedrock,
     SHIP_AGENTCORE_RUNTIME_ARN=<ARN_FROM_STEP_5>,
     SHIP_FRAGMENT_QUEUE_URL=<QUEUE_URL_FROM_STEP_6>,
-    SHIP_ALLOWED_REPOS=<owner>/<repo>,
     GITHUB_TOKEN=<a token with read access to that repo>,
     GITHUB_WEBHOOK_SECRET=<a random secret you generate>,
     SHIP_DASHBOARD_TOKEN=<a second random secret you generate>
@@ -354,17 +372,27 @@ aws lambda create-function-url-config --function-name ship-webhook \
   --auth-type NONE
 ```
 
-`SHIP_ALLOWED_REPOS` is a hard allowlist — a payload naming any other repo
-gets rejected before it can spend your GitHub token or Bedrock quota.
 `GITHUB_WEBHOOK_SECRET` and `SHIP_DASHBOARD_TOKEN` must be two genuinely
 different values — the webhook's signature check and the dashboard's auth
 are deliberately independent, so compromising one can't silently disable
 the other.
 
-### 8. Point a real GitHub webhook at it
+### 8. Connect the repo, then point a real GitHub webhook at it
 
-In the target repo's Settings → Webhooks: the Lambda Function URL from
-step 7, content type `application/json`, secret matching
+Open `https://<your-function-url>/dashboard/repos?token=<SHIP_DASHBOARD_TOKEN>`
+and connect `<owner>/<repo>` — a payload naming any other repo gets
+rejected before it can spend your GitHub token or Bedrock quota (see
+[`src/storage/repo_store.py`](src/storage/repo_store.py)). That link only
+needs to be visited once: the token in the URL establishes a session
+cookie, and every page from there on (Active, History, Connected repos) is
+just a normal link with no secret in it — visiting `/dashboard` cold
+prompts a login form instead. An optional `SHIP_ALLOWED_REPOS=<owner>/<repo>`
+environment variable pre-seeds this same allowlist without needing the
+table at all — useful for a first bring-up before step 4's tables exist,
+or as a fallback if DynamoDB is briefly unreachable.
+
+Then, in the target repo's Settings → Webhooks: the Lambda Function URL
+from step 7, content type `application/json`, secret matching
 `GITHUB_WEBHOOK_SECRET` above, event: Pull requests.
 
 ### 9. Verify
@@ -385,12 +413,13 @@ and confirm an alert appears at
 src/
   agents/
     screener.py        # Fast regex/AST pre-filter + per-fragment isolation
-    diagnostician.py    # Strands Agent — RAG-grounded semantic judgment
+    detector.py         # Strands Agent — RAG-grounded semantic judgment
     triage.py           # Risk-based routing, per-category thresholds
   api/
     main.py             # Webhook route, fast-ack + fragment dispatch
-    dashboard.py         # Attending — the human review console
+    dashboard.py         # Gate — the human review console
     github_client.py    # Real PR-diff fetching via the GitHub API
+    github_writeback.py # Posts findings/decisions back to the PR (comment + commit status)
   aws/
     bedrock_session.py  # Shared Bedrock session + adaptive-retry config
   rag/
@@ -398,34 +427,44 @@ src/
     vector_store.py      # Local embedding store + retrieval
   storage/
     alert_store.py       # DynamoDB — idempotent alert persistence
+    repo_store.py         # DynamoDB — which repos SHIP watches
   taxonomy.py            # Single source of truth: detector <-> corpus <-> Screener trigger mapping
-  mcp/                   # Placeholder for Herald (Phase 2, not yet built)
 rag_corpus/               # Sourced regulation/standard text, verbatim
-shipagentcore/             # AgentCore Runtime deployment of Diagnostician
+shipagentcore/             # AgentCore Runtime deployment of Detector
+scripts/
+  healing_loop.py          # Periodic corpus-grounding check, decoupled from the hot path
+  benchmark_models.py      # The adversarial benchmark behind the Nova Lite model choice
+  precompute_embeddings.py # Regenerates rag_corpus/'s cached embeddings
 lambda_handler.py          # Webhook Lambda entrypoint
 fragment_lambda_handler.py # Fragment-processor Lambda entrypoint
-tests/                     # 88 tests, no AWS credentials required to run
+tests/                     # 172 tests, no AWS credentials required to run
 ```
 
 ## Status & what's next
 
 Built for Sep 14, 2026 (Agents for Humans): the full pipeline above, live
 and deployed, verified end to end against real Bedrock and a real GitHub
-webhook — not a mocked demo. A second phase (Amazon AppDev 2026, Oct 23)
-adds **Herald**, an MCP server exposing the same underlying state (active
-blockers, violation details, patch application) as discoverable tools for
-a voice or screen surface — no rewrite of anything above, purely additive.
+webhook — not a mocked demo. Freezing an alert sets a real `ship/compliance`
+commit status (promotable to a required check in branch protection) and
+resolving one recomputes it, so the loop from detection to a human decision
+to the PR's own merge button actually closes — not just a dashboard entry
+a human is expected to remember to check.
 
-Three things known and deliberately not built yet, not overlooked:
-- **Freezing an alert doesn't yet block the PR's own merge button in
-  GitHub** — it creates a dashboard alert a human is expected to check
-  before merging, but nothing here sets a GitHub commit status or
-  required check today. Approving an alert also doesn't yet push the
-  suggested patch back to the PR automatically; a human still applies it.
-  Both are a real GitHub-API integration away, not an architecture change.
-- A background job that keeps the RAG corpus current as the underlying
-  regulations change (today's corpus is accurate as sourced, not
-  self-updating).
+Things known and deliberately not built yet, not overlooked:
+- **Approving an alert doesn't yet push the suggested patch back to the PR
+  automatically** — a human still applies it themselves once they've
+  reviewed it in Gate. A real GitHub-API integration away, not an
+  architecture change.
+- **Healing Loop** ([`scripts/healing_loop.py`](scripts/healing_loop.py))
+  closes part of this: run periodically (deliberately not on Detector's
+  per-fragment hot path — see the script's own docstring for why), it
+  re-fetches each sourced regulation page and flags any chunk that no
+  longer appears verbatim, so a citation is never silently resting on
+  text a regulator has since amended. Verified against the real live
+  sources, not just fixtures — caught and fixed two genuine false-positive
+  causes (HTML entity decoding, CSS-rendered clause numbering) this way.
+  Not yet wired to an actual schedule (cron/EventBridge) or to an alert
+  channel beyond its own stdout report — that part is still manual.
 - New detectors, beyond what's listed above, for risk patterns that need
   more than a single PR diff to prove — infrastructure/deployment context,
   or behavior observed across multiple files or over time. See the

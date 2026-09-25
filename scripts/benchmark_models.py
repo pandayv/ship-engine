@@ -100,14 +100,14 @@ def build_fixtures() -> list[dict]:
 WORKER = r'''
 import json, os, sys, time
 sys.path.insert(0, os.environ["SHIP_REPO_ROOT"])
-from src.agents.diagnostician import diagnose
+from src.agents.detector import detect
 
 fixtures = json.loads(sys.stdin.read())
 out = []
 for f in fixtures:
     t = time.time()
     try:
-        d = diagnose(f["fragment"])
+        d = detect(f["fragment"])
         out.append({"name": f["name"], "expected": f["expected"],
                     "matched": d.matched, "got": d.taxonomy_id if d.matched else None,
                     "risk": d.risk_score, "citation": (d.citation or "")[:60],
@@ -123,7 +123,7 @@ print("###RESULTS###" + json.dumps(out))
 
 def run_model(model_id: str, fixtures: list[dict]) -> dict:
     env = {**os.environ, "SHIP_BEDROCK_MODEL_ID": model_id,
-           "SHIP_MODEL_BACKEND": "bedrock", "SHIP_DIAGNOSTICIAN_MODE": "in_process",
+           "SHIP_MODEL_BACKEND": "bedrock", "SHIP_DETECTOR_MODE": "in_process",
            "SHIP_REPO_ROOT": str(REPO_ROOT)}
     started = time.time()
     proc = subprocess.run([sys.executable, "-c", WORKER], input=json.dumps(fixtures),
@@ -138,8 +138,31 @@ def run_model(model_id: str, fixtures: list[dict]) -> dict:
     return {"model": model_id, "fatal": None, "results": results, "elapsed": elapsed}
 
 
+# Which body of law each taxonomy ID must be grounded in. Scoring the
+# citation separately from the classification matters more than it looks:
+# a model can land the right category and still cite the wrong instrument,
+# which is precisely the hallucinated-citation failure the RAG grounding
+# exists to prevent. Observed for real on 2026-09-08 — a correct PIIE-001
+# verdict citing OWASP LLM06 (the grounding for TLGP-001) instead of GDPR
+# Article 32. The first version of this benchmark scored only the taxonomy
+# id and would have called that a pass.
+EXPECTED_SOURCE = {
+    "PIIE-001": "GDPR", "PIIE-002": "GDPR", "PIIE-003": "GDPR",
+    "TLGP-002": "EU AI Act", "ALBP-001": "EU AI Act", "TLGP-001": "OWASP",
+}
+
+
+def citation_matches(taxonomy_id: str, citation: str | None) -> bool:
+    want, text = EXPECTED_SOURCE[taxonomy_id], (citation or "")
+    if want == "GDPR":
+        return "GDPR" in text
+    if want == "OWASP":
+        return "OWASP" in text or "LLM06" in text
+    return "AI Act" in text or "Annex" in text
+
+
 def score(run: dict) -> dict:
-    tp_hit = tp_total = fp_ok = fp_total = errors = 0
+    tp_hit = tp_total = fp_ok = fp_total = errors = cite_ok = 0
     for r in run["results"]:
         if r["error"]:
             errors += 1
@@ -147,13 +170,16 @@ def score(run: dict) -> dict:
             tp_total += 1
             if r["got"] == r["expected"]:
                 tp_hit += 1
+                if citation_matches(r["expected"], r["citation"]):
+                    cite_ok += 1
         else:
             fp_total += 1
             if r["matched"] is False:
                 fp_ok += 1
     times = [r["secs"] for r in run["results"] if not r["error"]]
     return {"tp_hit": tp_hit, "tp_total": tp_total, "fp_ok": fp_ok, "fp_total": fp_total,
-            "errors": errors, "median_secs": sorted(times)[len(times) // 2] if times else None}
+            "cite_ok": cite_ok, "errors": errors,
+            "median_secs": sorted(times)[len(times) // 2] if times else None}
 
 
 def main() -> int:
@@ -166,7 +192,7 @@ def main() -> int:
 
     missing = set(EXPECTED) - {f["name"] for f in fixtures}
     if missing:
-        print(f"WARNING: never reached Diagnostician (Screener did not escalate): {sorted(missing)}\n")
+        print(f"WARNING: never reached Detector (Screener did not escalate): {sorted(missing)}\n")
 
     print(f"Running {len(models)} models concurrently (separate quota buckets)...\n")
     runs = []
@@ -179,34 +205,41 @@ def main() -> int:
             tag = "FATAL" if run["fatal"] else f"{s['tp_hit']}/{s['tp_total']} caught, {s['fp_ok']}/{s['fp_total']} dismissed"
             print(f"  done: {run['model']:<48} {tag}")
 
-    print("\n" + "=" * 104)
-    print(f"{'MODEL':<46} {'CAUGHT':>8} {'DISMISSED':>10} {'TOTAL':>7} {'ERR':>4} {'MED s':>7}")
-    print("-" * 104)
-    ranked = sorted(runs, key=lambda r: -(score(r)["tp_hit"] + score(r)["fp_ok"]))
+    print("\n" + "=" * 112)
+    print(f"{'MODEL':<46} {'CAUGHT':>8} {'DISMISSED':>10} {'CITED':>7} {'ERR':>4} {'MED s':>7}")
+    print("-" * 112)
+    # Ranked on all three, citation included — a right verdict citing the
+    # wrong instrument is not a pass.
+    ranked = sorted(runs, key=lambda r: -(score(r)["tp_hit"] + score(r)["fp_ok"] + score(r)["cite_ok"]))
     for run in ranked:
         if run["fatal"]:
             print(f"{run['model']:<46} {'FATAL':>8}   {run['fatal'][:40]}")
             continue
         s = score(run)
-        total = f"{s['tp_hit'] + s['fp_ok']}/{s['tp_total'] + s['fp_total']}"
         print(f"{run['model']:<46} {s['tp_hit']}/{s['tp_total']:<6} {s['fp_ok']}/{s['fp_total']:<8} "
-              f"{total:>7} {s['errors']:>4} {str(s['median_secs']):>7}")
+              f"{s['cite_ok']}/{s['tp_total']:<5} {s['errors']:>4} {str(s['median_secs']):>7}")
 
-    print("\nPer-case detail (only where a model disagreed with ground truth):")
+    print("\nPer-case detail (wrong verdict, or right verdict citing the wrong law):")
     for run in ranked:
-        bad = [r for r in run["results"]
-               if (r["expected"] is not None and r["got"] != r["expected"])
-               or (r["expected"] is None and r["matched"] is not False)]
+        bad = []
+        for r in run["results"]:
+            if r["expected"] is not None:
+                if r["got"] != r["expected"]:
+                    bad.append((r, r["error"] or (r["got"] or "no violation")))
+                elif not citation_matches(r["expected"], r["citation"]):
+                    bad.append((r, f"CITED {(r['citation'] or 'nothing')[:44]}"))
+            elif r["matched"] is not False:
+                bad.append((r, r["error"] or (r["got"] or "flagged")))
         if bad:
             print(f"\n  {run['model']}")
-            for r in bad:
-                exp = r["expected"] or "no violation"
-                got = r["error"] or (r["got"] or "no violation")
-                print(f"    {r['name']:<34} expected {exp:<14} got {got}")
+            for r, note in bad:
+                print(f"    {r['name']:<34} expected {(r['expected'] or 'no violation'):<14} {note}")
 
-    out = REPO_ROOT / "benchmark_results.json"
+    # Timestamped: a re-run must never clobber a previous run's evidence,
+    # which is exactly how the first six-model comparison was lost.
+    out = REPO_ROOT / f"benchmark_results_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.write_text(json.dumps(runs, indent=2))
-    print(f"\nFull results: {out.relative_to(REPO_ROOT)}")
+    print(f"\nFull results: {out.name}")
     return 0
 
 

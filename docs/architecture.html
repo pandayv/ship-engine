@@ -182,7 +182,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <figure>
 <div class="diagram-frame">
-<svg viewBox="0 0 1260 720" role="img" aria-label="Two deployables. ship-webhook, the always-on Lambda behind the GitHub webhook, does only fast work: verify the HMAC signature, check the repo against an allowlist, run Screener's whole-diff precheck, and if anything matches, split the diff into fragments, screen each one individually, and send one SQS message per flagged fragment. If nothing matches, it replies pass immediately at no further cost. ship-fragment-processor, a second Lambda triggered by that queue and scaled independently with a concurrency cap, does the real work one fragment at a time: Diagnostician reasons over the fragment grounded in retrieved regulation text, Triage routes the verdict against a per-category risk threshold, and anything at or above it is stored as a frozen alert in DynamoDB and surfaced on the Attending dashboard, where a human approves or rejects it as a one-way, guarded decision. A fragment that fails outright is retried automatically by SQS and moved to a dead-letter queue after repeated failure; a fragment that is merely slow, or that trips AWS's own request-rate limit, backs off and retries on its own without blocking any other fragment." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
+<svg viewBox="0 0 1260 720" role="img" aria-label="Two deployables. ship-webhook, the always-on Lambda behind the GitHub webhook, does only fast work: verify the HMAC signature, check the repo against the connected-repositories table, run Screener's whole-diff precheck, and if anything matches, split the diff into fragments, screen each one individually, and send one SQS message per flagged fragment. If nothing matches, it replies pass immediately at no further cost. ship-fragment-processor, a second Lambda triggered by that queue and scaled independently with a concurrency cap, does the real work one fragment at a time: Detector reasons over the fragment grounded in retrieved regulation text, Triage routes the verdict against a per-category risk threshold, and anything at or above it is stored as a frozen alert in DynamoDB and surfaced on the Gate dashboard, where a human approves or rejects it as a one-way, guarded decision. A fragment that fails outright is retried automatically by SQS and moved to a dead-letter queue after repeated failure; a fragment that is merely slow, or that trips AWS's own request-rate limit, backs off and retries on its own without blocking any other fragment." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
@@ -252,7 +252,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <line x1="180" y1="450" x2="212" y2="450" stroke="currentColor" marker-end="url(#arrow)"></line>
 
   <rect x="215" y="420" width="190" height="60" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
-  <text x="310" y="444" text-anchor="middle" fill="var(--agent)" font-weight="600" font-size="12">Diagnostician</text>
+  <text x="310" y="444" text-anchor="middle" fill="var(--agent)" font-weight="600" font-size="12">Detector</text>
   <text x="310" y="460" text-anchor="middle" fill="currentColor" font-size="10">RAG-grounded judgment</text>
 
   <path d="M 265 480 L 265 505" stroke="currentColor" marker-end="url(#arrow)"></path>
@@ -298,7 +298,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <line x1="770" y1="590" x2="802" y2="590" stroke="currentColor" marker-end="url(#arrow)"></line>
 
   <rect x="805" y="560" width="190" height="60" rx="8" fill="var(--human-tint)" stroke="var(--human)"></rect>
-  <text x="900" y="584" text-anchor="middle" fill="var(--human)" font-weight="600" font-size="12">Attending dashboard</text>
+  <text x="900" y="584" text-anchor="middle" fill="var(--human)" font-weight="600" font-size="12">Gate dashboard</text>
   <text x="900" y="600" text-anchor="middle" font-size="10" fill="currentColor">token-gated review console</text>
 
   <line x1="995" y1="590" x2="1027" y2="590" stroke="currentColor" marker-end="url(#arrow)"></line>
@@ -343,7 +343,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">Verify + allowlist</span>
           <span class="step-kind tool">tool</span>
         </div>
-        <div class="step-desc">HMAC-SHA256 signature check against the configured webhook secret (fails closed if that secret is ever missing — there is no silent "allow unsigned" default), then the named repo against a hard allowlist. A payload naming any other repo is rejected before it can spend this service's GitHub token or model budget.</div>
+        <div class="step-desc">HMAC-SHA256 signature check against the configured webhook secret (fails closed if that secret is ever missing — there is no silent "allow unsigned" default), then the named repo against the connected-repositories table (one GetItem, point-lookup, fails closed if the table can't be read). A payload naming any repo not connected through Gate is rejected before it can spend this service's GitHub token or model budget.</div>
       </div>
     </div>
 
@@ -416,7 +416,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
       <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
       <div class="step-card agent">
         <div class="step-head">
-          <span class="step-title">Diagnostician: RAG-grounded judgment</span>
+          <span class="step-title">Detector: RAG-grounded judgment</span>
           <span class="step-kind agent">agent</span>
         </div>
         <div class="step-desc">A Strands Agent that must call its retrieval tool against the sourced regulation corpus before judging anything — every citation it produces traces back to retrieved text, never an unaided claim. Returns a structured verdict: matched or not, which category, a 1&ndash;10 risk score, a plain-English explanation, the exact citation, and a draft fix.</div>
@@ -439,10 +439,10 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
       <div class="step-connector"><div class="dot"></div></div>
       <div class="step-card human">
         <div class="step-head">
-          <span class="step-title">Attending: the only way an alert resolves</span>
+          <span class="step-title">Gate: the only way an alert resolves</span>
           <span class="step-kind human">human</span>
         </div>
-        <div class="step-desc">A token-gated dashboard (deliberately a separate credential from the webhook's own — compromising one can't silently disable the other) listing every frozen alert with its file, category, risk score, plain-English summary, citation, and suggested patch. Approve/Reject is the only way an alert leaves the "frozen" state, and it's a one-way, guarded transition: a duplicate webhook delivery or a retried job cannot silently reopen or overwrite a decision a human already made.</div>
+        <div class="step-desc">A token-gated dashboard (deliberately a separate credential from the webhook's own — compromising one can't silently disable the other) listing every frozen alert with its file, category, risk score, plain-English summary, citation, and suggested patch. The token is only ever pasted once: it establishes a signed-in session cookie, so every page after that is a plain link, not a secret sitting in a URL. Approve/Reject is the only way an alert leaves the "frozen" state, and it's a one-way, guarded transition: a duplicate webhook delivery or a retried job cannot silently reopen or overwrite a decision a human already made. The same decision is posted back to the PR as a comment and folded into a recomputed <code class="mono">ship/compliance</code> commit status — resolving the last blocking finding is what turns the check green. Gate also has a history view (every past disposition, with the reason a human gave) and a connected-repos view (connecting a repository is a form submission here, not a redeploy).</div>
       </div>
     </div>
   </div>
@@ -469,7 +469,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
     <div class="detector-item"><span class="id">ALBP-001</span><div class="what">A protected characteristic (or a clear proxy) directly driving a scoring calculation</div><div class="ground">EU AI Act Art. 10 + Annex III &sect;5(b)</div></div>
     <div class="detector-item"><span class="id">TLGP-001</span><div class="what">A dangerous capability (shell exec, unscoped DB write) granted to an AI agent with no gate</div><div class="ground">OWASP LLM06:2025</div></div>
   </div>
-  <p class="step-desc" style="max-width:none;margin-top:14px">Screener's job is to notice a <em>candidate</em> — a keyword, an import, a call shape — cheaply and without judgment. Diagnostician's job is to decide whether it's real. The two are graded together: every detector above is verified against genuine violations <em>and</em> deliberate look-alikes engineered to trip a naive pattern match (a non-agent backup job that happens to call a dangerous function, a profile field that's merely displayed rather than scored, PII that's already hashed before use). A detector that flags the look-alike as a violation is not considered working, no matter how well it catches the real case.</p>
+  <p class="step-desc" style="max-width:none;margin-top:14px">Screener's job is to notice a <em>candidate</em> — a keyword, an import, a call shape — cheaply and without judgment. Detector's job is to decide whether it's real. The two are graded together: every detector above is verified against genuine violations <em>and</em> deliberate look-alikes engineered to trip a naive pattern match (a non-agent backup job that happens to call a dangerous function, a profile field that's merely displayed rather than scored, PII that's already hashed before use). A detector that flags the look-alike as a violation is not considered working, no matter how well it catches the real case.</p>
   <p class="step-desc" style="max-width:none">The pipeline underneath is mechanically generic enough to flag other kinds of risk too, but staying scoped to AI-specific patterns is deliberate: it's the whole differentiation from a general-purpose static-analysis tool that has never heard of an LLM call. Widening scope to catch things like SQL injection would dilute that, not strengthen it.</p>
 </div>
 
@@ -479,11 +479,12 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
     <div class="infra-item"><div class="name">Lambda &middot; ship-webhook</div><div class="role">Always-on, fast-ack only, no model calls</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; ship-fragment-processor</div><div class="role">Independently-scaling, one flagged fragment per invocation</div></div>
     <div class="infra-item"><div class="name">SQS</div><div class="role">Fragment queue + dead-letter queue, concurrency-capped consumer</div></div>
-    <div class="infra-item"><div class="name">Bedrock AgentCore Runtime</div><div class="role">Deployed Diagnostician agent, callable remotely from either Lambda</div></div>
-    <div class="infra-item"><div class="name">Bedrock &middot; Claude Haiku 4.5</div><div class="role">Primary reasoning model</div></div>
+    <div class="infra-item"><div class="name">Bedrock AgentCore Runtime</div><div class="role">Deployed Detector agent, callable remotely from either Lambda</div></div>
+    <div class="infra-item"><div class="name">Bedrock &middot; Amazon Nova Lite</div><div class="role">Primary reasoning model &mdash; picked over Claude Haiku 4.5 on a measured benchmark: same accuracy, 20&times; the request quota</div></div>
     <div class="infra-item"><div class="name">Bedrock Titan Embeddings</div><div class="role">Regulation-corpus retrieval</div></div>
-    <div class="infra-item"><div class="name">DynamoDB</div><div class="role">Idempotent alert storage, the Attending dashboard's source of truth</div></div>
-    <div class="infra-item"><div class="name">FastAPI + Mangum</div><div class="role">Webhook route and the Attending dashboard, one deployable app</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-alerts</div><div class="role">Idempotent alert storage, Gate's source of truth</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-repos</div><div class="role">Connected repositories &mdash; the webhook's allowlist, point lookup</div></div>
+    <div class="infra-item"><div class="name">FastAPI + Mangum</div><div class="role">Webhook route and the Gate dashboard, one deployable app</div></div>
   </div>
   <div class="zone-note" style="margin-top:14px">Two fallback model backends exist alongside Bedrock, switchable via one environment variable, both genuinely functional rather than unverified stretch goals: Google Gemini (for AWS credit exhaustion) and a local Ollama model (for a fully offline path with zero external dependency).</div>
 </div>

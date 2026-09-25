@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SHIP — Gate — Connected repos</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 780px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.3rem; }
+    .subtitle { color: #666; margin-bottom: 2rem; }
+    .nav { margin-bottom: 1.25rem; font-size: 0.9rem; }
+    .nav a { color: #666; text-decoration: none; margin-right: 1rem; }
+    .nav a:hover { text-decoration: underline; }
+    .repo { border: 1px solid #ddd; border-radius: 8px; padding: 0.85rem 1.1rem; margin-bottom: 0.75rem;
+            display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .repo .name { font-weight: 600; }
+    .repo .meta { color: #666; font-size: 0.82rem; margin-top: 0.15rem; }
+    .status { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
+              text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; margin-right: 0.5rem; }
+    .status.watching { background: #27ae60; color: white; }
+    .status.awaiting_first_event { background: #999; color: white; }
+    .disconnect { background: none; border: 1px solid #c0392b; color: #c0392b; border-radius: 6px;
+                  padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
+    .connect-form { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.5rem 0; }
+    .connect-form label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+    .connect-form input { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.92rem;
+      padding: 0.5rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 0.7rem; }
+    .connect-form button { background: #1a1a1a; color: white; border: none; border-radius: 6px;
+      padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; }
+    .empty { color: #666; padding: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>SHIP — Gate</h1>
+  <div class="nav">
+    <a href="/dashboard">Active</a>
+    <a href="/dashboard/history">History</a>
+    <a href="/dashboard/repos"><strong>Connected repos</strong></a>
+    <a href="/dashboard/logout" style="float:right">Sign out</a>
+  </div>
+  <div class="subtitle">Repositories SHIP watches. A webhook delivery for any other repo is rejected before it spends a GitHub token or Bedrock call.</div>
+
+  {% if repos %}
+    {% for repo in repos %}
+    <div class="repo">
+      <div>
+        <div class="name">{{ repo.repo_full_name }}</div>
+        <div class="meta">
+          <span class="status {{ repo.status }}">{{ "watching" if repo.status == "watching" else "awaiting first event" }}</span>
+          connected {{ repo.connected_at }}{% if repo.connected_by %} by {{ repo.connected_by }}{% endif %}
+          {% if repo.last_event_at %} &middot; last delivery {{ repo.last_event_at }}{% endif %}
+        </div>
+      </div>
+      <form method="post" action="/dashboard/repos/{{ repo.repo_full_name }}/disconnect"
+            onsubmit="return confirm('Disconnect {{ repo.repo_full_name }}? Future webhook deliveries for it will be rejected.');">
+        <button class="disconnect" type="submit">Disconnect</button>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">No repositories connected yet.</div>
+  {% endif %}
+
+  <form class="connect-form" method="post" action="/dashboard/repos/connect">
+    <label for="repo_full_name">Connect a repository</label>
+    <input id="repo_full_name" name="repo_full_name" type="text" placeholder="owner/repo" required
+           pattern="[^/\s]+/[^/\s]+" title="owner/repo">
+    <button type="submit">Connect</button>
+  </form>
+</body>
+</html>

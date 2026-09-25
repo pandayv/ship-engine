@@ -1,5 +1,5 @@
 """
-FastAPI webhook ingestion — wires Screener -> Diagnostician -> Triage -> alert_store.
+FastAPI webhook ingestion — wires Screener -> Detector -> Triage -> alert_store.
 
 Deliberately kept as a plain FastAPI service rather than API Gateway (see
 ship_roadmap.md's AWS-native stack section for why FastAPI over Lambda's
@@ -14,7 +14,7 @@ returns immediately.
 
 2026-09-05 — parallel per-fragment dispatch (replaces the original single-
 Lambda async design): a live end-to-end test proved the original design —
-one Lambda invocation sequentially diagnosing every escalated fragment in
+one Lambda invocation sequentially detecting every escalated fragment in
 a PR — could be silently killed mid-review by AWS Lambda's hard, non-
 negotiable 900-second function timeout the moment a PR had 3+ escalated
 fragments across categories (2 fragments alone consumed the full budget
@@ -29,7 +29,7 @@ fragment-processing Lambda (see fragment_lambda_handler.py at the repo
 root) instead of being processed sequentially inside one Lambda
 invocation. Fragments for the same PR can run concurrently, so a multi-
 issue PR takes roughly as long as its slowest single fragment, not the
-sum of all of them — and no single fragment's slow diagnosis risks
+sum of all of them — and no single fragment's slow detection risks
 starving the ones after it of remaining time budget. process_pr() is kept
 as the synchronous, sequential fallback used when no queue is configured
 (SHIP_FRAGMENT_QUEUE_URL unset) — local dev and the test suite keep
@@ -88,13 +88,14 @@ import os
 import requests
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from src.agents.diagnostician import diagnose
+from src.agents.detector import detect
 from src.agents.screener import isolate_fragment, scan, split_diff_into_fragments
 from src.agents.triage import route
 from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_diff, is_pr_event
 from src.api.github_writeback import comment_for_finding, post_pr_comment, sync_pr_check
 from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
+from src.storage.repo_store import is_watched, mark_event_seen
 
 app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
@@ -120,7 +121,6 @@ GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 ALLOW_UNSIGNED = os.environ.get("SHIP_ALLOW_UNSIGNED", "").lower() == "true"
 FRAGMENT_QUEUE_URL = os.environ.get("SHIP_FRAGMENT_QUEUE_URL", "")
 SQS_MESSAGE_SIZE_LIMIT = 250_000  # bytes; AWS's real cap is 256KB, small margin for JSON overhead
-ALLOWED_REPOS = {r.strip() for r in os.environ.get("SHIP_ALLOWED_REPOS", "pandayv/micro-finance").split(",") if r.strip()}
 
 
 def _verify_signature(payload_body: bytes, signature_header: str | None) -> None:
@@ -143,7 +143,7 @@ def health() -> dict:
 def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fragment: str,
                      head_sha: str = "") -> dict:
     """
-    Diagnose, route, and (if frozen) store the verdict for ONE already-
+    Detect, route, and (if frozen) store the verdict for ONE already-
     escalated, already-isolated code fragment. This is the actual unit of
     work — extracted 2026-09-05 so there's exactly one implementation of
     "what happens to one fragment" shared by process_pr()'s sequential
@@ -157,24 +157,24 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
     sequential run (finding #8); the SQS handler wants the exception to
     propagate so SQS's own retry/DLQ mechanism handles it instead.
     """
-    diag = diagnose(isolated_fragment)  # requires AWS credentials — will raise if not configured
+    verdict = detect(isolated_fragment)  # requires AWS credentials — will raise if not configured
 
-    # finding #24: route() now takes DiagnosticianOutput directly — no more
-    # hand-copying every field into a separate, duplicate DiagnosticianVerdict
+    # finding #24: route() now takes DetectorOutput directly — no more
+    # hand-copying every field into a separate, duplicate DetectorVerdict
     # shape first.
-    decision = route(diag)
+    decision = route(verdict)
 
     alert_id = None
     if decision.creates_alert:
         # Both blocking (FREEZE) and non-blocking (REVIEW) findings create
-        # an Attending record — that middle band exists precisely so a
+        # a Gate record — that middle band exists precisely so a
         # confirmed-but-not-severe finding reaches a human instead of
         # disappearing into a log. Only the severity recorded on the alert
         # differs. Below-review-floor and dismissed-false-positive cases
         # are still not persisted.
         # finding #28: taxonomy_id/risk_score/citation/plain_english_summary
         # no longer need an `or <default>` fallback here — reaching FREEZE
-        # requires matched=True, and DiagnosticianOutput's own validator
+        # requires matched=True, and DetectorOutput's own validator
         # (finding #46) already guarantees those four are non-None whenever
         # matched=True. remediation_patch is the one field that validator
         # deliberately does NOT enforce (a legitimately optional field), so
@@ -183,7 +183,7 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # alert_id used to be derived from (repo, pr_number, file,
         # taxonomy_id) alone — too coarse. Two different violations of the
         # same taxonomy_id in the same file collided on the identical id.
-        # Passing the isolated fragment text (exactly what Diagnostician
+        # Passing the isolated fragment text (exactly what Detector
         # actually judged) makes the id specific to THIS violation while a
         # real retry of the same violation still re-derives the identical
         # fragment text and correctly collides/overwrites, preserving
@@ -192,9 +192,9 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # fragment message is a safe no-op, not a duplicate alert.
         alert = put_alert(
             repo=repo_full_name, pr_number=pr_number, file=file,
-            taxonomy_id=diag.taxonomy_id, fragment_text=isolated_fragment, risk_score=diag.risk_score,
-            plain_english_summary=diag.plain_english_summary,
-            citation=diag.citation, remediation_patch=diag.remediation_patch or "",
+            taxonomy_id=verdict.taxonomy_id, fragment_text=isolated_fragment, risk_score=verdict.risk_score,
+            plain_english_summary=verdict.plain_english_summary,
+            citation=verdict.citation, remediation_patch=verdict.remediation_patch or "",
             severity=SEVERITY_BLOCKING if decision.blocks_build else SEVERITY_REVIEW,
             head_sha=head_sha,
         )  # requires dynamodb:* permissions
@@ -216,7 +216,7 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         "action": decision.action.value,
         "blocks_build": decision.blocks_build,
         "reason": decision.reason,
-        "diagnostician": diag.model_dump(),
+        "detector": verdict.model_dump(),
         "alert_id": alert_id,
     }
 
@@ -258,7 +258,7 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str, head_sha: st
                 "file": frag["file"],
                 "action": "error",
                 "reason": f"{type(e).__name__}: {e}",
-                "diagnostician": None,
+                "detector": None,
                 "alert_id": None,
             })
 
@@ -353,8 +353,19 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
         head_sha = extract_head_sha(payload)
         # finding #7: don't let a payload name an arbitrary repo and spend
         # this service's own GitHub token / Bedrock quota against it.
-        if repo_full_name not in ALLOWED_REPOS:
-            raise HTTPException(status_code=403, detail=f"Repo {repo_full_name!r} is not in the configured allowlist")
+        # Now a point lookup against the connected-repositories table
+        # rather than a parsed environment variable, so connecting a repo
+        # is a dashboard action instead of a redeploy, and the check stays
+        # constant-time as that list grows. Fails closed on a datastore
+        # error — see src/storage/repo_store.py's SECURITY NOTE.
+        if not is_watched(repo_full_name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Repo {repo_full_name!r} is not connected to SHIP",
+            )
+        # Best-effort: flips the repo from "awaiting first event" to
+        # "watching" in the dashboard. Never allowed to fail the delivery.
+        mark_event_seen(repo_full_name)
         # finding #62: fetch_pr_diff()'s raise_for_status() was uncaught
         # right here, in the "fast, reliable" leg specifically meant not
         # to crash — a closed/deleted PR, an expired token, or a transient

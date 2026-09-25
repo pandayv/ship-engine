@@ -37,7 +37,10 @@ def _signed_post(client, payload_bytes, secret):
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(main_module, "GITHUB_WEBHOOK_SECRET", "test-secret")
-    monkeypatch.setattr(main_module, "ALLOWED_REPOS", {"pandayv/micro-finance"})
+    # The allowlist is a table lookup now, not a parsed env var — stub the
+    # check itself so this test stays about upstream GitHub failures.
+    monkeypatch.setattr(main_module, "is_watched", lambda repo: repo == "pandayv/micro-finance")
+    monkeypatch.setattr(main_module, "mark_event_seen", lambda repo: None)
     return TestClient(app)
 
 
