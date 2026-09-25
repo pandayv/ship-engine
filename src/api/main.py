@@ -96,6 +96,7 @@ from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_dif
 from src.api.github_writeback import comment_for_finding, post_pr_comment, sync_pr_check
 from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
 from src.storage.repo_store import is_watched, mark_event_seen
+from src.storage.status_store import refresh_summary
 
 app = FastAPI(title="SHIP")
 app.include_router(dashboard_router)
@@ -208,6 +209,11 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # purely to redeliver a comment.
         post_pr_comment(repo_full_name, pr_number, comment_for_finding(alert))
         sync_pr_check(repo_full_name, pr_number, head_sha)
+        # Rebuild the summary Herald reads. Done here, on the write side,
+        # because this invocation has a 900s budget while Herald has 500ms
+        # (see src/storage/status_store.py). Best-effort: the alert is
+        # already stored, and the next finding or decision re-refreshes.
+        refresh_summary()
 
     log.info("fragment result: file=%s action=%s blocks_build=%s alert_id=%s",
              file, decision.action.value, decision.blocks_build, alert_id)
