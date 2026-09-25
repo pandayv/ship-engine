@@ -180,14 +180,58 @@ def test_refusal_routes_to_a_surface_where_the_decision_can_be_made(one_blocking
 # --- routing ---
 
 
-def test_display_on_routes_to_the_chosen_surface(one_blocking):
-    result = relay.display_on("TV")
-    assert result["surface"] == "tv"
-    assert "tv" in result["spoken_response"].lower()
+def test_display_on_here_never_touches_the_push_path(one_blocking, monkeypatch):
+    # "here" means the asking device renders its own copy — no push, no
+    # network call. Proven by making push_to_device explode if it's ever
+    # called, not just by asserting the surface name.
+    def _must_not_be_called(*a, **k):
+        raise AssertionError("display_on('here') must not call push_to_device")
+    monkeypatch.setattr(relay, "push_to_device", _must_not_be_called)
+
+    result = relay.display_on("")
+    assert result["surface"] == "here"
+    assert result["delivered"] is True
 
 
-def test_display_on_defaults_to_here_when_unspecified(one_blocking):
-    assert relay.display_on("")["surface"] == "here"
+def test_display_on_pushes_to_a_connected_device(one_blocking, monkeypatch):
+    calls = []
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: calls.append((name, payload)) or {
+        "delivered_to": ["conn-1"], "not_connected": False,
+    })
+
+    result = relay.display_on("iPad")
+    assert calls[0][0] == "ipad"  # normalised to lowercase before pushing
+    assert result["delivered"] is True
+    assert "ipad" in result["spoken_response"].lower()
+    assert "putting it on" in result["spoken_response"].lower()
+
+
+def test_display_on_reports_honestly_when_nothing_is_connected(one_blocking, monkeypatch):
+    # The device not being connected is a routine, expected case (an
+    # ambient display that happens to be off) — not an error, but the
+    # spoken response must say so honestly rather than claim delivery
+    # that didn't happen.
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {
+        "delivered_to": [], "not_connected": True,
+    })
+
+    result = relay.display_on("fridge")
+    assert result["delivered"] is False
+    assert "don't see" in result["spoken_response"].lower()
+
+
+def test_display_on_pushes_the_real_findings_payload(one_blocking, monkeypatch):
+    # What actually gets pushed must be the same shape blocked_pull_requests
+    # itself returns — a display page renders it with the identical code
+    # path as the simulator's own local "show here" case.
+    captured = {}
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: captured.update(payload=payload) or {
+        "delivered_to": ["c1"], "not_connected": False,
+    })
+
+    relay.display_on("tv")
+    assert captured["payload"]["display_only"] is True
+    assert captured["payload"]["pull_requests"][0]["repo"] == "pandayv/micro-finance"
 
 
 # --- the summary voice is allowed to give ---

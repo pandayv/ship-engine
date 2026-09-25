@@ -210,7 +210,9 @@ footer a { color: inherit; }
 
     <div class="surface-offer" id="surfaceOffer">
       <button data-surface="tv">📺 TV</button>
+      <button data-surface="ipad">📱 iPad</button>
       <button data-surface="laptop">💻 Laptop</button>
+      <button data-surface="fridge">🧊 Fridge</button>
       <button data-surface="here">Show here</button>
     </div>
   </div>
@@ -228,6 +230,7 @@ footer a { color: inherit; }
   </footer>
 </div>
 
+<script src="ship-render.js"></script>
 <script>
 "use strict";
 
@@ -344,38 +347,9 @@ async function showOn(surface) {
 }
 
 function renderScreen(label, payload) {
-  screenBar.textContent = label + " · SHIP release status";
   screenWrap.classList.add("show");
-
-  if (!payload || !payload.pull_requests || !payload.pull_requests.length) {
-    screenBody.innerHTML = '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
-    return;
-  }
-
-  let html = "";
-  for (const pr of payload.pull_requests) {
-    for (const f of pr.findings) {
-      html +=
-        '<div class="finding ' + (f.blocks_merge ? "blocking" : "review") + '">' +
-          '<div class="f-top">' +
-            '<span class="pill ' + (f.blocks_merge ? "blocking" : "review") + '">' +
-              (f.blocks_merge ? "Merge blocked" : "Flagged") + "</span>" +
-            '<span class="f-file">' + esc(pr.repo) + " #" + pr.pr_number + " &middot; " + esc(f.file) + "</span>" +
-          "</div>" +
-          '<p class="f-what">' + esc(f.what_is_wrong) + "</p>" +
-          '<span class="f-cite">' + esc(f.citation) + "</span>" +
-        "</div>";
-    }
-  }
-  screenBody.innerHTML = html || '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
-
-  const decisionBox = document.createElement("div");
-  decisionBox.className = "decision-box show";
-  decisionBox.innerHTML =
-    '<div class="decision-head">Making the call</div>' +
-    '<div class="decision-body">Accepting a risk or confirming a fix happens in Gate, with a typed, attributed reason — not from this screen and never by voice.</div>' +
-    '<a class="console-link" href="' + (window.SHIP_CONSOLE_URL || "#") + '" target="_blank" rel="noopener">Open the review console →</a>';
-  screenBody.appendChild(decisionBox);
+  shipRenderFindings(screenBar, screenBody, label + " · SHIP release status", payload,
+    { consoleUrl: window.SHIP_CONSOLE_URL || "#" });
 }
 
 askBtn.addEventListener("click", ask);
