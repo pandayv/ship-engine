@@ -1,0 +1,24 @@
+# Runtime dependency set for ship-relay's Lambda deployment. Scoped the
+# same way requirements-lambda.txt is scoped for ship-webhook: only what
+# mcp's Streamable HTTP transport actually executes on the request path.
+# Deliberately excludes uvicorn, typer, rich, websockets, python-dotenv,
+# pywin32 — the mcp package's optional 'cli'/'rich'/'ws' extras, present
+# in requirements.txt only because the mcp SDK is also used elsewhere in
+# this project, none of which apply to a Lambda function that never runs
+# a local dev server and never uses the CLI. boto3/botocore are already
+# present in the Lambda Python runtime and excluded here, same as
+# requirements-lambda.txt.
+mcp==1.29.1
+mangum
+starlette
+sse-starlette
+httpx
+httpx-sse
+jsonschema
+pydantic
+pydantic-settings
+pyjwt
+python-multipart
+anyio
+typing-extensions
+typing-inspection

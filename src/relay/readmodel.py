@@ -1,14 +1,14 @@
 """
-Herald's read layer. Aggregates already-stored findings into the shapes
+Relay's read layer. Aggregates already-stored findings into the shapes
 its tools return — and nothing else.
 
 THE LATENCY BUDGET IS THE ARCHITECTURE. Alexa+ requires a round-trip
 under 500 milliseconds. A real diagnosis takes roughly three seconds on
-Nova Lite, ten times the entire budget, so Herald can never trigger one.
+Nova Lite, ten times the entire budget, so Relay can never trigger one.
 Everything here reads findings Detector and Triage already produced and
 stored; nothing in this module calls a model, fetches a diff, or reaches
 GitHub. That is not a simplification for now — it is the only shape that
-fits, and it is why Herald genuinely adds no judgment of its own.
+fits, and it is why Relay genuinely adds no judgment of its own.
 
 Measured against the live endpoint on 2026-09-24: ~230 ms warm, ~2.3 s
 cold. Warm leaves roughly 270 ms of headroom for the read plus protocol
@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.herald.modality import Spoken
+from src.relay.modality import Spoken
 from src.storage.alert_store import SEVERITY_BLOCKING, Alert, list_active_alerts
 from src.storage.status_store import read_summary
 
@@ -80,7 +80,7 @@ class ReleaseStatus:
         return max(self.pull_requests, key=lambda p: (p.blocking, p.total))
 
     def to_spoken(self, screen_hint: str | None = None) -> Spoken:
-        """One sentence. Never a list — see src/herald/modality.py.
+        """One sentence. Never a list — see src/relay/modality.py.
 
         Deliberately does not name files, taxonomy ids, citations or risk
         scores. Those are screen facts. Voice answers only "is anything

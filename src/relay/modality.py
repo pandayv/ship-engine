@@ -1,5 +1,5 @@
 """
-The modality contract: every Herald tool declares which surface its output
+The modality contract: every Relay tool declares which surface its output
 is for, and that declaration is ENFORCED here rather than left to the
 calling assistant's judgment.
 
@@ -22,11 +22,11 @@ The cap below is the enforcement mechanism, and it is load-bearing. A
 SPEECH tool physically cannot return a list, because a list cannot fit in
 the budget and the tool raises if it tries. That means no future prompt,
 no assistant's own initiative, and no well-meaning change to a tool's
-implementation can quietly turn Herald into a narrator. The constraint
+implementation can quietly turn Relay into a narrator. The constraint
 lives in the server, where the client cannot argue with it.
 
 The same principle governs what is ABSENT: there is no tool here that
-accepts a compliance risk. See src/herald/server.py for why that absence
+accepts a compliance risk. See src/relay/server.py for why that absence
 is a feature rather than an unimplemented backlog item.
 """
 
