@@ -57,6 +57,7 @@ from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 
 from src.relay.modality import Modality, Spoken
+from src.relay.push import push_to_device
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
 from src.storage.alert_store import SEVERITY_BLOCKING, get_alert
@@ -219,20 +220,38 @@ def request_risk_acceptance(alert_id: str) -> dict:
 
 def display_on(surface: str) -> dict:
     """Route the current findings to a display surface the person chose —
-    for example "tv", "laptop", "phone", or "here". Use when someone says
-    "show me on the TV" or after release_status offers a screen."""
+    for example "tv", "ipad", "laptop", or "here". Use when someone says
+    "show me on the TV" or after release_status offers a screen.
+
+    "here" means the device asking — no push happens, the caller renders
+    its own copy via blocked_pull_requests, same as before this existed.
+    Any other name is a REAL push over that device's open WebSocket
+    connection (see src/relay/push.py) to whatever display page most
+    recently registered under that name — not a description of what
+    would happen, an actual delivery, reported honestly if the named
+    device isn't currently connected rather than pretending it worked."""
     normalised = (surface or "").strip().lower() or "here"
-    status = _release_status()
+
+    if normalised == "here":
+        return {
+            "modality": Modality.ACTION.value, "surface": normalised, "delivered": True,
+            "console_url": _console("/dashboard"),
+            "spoken_response": Spoken("Showing it here.").to_text(),
+        }
+
+    payload = blocked_pull_requests()
+    result = push_to_device(normalised, payload)
+    delivered = bool(result["delivered_to"])
+
     return {
         "modality": Modality.ACTION.value,
         "surface": normalised,
-        "payload": "blocked_pull_requests",
+        "delivered": delivered,
         "console_url": _console("/dashboard"),
         "spoken_response": Spoken(
-            f"Putting it on your {normalised}." if normalised != "here"
-            else "Showing it here."
+            f"Putting it on your {normalised}." if delivered
+            else f"I don't see a {normalised} connected right now."
         ).to_text(),
-        "summary": {"blocking": status.blocking, "flagged": status.review},
     }
 
 
