@@ -256,3 +256,79 @@ def test_relay_lambda_handler_serves_three_independent_invocations(monkeypatch):
 
     statuses = [relay_lambda_handler.handler(event(i), None)["statusCode"] for i in range(3)]
     assert statuses == [200, 200, 200]
+
+
+# --- CORS: a browser enforces this independently of transport_security ---
+
+
+def _cors_event(method, origin, extra_headers=None):
+    import json
+    headers = {"content-type": "application/json", "accept": "application/json, text/event-stream",
+               "host": "x.lambda-url.us-west-2.on.aws"}
+    if origin:
+        headers["origin"] = origin
+    if extra_headers:
+        headers.update(extra_headers)
+    return {
+        "version": "2.0", "routeKey": f"{method} /mcp", "rawPath": "/mcp", "rawQueryString": "",
+        "headers": headers,
+        "requestContext": {"http": {"method": method, "path": "/mcp", "sourceIp": "1.2.3.4"},
+                          "stage": "$default", "requestId": "t", "domainName": "x.lambda-url.us-west-2.on.aws"},
+        "body": json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}) if method == "POST" else None,
+        "isBase64Encoded": False,
+    }
+
+
+def test_allowed_origin_gets_real_cors_headers(monkeypatch):
+    # transport_security alone is a deny-gate: it rejects a disallowed
+    # origin, but a real local test proved it does NOT add
+    # Access-Control-Allow-Origin even for an allowed one. A browser
+    # enforces CORS independently of what the server permits — without
+    # this header, a genuine cross-origin fetch() would succeed on the
+    # wire and then be silently blocked from JS reading the response,
+    # visible only in a browser console, never to curl or this test suite
+    # if it only checked status codes.
+    import json
+
+    from mangum import Mangum
+
+    monkeypatch.setattr("src.relay.server.ALLOWED_HOSTS", ["x.lambda-url.us-west-2.on.aws"])
+    monkeypatch.setattr("src.relay.server.ALLOWED_ORIGINS", ["https://pandayv.github.io"])
+    monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: __import__(
+        "src.storage.status_store", fromlist=["ReleaseSummary"]).ReleaseSummary())
+
+    from src.relay.server import create_app
+
+    r = Mangum(create_app())(_cors_event("POST", "https://pandayv.github.io"), None)
+    assert r["statusCode"] == 200
+    assert r["headers"].get("access-control-allow-origin") == "https://pandayv.github.io"
+
+
+def test_disallowed_origin_is_rejected_with_no_cors_headers_leaked(monkeypatch):
+    from mangum import Mangum
+
+    monkeypatch.setattr("src.relay.server.ALLOWED_HOSTS", ["x.lambda-url.us-west-2.on.aws"])
+    monkeypatch.setattr("src.relay.server.ALLOWED_ORIGINS", ["https://pandayv.github.io"])
+
+    from src.relay.server import create_app
+
+    r = Mangum(create_app())(_cors_event("POST", "https://evil.example"), None)
+    assert r["statusCode"] == 403
+    assert "access-control-allow-origin" not in r["headers"]
+
+
+def test_preflight_options_request_succeeds(monkeypatch):
+    from mangum import Mangum
+
+    monkeypatch.setattr("src.relay.server.ALLOWED_HOSTS", ["x.lambda-url.us-west-2.on.aws"])
+    monkeypatch.setattr("src.relay.server.ALLOWED_ORIGINS", ["https://pandayv.github.io"])
+
+    from src.relay.server import create_app
+
+    event = _cors_event("OPTIONS", "https://pandayv.github.io", {
+        "access-control-request-method": "POST", "access-control-request-headers": "content-type",
+    })
+    r = Mangum(create_app())(event, None)
+    assert r["statusCode"] == 200
+    assert r["headers"].get("access-control-allow-origin") == "https://pandayv.github.io"
+    assert "POST" in r["headers"].get("access-control-allow-methods", "")
