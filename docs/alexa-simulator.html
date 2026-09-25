@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHIP — Alexa+ simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f2f4f2; --surface: #ffffff; --ink: #14181a; --ink-soft: #52605c;
+  --border: #dde3e0; --border-strong: #c7d0cc;
+  --agent: #0d6e5c; --agent-tint: #e6f2ef;
+  --infra: #3f5568; --infra-tint: #e7ecf0;
+  --data: #a15c1f; --data-tint: #f7ecdf;
+  --human: #b5432f; --human-tint: #fbeae6;
+  --blocked: #b5432f; --blocked-tint: #fbeae6;
+  --review: #a15c1f; --review-tint: #f7ecdf;
+  --muted-stroke: #b7c0bc; --muted-text: #8b968f;
+  --shadow: 0 1px 2px rgba(20,24,26,0.04), 0 6px 16px rgba(20,24,26,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+    --border: #2c3a37; --border-strong: #3c4d49;
+    --agent: #4fd9b8; --agent-tint: #16332c;
+    --infra: #9fb3c8; --infra-tint: #202b34;
+    --data: #e0a052; --data-tint: #3a2a15;
+    --human: #e2735c; --human-tint: #3a2019;
+    --blocked: #e2735c; --blocked-tint: #3a2019;
+    --review: #e0a052; --review-tint: #3a2a15;
+    --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181a; --surface: #1a2225; --ink: #eef2ef; --ink-soft: #a9b6b1;
+  --border: #2c3a37; --border-strong: #3c4d49;
+  --agent: #4fd9b8; --agent-tint: #16332c;
+  --infra: #9fb3c8; --infra-tint: #202b34;
+  --data: #e0a052; --data-tint: #3a2a15;
+  --human: #e2735c; --human-tint: #3a2019;
+  --blocked: #e2735c; --blocked-tint: #3a2019;
+  --review: #e0a052; --review-tint: #3a2a15;
+  --muted-stroke: #3c4a46; --muted-text: #5f6b67;
+  --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 8px 20px rgba(0,0,0,0.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px; line-height: 1.55;
+}
+.page { max-width: 900px; margin: 0 auto; padding: 32px 22px 80px; }
+.eyebrow {
+  font-family: "JetBrains Mono", monospace; font-size: 11.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+h1 { font-family: "Fraunces", Georgia, serif; font-size: 1.7rem; font-weight: 600; margin: 6px 0 8px; }
+.dek { color: var(--ink-soft); max-width: 64ch; margin: 0 0 8px; }
+.provenance {
+  font-size: 12.5px; color: var(--ink-soft); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 26px;
+}
+.provenance a { color: var(--agent); }
+
+/* ---- the device panel ---- */
+.device {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow); padding: 26px 26px 22px; margin-bottom: 22px;
+}
+.device-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.ring {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  background: radial-gradient(circle at 35% 30%, var(--agent), var(--infra) 130%);
+  box-shadow: 0 0 0 4px var(--agent-tint);
+  transition: box-shadow .4s ease;
+}
+.ring.alert { box-shadow: 0 0 0 4px var(--blocked-tint), 0 0 18px 2px var(--blocked); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+.device-name { font-weight: 600; }
+.device-status { font-size: 12.5px; color: var(--ink-soft); }
+
+.transcript { display: flex; flex-direction: column; gap: 10px; min-height: 46px; margin-bottom: 18px; }
+.bubble {
+  max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14.5px;
+  opacity: 0; transform: translateY(4px); animation: in .35s ease forwards;
+}
+@keyframes in { to { opacity: 1; transform: translateY(0); } }
+.bubble.user { align-self: flex-end; background: var(--infra-tint); color: var(--ink); border-bottom-right-radius: 3px; }
+.bubble.assistant { align-self: flex-start; background: var(--agent-tint); color: var(--ink); border-bottom-left-radius: 3px; }
+.bubble.assistant b { color: var(--agent); }
+.bubble.thinking { align-self: flex-start; color: var(--ink-soft); font-style: italic; }
+
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input.ask {
+  flex: 1; min-width: 180px; font: inherit; font-size: 14.5px; padding: 10px 13px;
+  border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); color: var(--ink);
+}
+input.ask:focus-visible { outline: 2px solid var(--agent); outline-offset: 1px; }
+button {
+  font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  padding: 9px 15px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--ink);
+}
+button:hover { border-color: var(--ink-soft); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--agent); border-color: var(--agent); color: var(--surface); }
+:root[data-theme="dark"] button.primary, :root:not([data-theme="light"]) button.primary { color: #0e1414; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) button.primary { color: #fff; } }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.preset {
+  font-size: 12.5px; padding: 5px 10px; border-radius: 20px; border: 1px dashed var(--border-strong);
+  background: none; color: var(--ink-soft); font-weight: 500;
+}
+.preset:hover { border-color: var(--agent); color: var(--agent); }
+
+.surface-offer { display: none; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.surface-offer.show { display: flex; }
+.surface-offer button { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+
+/* ---- the revealed screen (TV / laptop) ---- */
+.screen-wrap { display: none; }
+.screen-wrap.show { display: block; animation: in .35s ease; }
+.screen {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.screen-bar {
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+  background: var(--infra-tint); font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+  letter-spacing: .04em; color: var(--infra); text-transform: uppercase;
+}
+.screen-body { padding: 18px 20px 22px; }
+.finding {
+  border: 1px solid var(--border); border-left: 3px solid var(--stripe, var(--border-strong));
+  border-radius: 9px; padding: 13px 15px; margin-bottom: 10px;
+}
+.finding.blocking { --stripe: var(--blocked); }
+.finding.review { --stripe: var(--review); }
+.f-top { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.pill {
+  font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600;
+  letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+}
+.pill.blocking { background: var(--blocked-tint); color: var(--blocked); }
+.pill.review { background: var(--review-tint); color: var(--review); }
+.f-file { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-soft); }
+.f-what { margin: 0 0 6px; font-size: 14px; }
+.f-cite {
+  display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 11px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; color: var(--ink-soft);
+}
+.empty-state { color: var(--ink-soft); text-align: center; padding: 20px; font-size: 13.5px; }
+
+/* ---- decision box: proves the refusal is real ---- */
+.decision-box {
+  border-top: 1px dashed var(--border); margin-top: 14px; padding-top: 14px; display: none;
+}
+.decision-box.show { display: block; }
+.decision-head { font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
+.decision-body { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; }
+.decision-box a.console-link {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+  color: var(--agent); text-decoration: none; border: 1px solid var(--agent); border-radius: 8px; padding: 7px 12px;
+}
+.decision-box a.console-link:hover { background: var(--agent-tint); }
+
+footer { margin-top: 30px; font-size: 12px; color: var(--ink-soft); font-family: "JetBrains Mono", monospace; }
+footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">SHIP &middot; Alexa+ simulation</div>
+  <h1>Ask what's going on. See it on a screen.</h1>
+  <p class="dek">A web simulation of the Alexa+ interaction, calling SHIP's real, deployed MCP
+    server (Relay) over Streamable HTTP — not a mock. Voice states a count and a destination;
+    the findings themselves only ever render on a screen.</p>
+  <div class="provenance">
+    Built per the Alexa+ track's own submission rules, which explicitly permit
+    <em>"a simulated Alexa+ experience in a web app"</em> as an alternative to a live device
+    connection. Every response below comes from a real <code>tools/call</code> request to
+    Relay's production endpoint — open your browser's network tab if you'd like to see it.
+    (Why a simulation and not the real CLI/device path: see
+    <a href="https://github.com/pandayv/ship-engine/blob/main/FRICTION_LOG.md" target="_blank" rel="noopener">FRICTION_LOG.md</a>.)
+  </div>
+
+  <div class="device">
+    <div class="device-head">
+      <div class="ring" id="ring"></div>
+      <div>
+        <div class="device-name">Echo (simulated)</div>
+        <div class="device-status" id="deviceStatus">Ambient — light ring only, no speech, until asked</div>
+      </div>
+    </div>
+
+    <div class="transcript" id="transcript"></div>
+
+    <div class="controls">
+      <input class="ask" id="askInput" type="text" placeholder="Type what you'd say to Alexa…" value="Alexa, what's up?">
+      <button class="primary" id="askBtn">Ask</button>
+    </div>
+    <div class="presets">
+      <button class="preset" data-q="Alexa, what's up?">"What's up?"</button>
+      <button class="preset" data-q="Alexa, can we ship today?">"Can we ship today?"</button>
+      <button class="preset" data-q="Alexa, approve it.">"Approve it." (tries the risk-acceptance tool)</button>
+    </div>
+
+    <div class="surface-offer" id="surfaceOffer">
+      <button data-surface="tv">📺 TV</button>
+      <button data-surface="laptop">💻 Laptop</button>
+      <button data-surface="here">Show here</button>
+    </div>
+  </div>
+
+  <div class="screen-wrap" id="screenWrap">
+    <div class="screen">
+      <div class="screen-bar" id="screenBar">Fire TV &middot; SHIP release status</div>
+      <div class="screen-body" id="screenBody"></div>
+    </div>
+  </div>
+
+  <footer>
+    Relay endpoint: <code id="endpointLabel">…</code> &middot;
+    <a href="https://github.com/pandayv/ship-engine" target="_blank" rel="noopener">source</a>
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+// Deliberately no token in this URL — this page is public. Linking to
+// the bare /dashboard path lets Gate's own real login page handle auth,
+// rather than embedding SHIP_DASHBOARD_TOKEN in client-side source where
+// anyone viewing this page could read it.
+window.SHIP_CONSOLE_URL = "https://4zhv74th2inxjfsgintyvclor40akgwf.lambda-url.us-west-2.on.aws/dashboard";
+
+const RELAY_URL = "https://4f5g7mxyhhhhctmbagr5syfloa0airkl.lambda-url.us-west-2.on.aws/mcp";
+document.getElementById("endpointLabel").textContent = RELAY_URL;
+
+const transcript = document.getElementById("transcript");
+const ring = document.getElementById("ring");
+const deviceStatus = document.getElementById("deviceStatus");
+const surfaceOffer = document.getElementById("surfaceOffer");
+const screenWrap = document.getElementById("screenWrap");
+const screenBar = document.getElementById("screenBar");
+const screenBody = document.getElementById("screenBody");
+const askInput = document.getElementById("askInput");
+const askBtn = document.getElementById("askBtn");
+
+let reqId = 0;
+
+async function callTool(name, args) {
+  // Every tool's real, observed response shape (checked directly against
+  // the deployed endpoint, not assumed): a plain string return
+  // (release_status) lands as plain text in content[0].text. A dict
+  // return (every other tool) has NO structuredContent at all — FastMCP
+  // can't infer a JSON schema from a bare `-> dict` annotation, so it
+  // falls back to JSON-stringifying the dict INSIDE content[0].text
+  // instead. One parse attempt here covers both shapes correctly: it
+  // succeeds for every dict-returning tool and throws (falling back to
+  // the plain string) for release_status's sentence.
+  reqId += 1;
+  const res = await fetch(RELAY_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: reqId, method: "tools/call", params: { name, arguments: args || {} } }),
+  });
+  if (!res.ok) throw new Error("Relay returned HTTP " + res.status);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || "Relay returned an error");
+  const contentText = data.result && data.result.content && data.result.content[0] && data.result.content[0].text;
+  let payload;
+  try { payload = JSON.parse(contentText); } catch { payload = contentText; }
+  return { text: contentText, payload };
+}
+
+function addBubble(kind, html) {
+  const el = document.createElement("div");
+  el.className = "bubble " + kind;
+  el.innerHTML = html;
+  transcript.appendChild(el);
+  return el;
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function ask() {
+  const q = askInput.value.trim();
+  if (!q) return;
+  askBtn.disabled = true;
+  surfaceOffer.classList.remove("show");
+  addBubble("user", esc(q));
+  const thinking = addBubble("thinking", "listening…");
+
+  const wantsApprove = /\bapprove\b|\baccept\b|\bclear\b|\boverride\b/i.test(q);
+
+  try {
+    if (wantsApprove) {
+      // No spoken query resolves this locally to a specific alert_id in
+      // the simulator — in the real product a voice session would carry
+      // the alert from context. For the demo, this calls the SAME tool
+      // Relay actually exposes with a representative id, to show the
+      // real refusal path live, not a scripted one.
+      const r = await callTool("request_risk_acceptance", { alert_id: "demo" });
+      thinking.remove();
+      addBubble("assistant", esc(r.payload.spoken_response));
+      deviceStatus.textContent = "Refused — a compliance decision needs a written reason, not a voice command";
+      ring.classList.remove("alert");
+    } else {
+      const r = await callTool("release_status", {});
+      thinking.remove();
+      const spoken = r.text;
+      addBubble("assistant", "<b>Alexa</b> — " + esc(spoken));
+      const blocked = /blocking/i.test(spoken) && !/^nothing is blocked/i.test(spoken);
+      ring.classList.toggle("alert", blocked);
+      deviceStatus.textContent = blocked ? "Findings waiting — choose a screen to see them" : "All clear";
+      if (/screen/i.test(spoken)) surfaceOffer.classList.add("show");
+    }
+  } catch (err) {
+    thinking.remove();
+    addBubble("assistant", "Couldn't reach Relay: " + esc(err.message));
+  } finally {
+    askBtn.disabled = false;
+  }
+}
+
+async function showOn(surface) {
+  surfaceOffer.classList.remove("show");
+  const label = { tv: "Fire TV", laptop: "Laptop", here: "This device" }[surface] || surface;
+  addBubble("assistant", "Putting it on your " + esc(label.toLowerCase()) + "…");
+
+  try {
+    await callTool("display_on", { surface });
+    const r = await callTool("blocked_pull_requests", {});
+    renderScreen(label, r.payload);
+  } catch (err) {
+    addBubble("assistant", "Couldn't load the screen: " + esc(err.message));
+  }
+}
+
+function renderScreen(label, payload) {
+  screenBar.textContent = label + " · SHIP release status";
+  screenWrap.classList.add("show");
+
+  if (!payload || !payload.pull_requests || !payload.pull_requests.length) {
+    screenBody.innerHTML = '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
+    return;
+  }
+
+  let html = "";
+  for (const pr of payload.pull_requests) {
+    for (const f of pr.findings) {
+      html +=
+        '<div class="finding ' + (f.blocks_merge ? "blocking" : "review") + '">' +
+          '<div class="f-top">' +
+            '<span class="pill ' + (f.blocks_merge ? "blocking" : "review") + '">' +
+              (f.blocks_merge ? "Merge blocked" : "Flagged") + "</span>" +
+            '<span class="f-file">' + esc(pr.repo) + " #" + pr.pr_number + " &middot; " + esc(f.file) + "</span>" +
+          "</div>" +
+          '<p class="f-what">' + esc(f.what_is_wrong) + "</p>" +
+          '<span class="f-cite">' + esc(f.citation) + "</span>" +
+        "</div>";
+    }
+  }
+  screenBody.innerHTML = html || '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
+
+  const decisionBox = document.createElement("div");
+  decisionBox.className = "decision-box show";
+  decisionBox.innerHTML =
+    '<div class="decision-head">Making the call</div>' +
+    '<div class="decision-body">Accepting a risk or confirming a fix happens in Gate, with a typed, attributed reason — not from this screen and never by voice.</div>' +
+    '<a class="console-link" href="' + (window.SHIP_CONSOLE_URL || "#") + '" target="_blank" rel="noopener">Open the review console →</a>';
+  screenBody.appendChild(decisionBox);
+}
+
+askBtn.addEventListener("click", ask);
+askInput.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+document.querySelectorAll(".preset").forEach(b => b.addEventListener("click", () => { askInput.value = b.dataset.q; ask(); }));
+surfaceOffer.addEventListener("click", e => {
+  const b = e.target.closest("button[data-surface]");
+  if (b) showOn(b.dataset.surface);
+});
+</script>
+</body>
+</html>
