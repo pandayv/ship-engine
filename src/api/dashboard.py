@@ -175,7 +175,7 @@ def _resolve(alert_id: str, request: Request, token: str | None, approved: bool,
         comment_for_decision(alert, accepted=approved, reason=reason, who=_reviewer_name()),
     )
     sync_pr_check(alert.repo, alert.pr_number, alert.head_sha)
-    # A resolved finding changes what Herald should say next time it is
+    # A resolved finding changes what Relay should say next time it is
     # asked, so the summary is refreshed here too.
     refresh_summary()
 

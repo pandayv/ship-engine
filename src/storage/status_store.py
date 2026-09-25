@@ -1,5 +1,5 @@
 """
-The pre-computed release summary — the single item Herald reads.
+The pre-computed release summary — the single item Relay reads.
 
 WHY THIS EXISTS. Alexa+ allows a round trip of under 500 milliseconds, and
 that budget is spent before a person hears anything. Aggregating findings
@@ -7,7 +7,7 @@ on demand fails the wrong way: it is fast today only because there are few
 findings, and it gets slower precisely as SHIP becomes more useful. So the
 aggregation moves to the write side, where the budget actually exists — a
 fragment processor has a 900-second ceiling and can afford to recompute;
-Herald has half a second and can only afford one GetItem.
+Relay has half a second and can only afford one GetItem.
 
 RECOMPUTED, NOT INCREMENTED. Every writer rebuilds the whole summary from
 the alerts table rather than adjusting a counter. That costs more per
@@ -101,7 +101,7 @@ def create_table_if_not_exists() -> None:
 
 def compute_summary() -> ReleaseSummary:
     """Rebuilds the summary from the alerts table. Called on the WRITE path
-    only — never by Herald, which must not pay this cost."""
+    only — never by Relay, which must not pay this cost."""
     from src.storage.alert_store import SEVERITY_BLOCKING, list_active_alerts
 
     buckets: dict[tuple[str, int], list] = {}
@@ -137,13 +137,13 @@ def refresh_summary() -> ReleaseSummary:
         item = {"summary_id": SUMMARY_KEY, **asdict(summary)}
         _table().put_item(Item=item)
     except Exception:
-        log.exception("could not refresh the release summary — Herald may serve a stale count "
+        log.exception("could not refresh the release summary — Relay may serve a stale count "
                       "until the next finding or decision triggers another refresh")
     return summary
 
 
 def read_summary() -> ReleaseSummary:
-    """Herald's entire read path: one GetItem, no aggregation, no scan.
+    """Relay's entire read path: one GetItem, no aggregation, no scan.
 
     An empty or unreadable summary reports "nothing blocked" rather than
     raising. That is the honest degradation for a voice surface — the
