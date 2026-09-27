@@ -3,10 +3,15 @@
 **Every AI feature your team ships is also a decision nobody signed off
 on.** SHIP is an AI reviewer that reads every pull request the moment it
 opens, catches the ones that quietly cross a real legal line, and only
-ever interrupts a human when it's actually found something.
+ever interrupts a human when it's actually found something. Ask it what's
+going on out loud, and it'll tell you — and put the actual findings on
+whatever screen is nearby, never in your ear.
 
-Built for the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
-(Strands Agents SDK, Professional Agents track).
+Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
+(Alexa+ track, AWS Builder mini-challenge). The core review engine started
+life as an entry to the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
+(Strands Agents SDK) — see [Built across two hackathons](#built-across-two-hackathons)
+for exactly what changed during this submission window.
 
 ---
 
@@ -21,11 +26,19 @@ had quietly become the actual decision, with no person ever looking at
 it. Nobody meant for any of that to happen. It's just what happens when a
 small team ships fast and nobody's job is to catch it.
 
-That's not a hypothetical. It's the normal outcome for most startups
-bolting AI onto a real product right now — regulators can fine a company
-tens of millions of dollars for exactly this, real money for a small
-company. And the team that shipped the feature has no compliance person,
-no legal review queue, and no time to build one.
+That's not a hypothetical, and it's not a someday problem. GDPR's security
+obligations (Article 32 — the exact rule this project's PII detectors
+enforce) have been binding, actively enforced law since 2018, with real
+fines reaching tens of millions of euros for exactly this kind of raw
+personal data reaching somewhere it shouldn't. And credit-scoring AI
+specifically is already named, in the EU AI Act's own Annex III, as a
+high-risk use case subject to human-oversight and bias-examination
+duties once its compliance timeline lands — currently December 2027,
+after a mid-2026 extension, and worth watching precisely because that
+kind of deadline has already moved once. A small team's exposure here is
+real today under GDPR, and growing on a clock that's still ticking. The
+team that shipped the feature has no compliance person, no legal review
+queue, and no time to build one.
 
 The obvious fixes both fail. Ship blind and hope nothing surfaces. Or
 slow every single pull request down for a human to review by hand —
@@ -37,7 +50,10 @@ out whether something's actually wrong — not just whether a risky-looking
 word shows up — explains what it found in plain English, points to the
 exact rule it breaks, and drafts the fix. A person only ever gets pulled
 in when it's found something real. Every other PR ships exactly as fast
-as it always would have.
+as it always would have. And now you don't even have to open a laptop to
+ask: say "what's up" out loud, and SHIP tells you in one sentence whether
+anything needs you — never the finding itself, which only ever renders on
+a screen (see [Ask, don't read](#ask-dont-read-the-alexa-experience)).
 
 ## Guiding principles
 
@@ -156,6 +172,57 @@ genuine violation correctly caught with an accurate citation, every
 look-alike correctly dismissed with real reasoning for why, not a
 coin-flip.
 
+## Ask, don't read: the Alexa+ experience
+
+Nobody wants a voice assistant reading a two-minute monologue of PII
+findings and article citations aloud. Voice is good at exactly one thing
+here — an ambient, hands-free "is anything wrong, and where should I
+look" — and bad at everything after that. So the split is enforced, not
+just designed: **Relay**, SHIP's MCP server, hard-caps every spoken
+response to one short sentence with no line breaks — a finding list
+physically cannot fit, so the attempt raises instead of narrating.
+Citations, file paths, and code only ever reach a screen.
+
+> *"Alexa, what's up?"*
+> **"Three findings, one blocking. Want it on a screen?"**
+> *"Show me on the TV."*
+> — the actual findings appear, live, on whatever device just answered to
+> that name.
+
+That last step is a real push, not a shared-tab trick: any device with a
+browser (a TV's browser, an iPad, a laptop, even a smart fridge's) can
+open [`ship-display.html`](docs/ship-display.html), name itself once, and
+sit idle — no polling — until Relay pushes a finding to it by name over an
+open WebSocket connection. A real compliance event happens on the order
+of weeks, not seconds; a display that polled for it every few seconds
+would spend nearly all of that traffic finding nothing changed. An idle
+connection costs nothing until there's actually something to say.
+
+**The one thing voice is never allowed to do: resolve a finding.** SHIP
+exists to stop AI systems from making consequential decisions with no
+human accountably in the loop — the exact pattern its own TLGP-002
+detector flags in *other* people's code. A version of SHIP that let
+someone clear a blocking GDPR finding by saying "approve it" to a speaker
+would be committing that same violation in its own interface. Try it:
+
+> *"Approve it."*
+> **"That needs a written reason on the record. Opening it on your
+> screen."**
+
+There is no tool in Relay's surface that can perform an approval — the
+refusal is a missing capability, enforced server-side, not a prompt
+asking the model to decline.
+
+Alexa+'s own MCP toolkit requires a live account relationship with an
+Amazon Solutions Architect before its CLI/device path will connect at
+all — undocumented until you're mid-setup (see
+[`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and how that
+surfaced). The hackathon's own rules anticipate exactly this gap and name
+a first-class alternative: a simulated Alexa+ experience in a web app,
+source included. **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
+— it calls the real, deployed Relay endpoint over Streamable HTTP, not a
+mock, and every response above is genuine.
+
 ## Architecture
 
 Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)).
@@ -199,14 +266,31 @@ silently dropped.
 - **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
   fail repeatedly and a concurrency cap on the processor so parallel
   reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB, two tables — `ship-alerts` (every write
+- **State:** Amazon DynamoDB, four tables — `ship-alerts` (every write
   idempotent: a webhook redelivery or a retried job can't create a
-  duplicate, and can't silently re-open a decision a human already made)
-  and `ship-repos` (which repositories SHIP watches — connecting one is a
+  duplicate, and can't silently re-open a decision a human already made),
+  `ship-repos` (which repositories SHIP watches — connecting one is a
   point write from Gate's dashboard, not an environment-variable redeploy;
-  see `src/storage/repo_store.py`)
+  see `src/storage/repo_store.py`), `ship-status` (a precomputed release
+  summary, so Relay's voice path is one `GetItem` regardless of how many
+  findings exist — Alexa+ allows Relay half a second to answer, and
+  aggregating on read would have blown that budget outright as findings
+  accumulate), and `ship-device-connections` (which device is reachable
+  under which name, for the push path below)
 - **Web:** FastAPI (the webhook route and the Gate console, one
   deployable app, wrapped for Lambda via Mangum)
+- **Voice/MCP:** [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+  (Streamable HTTP, spec `2025-11-25`) powers Relay
+  ([`src/relay/`](src/relay/)), deployed as its own Lambda with
+  [SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html)
+  enabled (a fresh ASGI app is built per invocation — a genuine SDK/Lambda
+  incompatibility, not a style choice; see the docstring at the top of
+  [`src/relay/server.py`](src/relay/server.py))
+- **Push:** an Amazon API Gateway WebSocket API plus a small dedicated
+  Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
+  handling connect/disconnect/register — deliberately separate from
+  Relay, so Relay's own IAM role stays scoped to exactly what answering a
+  question requires
 
 ## Setting this up yourself
 
@@ -428,27 +512,47 @@ src/
   storage/
     alert_store.py       # DynamoDB — idempotent alert persistence
     repo_store.py         # DynamoDB — which repos SHIP watches
+    status_store.py       # DynamoDB — precomputed release summary Relay's voice path reads
+    device_store.py        # DynamoDB — which display device is reachable under which name
   taxonomy.py            # Single source of truth: detector <-> corpus <-> Screener trigger mapping
+  relay/
+    server.py             # Relay — the MCP server; the voice/screen modality split lives here
+    modality.py            # Enforces the spoken-response character cap and forbids line breaks
+    readmodel.py           # Voice path (reads the precomputed summary) vs. screen path (reads alerts)
+    push.py                 # Delivers a payload to one named device over its open connection
 rag_corpus/               # Sourced regulation/standard text, verbatim
 shipagentcore/             # AgentCore Runtime deployment of Detector
+docs/
+  alexa-simulator.html     # The web-simulated Alexa+ experience — calls real, deployed Relay
+  ship-display.html         # Any-device receiving surface — names itself, waits for a push
+  ship-render.js            # Finding-rendering logic shared by both pages above
+  architecture.html          # Full pipeline diagram
 scripts/
   healing_loop.py          # Periodic corpus-grounding check, decoupled from the hot path
   benchmark_models.py      # The adversarial benchmark behind the Nova Lite model choice
   precompute_embeddings.py # Regenerates rag_corpus/'s cached embeddings
 lambda_handler.py          # Webhook Lambda entrypoint
 fragment_lambda_handler.py # Fragment-processor Lambda entrypoint
-tests/                     # 172 tests, no AWS credentials required to run
+relay_lambda_handler.py    # Relay's Lambda entrypoint — builds a fresh app per invocation, see server.py
+device_gateway_handler.py  # WebSocket connect/disconnect/register Lambda entrypoint
+tests/                     # 200 tests, no AWS credentials required to run
 ```
 
 ## Status & what's next
 
-Built for Sep 14, 2026 (Agents for Humans): the full pipeline above, live
-and deployed, verified end to end against real Bedrock and a real GitHub
-webhook — not a mocked demo. Freezing an alert sets a real `ship/compliance`
-commit status (promotable to a required check in branch protection) and
-resolving one recomputes it, so the loop from detection to a human decision
-to the PR's own merge button actually closes — not just a dashboard entry
-a human is expected to remember to check.
+The full review pipeline — Screener through Gate, with the PR's own merge
+button actually gated by a real commit status — is live and deployed,
+verified end to end against real Bedrock and a real GitHub webhook, not a
+mocked demo. Freezing an alert sets `ship/compliance` to failing
+(promotable to a required check in branch protection) and resolving one
+recomputes it, so the loop from detection to a human decision to the PR's
+own merge button actually closes.
+
+On top of that, Relay (the MCP server), the Alexa+ simulated experience,
+and real cross-device push are also live — see
+[Ask, don't read](#ask-dont-read-the-alexa-experience) above. Every
+claim in that section is checked against the deployed endpoint, the same
+standard the rest of this README holds itself to.
 
 Things known and deliberately not built yet, not overlooked:
 - **Approving an alert doesn't yet push the suggested patch back to the PR
@@ -465,10 +569,30 @@ Things known and deliberately not built yet, not overlooked:
   causes (HTML entity decoding, CSS-rendered clause numbering) this way.
   Not yet wired to an actual schedule (cron/EventBridge) or to an alert
   channel beyond its own stdout report — that part is still manual.
+- **The Alexa+ CLI/device path itself isn't connected** — it requires an
+  AWS account already registered by an Amazon Solutions Architect, a
+  live account relationship rather than a self-service step (see
+  [`FRICTION_LOG.md`](FRICTION_LOG.md)). The simulated web experience
+  calls the identical, real Relay endpoint a live connection would, so
+  nothing about the review logic itself is untested — only the transport
+  Alexa+'s own infrastructure would use to reach it.
 - New detectors, beyond what's listed above, for risk patterns that need
   more than a single PR diff to prove — infrastructure/deployment context,
   or behavior observed across multiple files or over time. See the
   architecture doc for where that boundary sits and why.
+
+## Built across two hackathons
+
+The review engine (Screener → Detector → Triage → Gate, everything
+through the GitHub write-back) started as a submission to the *Agents for
+Humans Hackathon* (Strands SDK). During this hackathon's own submission
+window (opened August 31, 2026), it was substantially and verifiably
+extended, not just relabeled: Relay (the MCP server), the modality
+contract that keeps voice brief and screens detailed, the real Alexa+
+web simulation, and genuine cross-device push over a WebSocket API
+Gateway are all new work built inside this submission period — none of
+it existed before this window opened. `git log` tells the same story
+directly, commit by commit.
 
 ## License
 
