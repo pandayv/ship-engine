@@ -4,13 +4,13 @@
 on.** SHIP is an AI reviewer that reads every pull request the moment it
 opens, catches the ones that quietly cross a real legal line, and only
 ever interrupts a human when it's actually found something. Ask it what's
-going on out loud, and it'll tell you — and put the actual findings on
-whatever screen is nearby, never in your ear.
+going on out loud and it tells you in one line, then puts the actual
+findings on whatever screen is nearby. Never in your ear.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
 (Alexa+ track, AWS Builder mini-challenge). The core review engine started
 life as an entry to the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
-(Strands Agents SDK) — see [Built across two hackathons](#built-across-two-hackathons)
+(Strands Agents SDK). See [Built across two hackathons](#built-across-two-hackathons)
 for exactly what changed during this submission window.
 
 ---
@@ -19,7 +19,7 @@ for exactly what changed during this submission window.
 
 Say a five-person startup adds a feature this week: an AI that reads a
 loan application and suggests whether to approve it. It works, it ships,
-everyone moves on — until months later someone realizes the AI's prompt
+everyone moves on. Then months later someone realizes the AI's prompt
 included the applicant's Social Security number in plain text, or that a
 zip code was quietly swaying who got approved, or that the AI's opinion
 had quietly become the actual decision, with no person ever looking at
@@ -27,65 +27,64 @@ it. Nobody meant for any of that to happen. It's just what happens when a
 small team ships fast and nobody's job is to catch it.
 
 That's not a hypothetical, and it's not a someday problem. GDPR's security
-obligations (Article 32 — the exact rule this project's PII detectors
+obligations (Article 32, the exact rule this project's PII detectors
 enforce) have been binding, actively enforced law since 2018, with real
 fines reaching tens of millions of euros for exactly this kind of raw
-personal data reaching somewhere it shouldn't. And credit-scoring AI
-specifically is already named, in the EU AI Act's own Annex III, as a
-high-risk use case subject to human-oversight and bias-examination
-duties once its compliance timeline lands — currently December 2027,
-after a mid-2026 extension, and worth watching precisely because that
-kind of deadline has already moved once. A small team's exposure here is
-real today under GDPR, and growing on a clock that's still ticking. The
-team that shipped the feature has no compliance person, no legal review
-queue, and no time to build one.
+personal data reaching somewhere it shouldn't. Credit-scoring AI is
+separately named, in the EU AI Act's own Annex III, as a high-risk use
+case subject to human-oversight and bias-examination duties once its
+compliance timeline lands. That timeline is currently December 2027,
+pushed back from a mid-2026 extension, and worth watching precisely
+because it has already moved once. A small team's exposure here is real
+today under GDPR and growing on a clock that's still ticking. The team
+that shipped the feature has no compliance person, no legal review queue,
+and no time to build one.
 
 The obvious fixes both fail. Ship blind and hope nothing surfaces. Or
-slow every single pull request down for a human to review by hand —
-which defeats the entire point of moving fast with AI in the first
-place.
+slow every single pull request down for a human to review by hand. That
+defeats the entire point of moving fast with AI in the first place.
 
 SHIP is the third option. It reads the diff the moment a PR opens, works
-out whether something's actually wrong — not just whether a risky-looking
-word shows up — explains what it found in plain English, points to the
-exact rule it breaks, and drafts the fix. A person only ever gets pulled
-in when it's found something real. Every other PR ships exactly as fast
-as it always would have. And now you don't even have to open a laptop to
-ask: say "what's up" out loud, and SHIP tells you in one sentence whether
-anything needs you — never the finding itself, which only ever renders on
-a screen (see [Ask, don't read](#ask-dont-read-the-alexa-experience)).
+out whether something's actually wrong instead of just checking whether a
+risky-looking word shows up, explains what it found in plain English,
+points to the exact rule it breaks, and drafts the fix. A person only
+ever gets pulled in when it's found something real. Every other PR ships
+exactly as fast as it always would have. You don't even have to open a
+laptop to ask. Say "what's up" out loud and SHIP tells you in one
+sentence whether anything needs you. Never the finding itself, which only
+ever renders on a screen (see [Ask, don't read](#ask-dont-read-the-alexa-experience)).
 
 ## Guiding principles
 
 ### Trust, but verify
 - Detector's every citation is grounded in retrieved regulation text
-  (GDPR, EU AI Act, OWASP), never a model's unaided recollection — it must
+  (GDPR, EU AI Act, OWASP), never a model's unaided recollection. It must
   call its retrieval tool before judging anything.
-- Screener's keyword match is a *signal*, not a verdict — Detector
+- Screener's keyword match is a *signal*, not a verdict. Detector
   independently judges whether it's a real violation or a false positive,
-  verified against both genuine violations and deliberate look-alikes
-  designed to trip a naive pattern match, not just the easy cases.
+  verified against genuine violations and deliberate look-alikes designed
+  specifically to trip a naive pattern match.
 - The stricter categories carry an explicit evidence bar in the prompt
-  itself — a protected characteristic must connect to an actual scoring
-  *operation* (an arithmetic adjustment, a conditional), not just appear
-  in the same function, so a field that's merely present isn't confused
+  itself. A protected characteristic must connect to an actual scoring
+  *operation* (an arithmetic adjustment, a conditional) rather than merely
+  appear in the same function, so a field that's present isn't confused
   with a field that's actually driving the decision.
 
 ### A human always makes the call
-- Triage only ever proposes an action — log-and-continue, or freeze. It
+- Triage only ever proposes an action: log-and-continue, or freeze. It
   never resolves anything by itself.
 - Gate (the review console, gated behind its own credential separate from
   the webhook's) is the only place a frozen alert gets resolved.
-  Approve/Reject is a one-way, guarded transition: a retry or a duplicate
+  Approve/Reject is a one-way, guarded transition. A retry or a duplicate
   webhook delivery cannot silently re-open or overwrite a decision a human
   already made.
 
 ### AI-specific scope, on purpose
 The pipeline underneath is mechanically generic enough to flag other
-things too, but SHIP deliberately stays scoped to AI-feature risk
-(raw data reaching a model, an AI output driving a decision with no
+things too, but SHIP deliberately stays scoped to AI-feature risk (raw
+data reaching a model, an AI output driving a decision with no
 checkpoint, a protected characteristic feeding a score, an agent granted
-an unscoped dangerous capability). That scope *is* the product — diluting
+an unscoped dangerous capability). That scope *is* the product. Diluting
 it into general-purpose static analysis would trade away the one thing
 that differentiates this from tools that already exist.
 
@@ -100,42 +99,44 @@ asserted from a passing test suite alone.
 
 ## What it does
 
-1. **Screener** — a fast, free regex/AST pre-filter. Runs on every commit;
+1. **Screener**: a fast, free regex/AST pre-filter. Runs on every commit;
    if nothing matches, the PR passes in milliseconds and never costs a
-   model call. A match doesn't mean a violation — it means "worth a real
+   model call. A match doesn't mean a violation. It means "worth a real
    look."
-2. **Detector** — a Strands Agent, RAG-grounded against real, sourced
+2. **Detector**: a Strands Agent, RAG-grounded against real, sourced
    regulation text. Runs only on the fragments Screener actually flagged,
    one fragment at a time, and returns a structured verdict: matched or
    not, which category, a 1–10 risk score, a plain-English explanation,
    the exact citation, and a draft remediation patch.
-3. **Triage** — routes the verdict. Below the threshold: logged, nothing
-   else happens. At or above it: frozen — an alert is created, pending
-   human review, and the PR's own commit status turns red (`ship/compliance`,
-   promotable to a required check in branch protection — this is what
-   actually blocks the merge button, not just a dashboard entry). The
-   threshold is per-category, not one number for everything — a confirmed
-   violation that breaks a required safety guarantee (unmasked PII
-   reaching an external service, an automated decision with no human
-   checkpoint at all) is held to a lower bar than one that's more a matter
-   of degree.
-4. **Gate** — the review console. Every frozen alert shows the file, the
+3. **Triage**: routes the verdict. Below the threshold, it's logged and
+   nothing else happens. At or above it, the build freezes: an alert is
+   created, pending human review, and the PR's own commit status turns
+   red (`ship/compliance`, promotable to a required check in branch
+   protection. This is what actually blocks the merge button, not just a
+   dashboard entry). The threshold is per-category, not one number for
+   everything. A confirmed violation that breaks a required safety
+   guarantee (unmasked PII reaching an external service, an automated
+   decision with no human checkpoint at all) is held to a lower bar than
+   one that's more a matter of degree.
+4. **Gate**: the review console. Every frozen alert shows the file, the
    category, the risk score, the plain-English summary, the exact
    regulatory citation, and the suggested patch. A human clicks Approve or
    Reject; that decision is recorded as the one-way resolution of the
-   alert, posted back to the PR as a comment, and folded into the recomputed
-   commit status — resolving the last blocking finding is what turns the
-   check green. (Actually pushing the approved patch back to the PR via the
-   GitHub API is a scoped-out next step, not yet wired in — today, a human
-   still applies the fix themselves once they've reviewed it here.) Gate
-   also has a **history** view of every past disposition with the reason a
-   human gave, and a **connected-repos** view — connecting a repository is
-   a form submission here, not a redeploy (see [Tech stack](#tech-stack)).
+   alert, posted back to the PR as a comment, and folded into the
+   recomputed commit status. Resolving the last blocking finding is what
+   turns the check green. (Actually pushing the approved patch back to the
+   PR via the GitHub API is a scoped-out next step, not yet wired in.
+   Today, a human still applies the fix themselves once they've reviewed
+   it here.) Gate also has a **history** view of every past disposition
+   with the reason a human gave, and a **connected-repos** view.
+   Connecting a repository is a form submission here, not a redeploy (see
+   [Tech stack](#tech-stack)).
 
 ### Detectors
 
-Each independently verified against real, deliberately adversarial test
-cases — genuine violations and deliberate false-positive look-alikes both.
+Each is independently verified against real, deliberately adversarial
+test cases: genuine violations and deliberate false-positive look-alikes
+alike.
 
 | ID | What it catches | Grounded in |
 |---|---|---|
@@ -146,17 +147,17 @@ cases — genuine violations and deliberate false-positive look-alikes both.
 | **ALBP-001** | A protected characteristic (or a clear proxy) directly driving a scoring calculation | EU AI Act Article 10 + Annex III §5(b) |
 | **TLGP-001** | A dangerous capability (shell exec, unscoped DB write) granted to an AI agent with no gate | OWASP Top 10 for LLM Apps, LLM06:2025 |
 
-SHIP is deliberately scoped to what a single PR diff can actually prove —
-see the architecture doc for the reasoning behind that boundary, and
+SHIP is deliberately scoped to what a single PR diff can actually prove.
+See the architecture doc for the reasoning behind that boundary, and
 what's on the roadmap next.
 
 ## See it in action
 
 The engine is demonstrated against a fork of
 [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
-(MIT-licensed, a real Django lending app) — used purely as a realistic
-third-party target, kept as a fully separate repository from this
-submission, nothing from it incorporated here:
+(MIT-licensed, a real Django lending app), used purely as a realistic
+third-party target and kept as a fully separate repository from this
+submission. Nothing from it is incorporated here:
 
 - **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
   AI-assisted underwriting function sending an applicant's full raw
@@ -167,7 +168,7 @@ submission, nothing from it incorporated here:
   non-agent backup job, a display-only profile field, a properly-hashed
   log call, a non-PII cache write).
 
-Run directly against real Bedrock, both PRs together: **9 for 9** — every
+Run directly against real Bedrock, both PRs together: **9 for 9**. Every
 genuine violation correctly caught with an accurate citation, every
 look-alike correctly dismissed with real reasoning for why, not a
 coin-flip.
@@ -176,31 +177,31 @@ coin-flip.
 
 Nobody wants a voice assistant reading a two-minute monologue of PII
 findings and article citations aloud. Voice is good at exactly one thing
-here — an ambient, hands-free "is anything wrong, and where should I
-look" — and bad at everything after that. So the split is enforced, not
-just designed: **Relay**, SHIP's MCP server, hard-caps every spoken
-response to one short sentence with no line breaks — a finding list
-physically cannot fit, so the attempt raises instead of narrating.
-Citations, file paths, and code only ever reach a screen.
+here: an ambient, hands-free check for whether anything's wrong and where
+to look. It's bad at everything after that. Relay, SHIP's MCP server,
+hard-caps every spoken response to one short sentence with no line
+breaks. A finding list cannot fit in that space, so the attempt fails
+loudly instead of narrating. Citations, file paths, and code only ever
+reach a screen.
 
 > *"Alexa, what's up?"*
 > **"Three findings, one blocking. Want it on a screen?"**
 > *"Show me on the TV."*
-> — the actual findings appear, live, on whatever device just answered to
-> that name.
 
-That last step is a real push, not a shared-tab trick: any device with a
-browser (a TV's browser, an iPad, a laptop, even a smart fridge's) can
-open [`ship-display.html`](docs/ship-display.html), name itself once, and
-sit idle — no polling — until Relay pushes a finding to it by name over an
-open WebSocket connection. A real compliance event happens on the order
-of weeks, not seconds; a display that polled for it every few seconds
-would spend nearly all of that traffic finding nothing changed. An idle
-connection costs nothing until there's actually something to say.
+The actual findings then appear, live, on whatever device just answered
+to that name. That last step is a real push, not a shared-tab trick. Any
+device with a browser (a TV's browser, an iPad, a laptop, even a smart
+fridge's) can open [`ship-display.html`](docs/ship-display.html), name
+itself once, and sit idle with no polling until Relay pushes a finding to
+it by name over an open WebSocket connection. A real compliance event
+happens on the order of weeks, not seconds. A display that polled for it
+every few seconds would spend nearly all of that traffic finding nothing
+changed. An idle connection costs nothing until there's actually
+something to say.
 
 **The one thing voice is never allowed to do: resolve a finding.** SHIP
 exists to stop AI systems from making consequential decisions with no
-human accountably in the loop — the exact pattern its own TLGP-002
+human accountably in the loop. That's the exact pattern its own TLGP-002
 detector flags in *other* people's code. A version of SHIP that let
 someone clear a blocking GDPR finding by saying "approve it" to a speaker
 would be committing that same violation in its own interface. Try it:
@@ -209,19 +210,20 @@ would be committing that same violation in its own interface. Try it:
 > **"That needs a written reason on the record. Opening it on your
 > screen."**
 
-There is no tool in Relay's surface that can perform an approval — the
+There is no tool in Relay's surface that can perform an approval. The
 refusal is a missing capability, enforced server-side, not a prompt
 asking the model to decline.
 
 Alexa+'s own MCP toolkit requires a live account relationship with an
 Amazon Solutions Architect before its CLI/device path will connect at
-all — undocumented until you're mid-setup (see
-[`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and how that
-surfaced). The hackathon's own rules anticipate exactly this gap and name
-a first-class alternative: a simulated Alexa+ experience in a web app,
-source included. **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
-— it calls the real, deployed Relay endpoint over Streamable HTTP, not a
-mock, and every response above is genuine.
+all. That requirement isn't documented anywhere until you're already
+mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
+how it surfaced). The hackathon's own rules anticipate exactly this gap
+and name a first-class alternative: a simulated Alexa+ experience in a
+web app, source included.
+**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
+Every response above comes from the real, deployed Relay endpoint over
+Streamable HTTP, not a mock.
 
 ## Architecture
 
@@ -232,7 +234,7 @@ reviewed as its own independent, retryable job**, queued and picked up by
 an independently-scaling reviewer function, rather than one sequential
 pass through the whole PR. A fragment that fails outright retries
 automatically and lands in a dead-letter queue after repeated failure
-instead of vanishing; a fragment that's just slow, or that hits AWS's own
+instead of vanishing. A fragment that's just slow, or that hits AWS's own
 request-rate limit, backs off and retries on its own without blocking
 anything else. A PR with several flagged issues takes about as long as
 its slowest single issue, not the sum of all of them, and nothing is
@@ -241,55 +243,55 @@ silently dropped.
 ## Tech stack
 
 - **Agent framework:** [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
-- **Models:** Amazon Nova Lite as the primary Bedrock backend — chosen on
-  measured evidence, not preference: benchmarked against Claude Haiku 4.5,
-  Nova Pro, Qwen3-235B, GLM-5, and DeepSeek-V3.2 on the real adversarial
-  fixtures below, all six caught every genuine violation and dismissed
-  every look-alike, but per-model request-per-minute quota is what
-  actually bounds review throughput on this account (10/min for Claude
-  models vs. 200/min for Nova Lite) — see the benchmark table in
-  [`src/agents/detector.py`](src/agents/detector.py). Google Gemini as a
-  credit-exhaustion fallback; a local Ollama model as a fully-offline
-  reliability fallback — switchable via one env var, all genuinely
-  functional, not unverified stretch goals.
-- **Agent runtime:** Amazon Bedrock AgentCore Runtime — the same Detector
+- **Models:** Amazon Nova Lite as the primary Bedrock backend, chosen on
+  measured evidence rather than preference. Benchmarked against Claude
+  Haiku 4.5, Nova Pro, Qwen3-235B, GLM-5, and DeepSeek-V3.2 on the real
+  adversarial fixtures below: all six caught every genuine violation and
+  dismissed every look-alike, but per-model request-per-minute quota is
+  what actually bounds review throughput on this account (10/min for
+  Claude models vs. 200/min for Nova Lite). See the benchmark table in
+  [`src/agents/detector.py`](src/agents/detector.py). Google Gemini serves
+  as a credit-exhaustion fallback and a local Ollama model as a fully
+  offline reliability fallback. Both are switchable via one env var and
+  genuinely functional, not unverified stretch goals.
+- **Agent runtime:** Amazon Bedrock AgentCore Runtime, the same Detector
   logic deployed to a real managed runtime ([`shipagentcore/`](shipagentcore/)),
   callable in-process for local development or remotely for the deployed
   path, toggled the same way
 - **Retrieval:** Amazon Bedrock Titan Embeddings, a small local
   numpy cosine-similarity store (the sourced regulation corpus is a
-  few dozen chunks — a hosted vector database would be pure overhead
+  few dozen chunks, so a hosted vector database would be pure overhead
   at this scale)
-- **Compute:** two AWS Lambda functions — the webhook (fast-ack: verify,
+- **Compute:** two AWS Lambda functions, the webhook (fast-ack: verify,
   screen, dispatch) and an independently-scaling fragment processor
   (the actual model call, one fragment per invocation)
 - **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
   fail repeatedly and a concurrency cap on the processor so parallel
   reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB, four tables — `ship-alerts` (every write
-  idempotent: a webhook redelivery or a retried job can't create a
-  duplicate, and can't silently re-open a decision a human already made),
-  `ship-repos` (which repositories SHIP watches — connecting one is a
-  point write from Gate's dashboard, not an environment-variable redeploy;
-  see `src/storage/repo_store.py`), `ship-status` (a precomputed release
-  summary, so Relay's voice path is one `GetItem` regardless of how many
-  findings exist — Alexa+ allows Relay half a second to answer, and
-  aggregating on read would have blown that budget outright as findings
-  accumulate), and `ship-device-connections` (which device is reachable
-  under which name, for the push path below)
+- **State:** Amazon DynamoDB, four tables. `ship-alerts` (every write
+  idempotent, so a webhook redelivery or a retried job can't create a
+  duplicate and can't silently re-open a decision a human already made),
+  `ship-repos` (which repositories SHIP watches. Connecting one is a
+  point write from Gate's dashboard, not an environment-variable
+  redeploy, see `src/storage/repo_store.py`), `ship-status` (a
+  precomputed release summary, so Relay's voice path is one `GetItem`
+  regardless of how many findings exist, since Alexa+ allows Relay half a
+  second to answer and aggregating on read would have blown that budget
+  as findings accumulate), and `ship-device-connections` (which device is
+  reachable under which name, for the push path below)
 - **Web:** FastAPI (the webhook route and the Gate console, one
   deployable app, wrapped for Lambda via Mangum)
 - **Voice/MCP:** [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
   (Streamable HTTP, spec `2025-11-25`) powers Relay
   ([`src/relay/`](src/relay/)), deployed as its own Lambda with
   [SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html)
-  enabled (a fresh ASGI app is built per invocation — a genuine SDK/Lambda
-  incompatibility, not a style choice; see the docstring at the top of
-  [`src/relay/server.py`](src/relay/server.py))
+  enabled. A fresh ASGI app is built per invocation, a genuine SDK/Lambda
+  incompatibility rather than a style choice; see the docstring at the
+  top of [`src/relay/server.py`](src/relay/server.py).
 - **Push:** an Amazon API Gateway WebSocket API plus a small dedicated
   Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
-  handling connect/disconnect/register — deliberately separate from
-  Relay, so Relay's own IAM role stays scoped to exactly what answering a
+  handling connect/disconnect/register, deliberately separate from Relay
+  so Relay's own IAM role stays scoped to exactly what answering a
   question requires
 
 ## Setting this up yourself
@@ -298,10 +300,10 @@ silently dropped.
 
 - An AWS account with Bedrock model access enabled for at least one
   Claude model (a brand-new account may need a one-time use-case
-  submission and/or an AWS Support request before this works — see
+  submission and/or an AWS Support request before this works. See
   the troubleshooting note below if `bedrock:InvokeModel` fails with a
   quota or subscription error).
-- The AWS CLI, configured (`aws configure`) with a scoped IAM identity —
+- The AWS CLI, configured (`aws configure`) with a scoped IAM identity,
   not root credentials.
 - Python 3.12+, `pip`, and `npm` (for the AgentCore CLI).
 - A GitHub repo to protect, and a personal access token with read access
@@ -320,7 +322,7 @@ pip install -r requirements.txt
 
 The regulation text this project cites is already checked into
 [`rag_corpus/`](rag_corpus/) (GDPR Art. 32, EU AI Act Art. 10/14 + Annex
-III §5(b), OWASP LLM06:2025) — sourced verbatim, not paraphrased. Nothing
+III §5(b), OWASP LLM06:2025), sourced verbatim, not paraphrased. Nothing
 to do here unless you're extending the taxonomy with a new category; see
 [`src/taxonomy.py`](src/taxonomy.py) for the registry a new category needs
 to join.
@@ -334,12 +336,13 @@ python3 -m src.agents.detector
 ```
 
 This runs a hardcoded violation through the real agent end to end and
-prints the structured verdict — the fastest way to find out if Bedrock
-access, model availability, or region config needs fixing before anything
-else. If it fails with an access or quota error, the model needs enabling
-in the Bedrock console first (Model access → request access), and a
-brand-new AWS account specifically may need its own quota raised via a
-support case — this is an account-activation gate, not a code problem.
+prints the structured verdict. It's the fastest way to find out if
+Bedrock access, model availability, or region config needs fixing before
+anything else. If it fails with an access or quota error, the model needs
+enabling in the Bedrock console first (Model access → request access),
+and a brand-new AWS account specifically may need its own quota raised
+via a support case. This is an account-activation gate, not a code
+problem.
 
 ### 4. Create the DynamoDB tables
 
@@ -351,7 +354,7 @@ python3 -m src.storage.repo_store
 `alert_store` calls `create_table_if_not_exists()` and then a self-test
 write/read/resolve cycle against the real `ship-alerts` table.
 `repo_store` creates `ship-repos`, the table backing Gate's
-connected-repos view — needs `dynamodb:CreateTable` plus the basic
+connected-repos view. Needs `dynamodb:CreateTable` plus the basic
 item-level actions on your IAM identity first.
 
 ### 5. Deploy Detector to a real AgentCore Runtime
@@ -362,16 +365,16 @@ cd shipagentcore
 agentcore deploy --yes
 ```
 
-Note the deployed runtime ARN from the output — you'll need it in step 7.
+Note the deployed runtime ARN from the output. You'll need it in step 7.
 **If Detector's prompt, schema, or RAG corpus ever changes, both
 `src/agents/detector.py` and `shipagentcore/app/ship_diagnostician/main.py`
-need the same change and a fresh deploy** — see
+need the same change and a fresh deploy.** See
 [`tests/test_taxonomy_consistency.py`](tests/test_taxonomy_consistency.py),
 which exists specifically to catch the two copies drifting apart before
 that reaches production silently. (The AgentCore app's own folder/runtime
-name, `ship_diagnostician`, predates this project's Detector naming pass —
-left as-is deliberately, since renaming it mints a brand-new runtime ARN
-for no visible benefit; it's internal deployment plumbing, not something
+name, `ship_diagnostician`, predates this project's Detector naming pass.
+Left as-is deliberately, since renaming it mints a brand-new runtime ARN
+for no visible benefit. It's internal deployment plumbing, not something
 this README's naming otherwise touches.)
 
 ### 6. Create the fragment queue, its dead-letter queue, and the fragment-processor Lambda
@@ -392,11 +395,11 @@ The fragment-processor Lambda needs its own execution role (permission to
 consume the queue, call `bedrock-agentcore:InvokeAgentRuntime` against
 the ARN from step 5, and write to the DynamoDB table from step 4).
 
-Both Lambdas in this project deploy from the same zip — build it once,
-including real Linux dependency wheels (the `--platform`/`--only-binary`
-flags matter even if you're building on macOS/Windows; skip them and the
-zip will contain the wrong platform's compiled packages and fail at
-import time on Lambda, not at build time):
+Both Lambdas in this project deploy from the same zip. Build it once,
+including real Linux dependency wheels: the `--platform`/`--only-binary`
+flags matter even if you're building on macOS or Windows. Skip them and
+the zip will contain the wrong platform's compiled packages, failing at
+import time on Lambda rather than at build time.
 
 ```bash
 mkdir -p build && cp -r src fragment_lambda_handler.py lambda_handler.py build/
@@ -406,7 +409,7 @@ cd build && zip -r ../ship-webhook.zip . -x "*.dist-info/*" && cd ..
 ```
 
 (Building for `arm64`/`manylinux2014_aarch64` above to match Lambda's
-cheaper Graviton architecture — switch both the `--platform` flag here and
+cheaper Graviton architecture. Switch both the `--platform` flag here and
 `--architectures` below to `x86_64` consistently if you'd rather not deal
 with cross-compiling.)
 
@@ -425,15 +428,15 @@ aws lambda create-event-source-mapping --function-name ship-fragment-processor \
 ```
 
 `MaximumConcurrency` is the knob that keeps parallel fragment reviews
-within your account's real Bedrock request-rate limit — raise it once you
+within your account's real Bedrock request-rate limit. Raise it once you
 know what that limit actually is for your account.
 
 ### 7. Deploy the webhook Lambda
 
-Needs its own execution role (permission to send to the queue from step
-6, and — if you also want the fast-ack path itself to be able to fall
-back to processing inline with no queue configured — the same Bedrock/
-DynamoDB permissions as step 6's role):
+Needs its own execution role: permission to send to the queue from step
+6, and, if you also want the fast-ack path itself to fall back to
+processing inline with no queue configured, the same Bedrock/DynamoDB
+permissions as step 6's role.
 
 ```bash
 aws lambda create-function --function-name ship-webhook \
@@ -457,23 +460,24 @@ aws lambda create-function-url-config --function-name ship-webhook \
 ```
 
 `GITHUB_WEBHOOK_SECRET` and `SHIP_DASHBOARD_TOKEN` must be two genuinely
-different values — the webhook's signature check and the dashboard's auth
+different values. The webhook's signature check and the dashboard's auth
 are deliberately independent, so compromising one can't silently disable
 the other.
 
 ### 8. Connect the repo, then point a real GitHub webhook at it
 
 Open `https://<your-function-url>/dashboard/repos?token=<SHIP_DASHBOARD_TOKEN>`
-and connect `<owner>/<repo>` — a payload naming any other repo gets
+and connect `<owner>/<repo>`. A payload naming any other repo gets
 rejected before it can spend your GitHub token or Bedrock quota (see
 [`src/storage/repo_store.py`](src/storage/repo_store.py)). That link only
-needs to be visited once: the token in the URL establishes a session
-cookie, and every page from there on (Active, History, Connected repos) is
-just a normal link with no secret in it — visiting `/dashboard` cold
-prompts a login form instead. An optional `SHIP_ALLOWED_REPOS=<owner>/<repo>`
-environment variable pre-seeds this same allowlist without needing the
-table at all — useful for a first bring-up before step 4's tables exist,
-or as a fallback if DynamoDB is briefly unreachable.
+needs to be visited once. The token in the URL establishes a session
+cookie, and every page from there on (Active, History, Connected repos)
+is just a normal link with no secret in it. Visiting `/dashboard` cold
+prompts a login form instead. An optional
+`SHIP_ALLOWED_REPOS=<owner>/<repo>` environment variable pre-seeds this
+same allowlist without needing the table at all, useful for a first
+bring-up before step 4's tables exist, or as a fallback if DynamoDB is
+briefly unreachable.
 
 Then, in the target repo's Settings → Webhooks: the Lambda Function URL
 from step 7, content type `application/json`, secret matching
@@ -540,44 +544,45 @@ tests/                     # 200 tests, no AWS credentials required to run
 
 ## Status & what's next
 
-The full review pipeline — Screener through Gate, with the PR's own merge
-button actually gated by a real commit status — is live and deployed,
-verified end to end against real Bedrock and a real GitHub webhook, not a
+The full review pipeline, Screener through Gate, is live and deployed,
+with the PR's own merge button actually gated by a real commit status.
+Verified end to end against real Bedrock and a real GitHub webhook, not a
 mocked demo. Freezing an alert sets `ship/compliance` to failing
 (promotable to a required check in branch protection) and resolving one
-recomputes it, so the loop from detection to a human decision to the PR's
-own merge button actually closes.
+recomputes it, so the loop from detection to a human decision to the
+PR's own merge button actually closes.
 
 On top of that, Relay (the MCP server), the Alexa+ simulated experience,
-and real cross-device push are also live — see
-[Ask, don't read](#ask-dont-read-the-alexa-experience) above. Every
-claim in that section is checked against the deployed endpoint, the same
-standard the rest of this README holds itself to.
+and real cross-device push are also live. See
+[Ask, don't read](#ask-dont-read-the-alexa-experience) above for the full
+walkthrough. Every claim in that section is checked against the deployed
+endpoint, the same standard the rest of this README holds itself to.
 
 Things known and deliberately not built yet, not overlooked:
 - **Approving an alert doesn't yet push the suggested patch back to the PR
-  automatically** — a human still applies it themselves once they've
+  automatically.** A human still applies it themselves once they've
   reviewed it in Gate. A real GitHub-API integration away, not an
   architecture change.
 - **Healing Loop** ([`scripts/healing_loop.py`](scripts/healing_loop.py))
   closes part of this: run periodically (deliberately not on Detector's
-  per-fragment hot path — see the script's own docstring for why), it
+  per-fragment hot path, see the script's own docstring for why), it
   re-fetches each sourced regulation page and flags any chunk that no
   longer appears verbatim, so a citation is never silently resting on
   text a regulator has since amended. Verified against the real live
-  sources, not just fixtures — caught and fixed two genuine false-positive
-  causes (HTML entity decoding, CSS-rendered clause numbering) this way.
-  Not yet wired to an actual schedule (cron/EventBridge) or to an alert
-  channel beyond its own stdout report — that part is still manual.
-- **The Alexa+ CLI/device path itself isn't connected** — it requires an
-  AWS account already registered by an Amazon Solutions Architect, a
-  live account relationship rather than a self-service step (see
+  sources rather than fixtures alone; caught and fixed two genuine
+  false-positive causes (HTML entity decoding, CSS-rendered clause
+  numbering) this way. Not yet wired to an actual schedule (cron/
+  EventBridge) or to an alert channel beyond its own stdout report. That
+  part is still manual.
+- **The Alexa+ CLI/device path itself isn't connected.** It requires an
+  AWS account already registered by an Amazon Solutions Architect, a live
+  account relationship rather than a self-service step (see
   [`FRICTION_LOG.md`](FRICTION_LOG.md)). The simulated web experience
   calls the identical, real Relay endpoint a live connection would, so
-  nothing about the review logic itself is untested — only the transport
-  Alexa+'s own infrastructure would use to reach it.
+  nothing about the review logic itself is untested. Only the transport
+  Alexa+'s own infrastructure would use to reach it is missing.
 - New detectors, beyond what's listed above, for risk patterns that need
-  more than a single PR diff to prove — infrastructure/deployment context,
+  more than a single PR diff to prove: infrastructure/deployment context,
   or behavior observed across multiple files or over time. See the
   architecture doc for where that boundary sits and why.
 
@@ -586,13 +591,13 @@ Things known and deliberately not built yet, not overlooked:
 The review engine (Screener → Detector → Triage → Gate, everything
 through the GitHub write-back) started as a submission to the *Agents for
 Humans Hackathon* (Strands SDK). During this hackathon's own submission
-window (opened August 31, 2026), it was substantially and verifiably
-extended, not just relabeled: Relay (the MCP server), the modality
-contract that keeps voice brief and screens detailed, the real Alexa+
-web simulation, and genuine cross-device push over a WebSocket API
-Gateway are all new work built inside this submission period — none of
-it existed before this window opened. `git log` tells the same story
-directly, commit by commit.
+window (opened August 31, 2026), real new work was added and verified,
+not a relabeling of the old submission: Relay (the MCP server), the
+modality contract that keeps voice brief and screens detailed, the real
+Alexa+ web simulation, and genuine cross-device push over a WebSocket API
+Gateway are all built inside this submission period. None of it existed
+before this window opened. `git log` tells the same story directly,
+commit by commit.
 
 ## License
 
