@@ -267,6 +267,13 @@ instructions, not mid-page after them.
 
 ## Open Source mini-challenge
 
-Pending. The rules require a separate, additional open-source
-contribution alongside the primary submission, not just this repository
-being public with an MIT license. Not yet decided or executed.
+Deploying Relay (our MCP server) to AWS Lambda surfaced a real gap in the
+MCP Python SDK's own deployment docs: nothing covers a serverless runtime
+reusing one warm process across separate invocations, which hits the
+SDK's single-use session manager error the moment a container is reused.
+Filed as [issue #3590](https://github.com/modelcontextprotocol/python-sdk/issues/3590)
+and a docs PR, [#3591](https://github.com/modelcontextprotocol/python-sdk/pull/3591),
+adding it as a documented third cause in `deploy.md` alongside the two
+the SDK already covers, with the per-invocation fix and a SnapStart-specific
+note. Repo: [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk).
+GitHub: [pandayv](https://github.com/pandayv).

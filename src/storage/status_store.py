@@ -131,15 +131,27 @@ def compute_summary() -> ReleaseSummary:
 def refresh_summary() -> ReleaseSummary:
     """Recompute and store. Best-effort by design: a failure here must never
     fail the finding that triggered it, because the alert itself is already
-    durably stored and the next refresh will correct this one."""
-    summary = compute_summary()
+    durably stored and the next refresh will correct this one.
+
+    Live-caught bug (2026-09-28): the try/except used to wrap only the
+    put_item call, not compute_summary()'s own read of the alerts table.
+    A real AccessDeniedException on that Scan (a role missing
+    dynamodb:Scan on ship-alerts) propagated out of this "best-effort"
+    function uncaught, crashing the whole fragment invocation AFTER the
+    expensive Detector call had already run and put_alert() had already
+    succeeded — turning one IAM gap into a wasted multi-minute retry loop
+    instead of the silent, self-healing degradation this was designed for.
+    The whole body is now inside the guard, not just the write.
+    """
     try:
+        summary = compute_summary()
         item = {"summary_id": SUMMARY_KEY, **asdict(summary)}
         _table().put_item(Item=item)
+        return summary
     except Exception:
         log.exception("could not refresh the release summary — Relay may serve a stale count "
                       "until the next finding or decision triggers another refresh")
-    return summary
+        return ReleaseSummary()
 
 
 def read_summary() -> ReleaseSummary:
