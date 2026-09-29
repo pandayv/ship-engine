@@ -89,21 +89,68 @@ how each integration actually went.
 
 Voice, screen, and decision are three different surfaces doing three
 different jobs on purpose. Alexa triggers and routes. Any nearby display
-renders the detail. Gate, with a mandatory typed, attributed reason on
-every decision, is the only place anything gets resolved. That split is
-why the refusal (asking to approve by voice fails, on purpose) reads as a
-real design position rather than a missing feature.
+renders the detail. Resolving a finding, whether through Gate's typed
+reason or a spoken one, always requires having actually seen it first.
+That split is why the refusal (approving something you've never looked
+at fails, on purpose) reads as a real design position rather than a
+missing feature.
 
-## Potential impact and idea quality
+## Potential impact
 
-Every property claimed above is checked against the real, deployed
-system: a live Lambda, live DynamoDB, a live WebSocket push, a real
-GitHub PR whose merge button actually gets blocked. None of it is
-asserted from a passing test suite alone. The persona, a small team with
-no compliance hire, is specific, and the mechanism (deterministic
-pre-filter, grounded semantic judgment, human-gated resolution) is the
-same "verify before trusting" pattern that stays durable well past this
-hackathon.
+The customer is a five-person startup with no compliance hire. The
+impact runs in two directions: what happens to that startup, and what
+happens to the people its AI feature touches.
+
+For the startup, a single unreviewed decision is already enough to
+trigger a real GDPR fine or an EU AI Act investigation, and most small
+teams have no one whose job is to catch it before it ships. The honest
+alternatives today are shipping blind or slowing every PR down for
+manual review, and both defeat the reason they adopted AI in the first
+place. SHIP costs nothing on a clean PR (a free regex/AST pass, no model
+call) and only interrupts a human when something real is wrong, so it
+doesn't force that tradeoff.
+
+For that startup's customers, the applicant whose SSN reaches an
+external LLM unmasked, the borrower whose zip code quietly moves a
+credit score, the person whose loan gets rejected by a model's opinion
+with nobody checking, none of them ever see SHIP. They only experience
+the absence of the harm it caught. That's the actual measure of the
+product: the person it benefits most is never the team that installed
+it.
+
+Three things make that more than a demo-day claim:
+- **It gets sharper with use, not just faster.** Every dismissal teaches
+  Detector what a false alarm looks like, confirmed independently before
+  it can shape a future judgment, so accuracy compounds instead of one
+  bad call quietly eroding it.
+- **It holds itself to its own rule.** SHIP flags an AI decision applied
+  with no human checkpoint in other people's code. In its own interface,
+  no decision resolves without a person who has actually engaged with
+  the specific evidence, a constraint the server enforces, not a
+  courtesy the model is asked to honor.
+- **Every claim above is checked against the real, deployed system**, a
+  live Lambda, live DynamoDB, a live WebSocket push, a real GitHub PR
+  whose merge button gets blocked, connected through a real webhook to a
+  real external repo. None of it is asserted from a passing test suite
+  alone.
+
+## Quality of the idea
+
+A compliance gatekeeper isn't an obvious fit for a voice assistant, and
+that's the point. Most voice submissions extend something that already
+has a screen. SHIP inverts it: the finding lives on a screen by design,
+and voice's only job is saying whether one exists and where to look,
+enforced by a hard sentence cap rather than a prompt asking politely.
+
+The sharper move is one step further. SHIP polices "an AI decision
+applied with no human checkpoint" in other people's code, and holds its
+own interface to the identical standard as a server-side constraint, not
+a stated principle. A voice-only approval works, but only once a person
+has genuinely engaged with the actual evidence. That rule came from
+directly correcting an earlier, blunter version mid-build, not from a
+first pass: the original design simply refused every voice approval,
+until it became clear the real failure mode was never voice itself, it
+was a decision with no review behind it at all.
 
 ## Pre-existing project disclosure
 

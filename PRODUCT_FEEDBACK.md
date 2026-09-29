@@ -40,12 +40,14 @@ architecture genuinely needed each piece.
   requirement, with a dead-letter queue for genuine failures and a
   concurrency cap that keeps parallel reviews within the account's real
   Bedrock rate limit.
-- **Amazon DynamoDB** holds four tables, each with a distinct, narrow
-  access pattern: idempotent alert persistence, which repos are watched,
-  a precomputed release summary, and which device is reachable under
-  which name for the push path. The summary table exists because Relay's
-  voice path needs to be one `GetItem` regardless of how many findings
-  exist. The half-second Alexa+ budget would not survive aggregating on
+- **Amazon DynamoDB** holds six tables, each with a distinct, narrow
+  access pattern: idempotent alert persistence, which repos are watched
+  and their received-vs-reviewed health, a precomputed release summary,
+  which device is reachable under which name for the push path, which
+  alert was shown on a screen recently, and patterns learned from
+  dismissed findings. The summary table exists because Relay's voice
+  path needs to be one `GetItem` regardless of how many findings exist.
+  The half-second Alexa+ budget would not survive aggregating on
   read.
 - **Amazon API Gateway (WebSocket APIs)** carries real, server-initiated
   push to a named display device. We chose push over polling on purpose.
@@ -176,7 +178,7 @@ server on Lambda would hit the same wall.
 
 ### Amazon DynamoDB
 
-**Used for:** all persistent state — alerts, watched repos, the
+**Used for:** all persistent state: alerts, watched repos, the
 precomputed release summary, device connections.
 
 **What worked well:** on-demand billing meant zero capacity-planning
