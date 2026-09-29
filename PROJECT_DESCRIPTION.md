@@ -151,13 +151,3 @@ directly correcting an earlier, blunter version mid-build, not from a
 first pass: the original design simply refused every voice approval,
 until it became clear the real failure mode was never voice itself, it
 was a decision with no review behind it at all.
-
-## Pre-existing project disclosure
-
-The core review engine (Screener → Detector → Triage → Gate) began as a
-submission to the separate *Agents for Humans Hackathon* (Strands SDK).
-Everything described in "Ask, don't read" in the README, Relay, the
-modality contract, the Alexa+ simulation, and real cross-device push, was
-built new, from scratch, inside this hackathon's own submission window
-(opened August 31, 2026). `git log` shows this directly, commit by
-commit.

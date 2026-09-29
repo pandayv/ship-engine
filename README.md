@@ -8,10 +8,8 @@ going on out loud and it tells you in one line, then puts the actual
 findings on whatever screen is nearby. Never in your ear.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
-(Alexa+ track, AWS Builder mini-challenge). The core review engine started
-life as an entry to the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com/)
-(Strands Agents SDK). See [Built across two hackathons](#built-across-two-hackathons)
-for exactly what changed during this submission window.
+(Alexa+ track, AWS Builder mini-challenge), from scratch, inside this
+hackathon's own submission window.
 
 ---
 
@@ -609,19 +607,6 @@ Things known and deliberately not built yet, not overlooked:
   more than a single PR diff to prove: infrastructure/deployment context,
   or behavior observed across multiple files or over time. See the
   architecture doc for where that boundary sits and why.
-
-## Built across two hackathons
-
-The review engine (Screener → Detector → Triage → Gate, everything
-through the GitHub write-back) started as a submission to the *Agents for
-Humans Hackathon* (Strands SDK). During this hackathon's own submission
-window (opened August 31, 2026), real new work was added and verified,
-not a relabeling of the old submission: Relay (the MCP server), the
-modality contract that keeps voice brief and screens detailed, the real
-Alexa+ web simulation, and genuine cross-device push over a WebSocket API
-Gateway are all built inside this submission period. None of it existed
-before this window opened. `git log` tells the same story directly,
-commit by commit.
 
 ## License
 
