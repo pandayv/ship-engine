@@ -55,7 +55,31 @@ class WatchedRepo:
     status: str
     connected_at: str
     last_event_at: str | None = None
+    last_reviewed_at: str | None = None
     connected_by: str = ""
+
+    @property
+    def stuck(self) -> bool:
+        """True when an event was received but nothing has completed review
+        since, for longer than a real (even cold-start) review should ever
+        take. Live-caught 2026-09-27: a disabled SQS consumer let the
+        webhook accept and 200 an event that then sat forever with nothing
+        downstream ever processing it, and nothing surfaced that except a
+        manual live test. This is that gap made visible on the dashboard
+        itself, for whoever is actually looking (us, or a judge testing a
+        real connected repo), rather than a background alarm nobody sees
+        and nobody can act on once the project is submitted.
+
+        The 20-minute grace window is generous against the worst real
+        latency observed (a cold AgentCore container took ~440s), not a
+        guess.
+        """
+        if not self.last_event_at:
+            return False
+        if not self.last_reviewed_at or self.last_reviewed_at < self.last_event_at:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(self.last_event_at)
+            return age.total_seconds() > 20 * 60
+        return False
 
 
 @lru_cache(maxsize=1)
@@ -89,6 +113,7 @@ def create_table_if_not_exists() -> None:
 def _row_to_repo(item: dict) -> WatchedRepo:
     item = dict(item)
     item.setdefault("last_event_at", None)
+    item.setdefault("last_reviewed_at", None)
     item.setdefault("connected_by", "")
     return WatchedRepo(**item)
 
@@ -182,3 +207,28 @@ def mark_event_seen(repo_full_name: str) -> None:
     except Exception as e:
         if type(e).__name__ != "ConditionalCheckFailedException":
             log.warning("could not record webhook activity for %s: %s", repo_full_name, e)
+
+
+def mark_reviewed(repo_full_name: str) -> None:
+    """
+    Records that a real judgment just completed for this repo — either a
+    synchronous Screener clean-pass, or a fragment-processor's completed
+    verdict (alert or not). Paired with mark_event_seen()'s last_event_at
+    to make WatchedRepo.stuck computable without a separate monitoring
+    system: if events keep arriving but nothing ever finishes reviewing
+    them, that's visible the moment anyone looks at the dashboard.
+
+    Best-effort by design, same reasoning as mark_event_seen(): this is
+    dashboard presentation, and failing to update it must never fail the
+    review it is describing.
+    """
+    try:
+        _table().update_item(
+            Key={"repo_full_name": repo_full_name},
+            UpdateExpression="SET last_reviewed_at = :now",
+            ConditionExpression="attribute_exists(repo_full_name)",
+            ExpressionAttributeValues={":now": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception as e:
+        if type(e).__name__ != "ConditionalCheckFailedException":
+            log.warning("could not record review completion for %s: %s", repo_full_name, e)

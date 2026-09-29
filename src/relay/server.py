@@ -9,23 +9,45 @@ That is a design principle, and Alexa+'s 500 ms round-trip budget also
 makes it the only possible shape — a diagnosis takes ~3 s, ten times the
 whole budget.
 
-WHAT IS DELIBERATELY MISSING, AND WHY IT IS THE POINT
+WHAT VOICE CANNOT DO, AND WHY THAT IS THE POINT
 
-There is no tool here that accepts a compliance risk by voice.
+Voice cannot accept a compliance risk BLIND. It can confirm one, once a
+person has actually looked at the finding on a screen.
 
-That is not a backlog item. SHIP exists to stop AI systems from making
-consequential decisions with no human accountably in the loop — that is
-literally what detector TLGP-002 flags in other people's code. A version
-of SHIP that let someone clear a blocking GDPR finding by saying "approve
-it" to a speaker would be committing the exact violation it was built to
-catch, in its own interface.
+The first version of this rule was simpler and wrong: no tool here would
+ever accept a risk by voice, full stop. Revisited directly (2026-09-28) —
+the actual failure mode SHIP exists to catch isn't "a decision happened
+over voice," it's "a decision happened without a human genuinely engaging
+with what they were deciding." Those aren't the same thing. A person who
+asked to see the findings, had them rendered on a real screen, and then
+says "override it, here's why" has done exactly what human oversight
+requires. Refusing that and forcing a trip to a web form adds friction
+without adding safety. What the ORIGINAL refusal correctly blocks, and
+what still must never work, is "ignore it, go ahead" with no review at
+all — that is the actual TLGP-002 shape (an AI-mediated decision with no
+human checkpoint), not "the confirmation channel was a microphone."
 
-So accepting risk requires what the regulation requires of everyone else:
-a named person, a written reason, and a record. `request_risk_acceptance`
-below exists precisely so that asking produces a clear, honest redirect
-to a surface where those things can happen, rather than a vague failure.
-The refusal is enforced here, in the server, where no prompt and no
-client can argue with it.
+So `request_risk_acceptance` checks one real, server-side fact before
+doing anything: was a screen tool (blocked_pull_requests / finding_detail)
+called for THIS alert_id recently — see src/storage/session_store.py. No:
+refused, exactly as before, redirected to Gate. Yes, and a reason was
+given: performed for real, written to ship-alerts with that reason as the
+record, same durability Gate's own resolve gives it. The reason is still
+required either way — dropping that would trade a real audit trail for a
+bare yes/no flag, which is the one piece of the original design worth
+keeping regardless of channel.
+
+That check is keyed on the alert, by a time window, not on an MCP session
+— a real correction, not the original design. The first version keyed on
+Mcp-Session-Id, reasoning it was a stable per-conversation identifier.
+Live-tested against the actually-deployed system, not assumed correct
+from a local check: it never arrived. `create_app()` below (see the
+ARCHITECTURE NOTE) builds a brand-new session manager on every single
+invocation, so there is no process for a session id to have continuity
+WITH — that isn't a bug to fix, it's what SnapStart-per-invocation
+structurally requires. See src/storage/session_store.py's own docstring
+for the full correction and why "shown in the last ten minutes" is the
+honest signal actually available here.
 
 ARCHITECTURE NOTE — why the ASGI app is a FACTORY, not a module-level
 singleton. Confirmed by a real, reproduced failure, not assumed: the MCP
@@ -60,7 +82,8 @@ from src.relay.modality import Modality, Spoken
 from src.relay.push import push_to_device
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
-from src.storage.alert_store import SEVERITY_BLOCKING, get_alert
+from src.storage import session_store
+from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert
 
 CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
 
@@ -108,8 +131,10 @@ INSTRUCTIONS = (
     "Use release_status for any spoken answer — it is one sentence and is the only "
     "tool safe to read aloud. Never read findings, citations or code aloud: call "
     "blocked_pull_requests or finding_detail and render the result on a screen. "
-    "Accepting a compliance risk cannot be done by voice; call "
-    "request_risk_acceptance, which returns the console to open."
+    "Accepting a compliance risk needs both a reason and the finding having "
+    "already been shown on a screen in this same conversation — call "
+    "request_risk_acceptance with a reason once both are true; if either isn't, "
+    "it returns the console to open instead of performing anything."
 )
 
 
@@ -135,8 +160,16 @@ def release_status() -> str:
 def blocked_pull_requests() -> dict:
     """Every pull request with unresolved findings, with counts and the
     findings themselves. SCREEN ONLY — this is a list and must be displayed,
-    never spoken. Use after release_status when the person asks to see detail."""
+    never spoken. Use after release_status when the person asks to see detail.
+
+    Calling this records every returned alert as recently shown — see
+    request_risk_acceptance and src/storage/session_store.py. That is a
+    side effect of what this tool already does (surfacing the findings on
+    a screen), not a new responsibility."""
     status = _findings_detail()
+    for pr in status.pull_requests:
+        for f in pr.findings:
+            session_store.mark_shown(f.alert_id)
     return {
         "modality": Modality.SCREEN.value,
         "display_only": True,
@@ -170,10 +203,14 @@ def blocked_pull_requests() -> dict:
 def finding_detail(alert_id: str) -> dict:
     """Full detail for one finding: what is wrong, the regulation it breaks,
     and the suggested remediation. SCREEN ONLY — contains a citation and may
-    contain code, neither of which should ever be read aloud."""
+    contain code, neither of which should ever be read aloud.
+
+    Calling this records this alert as recently shown — see
+    request_risk_acceptance and src/storage/session_store.py."""
     alert = get_alert(alert_id)
     if alert is None:
         return {"modality": Modality.SCREEN.value, "found": False, "alert_id": alert_id}
+    session_store.mark_shown(alert_id)
     return {
         "modality": Modality.SCREEN.value,
         "display_only": True,
@@ -192,28 +229,55 @@ def finding_detail(alert_id: str) -> dict:
     }
 
 
-def request_risk_acceptance(alert_id: str) -> dict:
+def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
     """Called when someone asks to approve, accept, override or clear a
-    blocking finding. This CANNOT be completed by voice and this tool never
-    performs it. It returns where the decision must be made instead.
+    blocking finding. Only completes if BOTH are true: blocked_pull_requests
+    or finding_detail was called for this exact alert_id within the last
+    ten minutes (so the person has actually seen it on a screen recently,
+    not just heard a count), and a reason was given. Missing either:
+    refused, and this tool never performs it — returns where the decision
+    must be made instead. If the person hasn't reviewed it yet, offer to
+    show it before asking for a decision. If they have but gave no reason,
+    ask what the reason is before calling this again.
 
-    Accepting a compliance risk requires a named person, a written reason and
-    a durable record — the same human accountability SHIP enforces on the code
-    it reviews. Speak the `spoken_response` verbatim and open `console_url`."""
+    See src/relay/server.py's module docstring for why "reviewed, then
+    voice-confirmed" is allowed while "ignore it, go ahead" with no review
+    at all is not, and never will be. See src/storage/session_store.py for
+    why this checks a time window on the alert itself rather than a
+    session — this Lambda has no session continuity to check against."""
     alert = get_alert(alert_id)
     target = _console(f"/dashboard#{alert_id}") if alert else _console("/dashboard")
+    reviewed = alert is not None and session_store.was_shown_recently(alert_id)
+
+    if reviewed and reason.strip():
+        resolve_alert(alert_id, approved=True, reason=reason.strip(), resolved_by="voice")
+        return {
+            "modality": Modality.ACTION.value,
+            "performed": True,
+            "alert_id": alert_id,
+            "resolution_reason": reason.strip(),
+            "spoken_response": Spoken(f"Done. Accepted, on the record: {reason.strip()}").to_text(),
+            "console_url": target,
+        }
+
+    # Report the review gate first — it's the one the user's own worked
+    # example (ask, hear a count, say "ignore it, go ahead" with nothing
+    # ever shown) has to fail on, regardless of whether a reason was also
+    # given in the same breath.
+    if not reviewed:
+        missing, spoken = "for this to have been shown on a screen recently", "Take a look on a screen first, then tell me why."
+    else:
+        missing, spoken = "a reason", "That needs a written reason on the record."
+
     return {
         "modality": Modality.ACTION.value,
         "performed": False,
         "reason": "requires_attested_human_decision",
         "explanation": (
-            "Accepting a compliance risk needs a named person, a written reason, and a "
-            "record. That cannot happen over voice, so SHIP does not offer it here."
+            f"Accepting a compliance risk needs {missing}, and a durable record either way. "
+            "That's the same human accountability SHIP enforces on the code it reviews."
         ),
-        "spoken_response": Spoken(
-            "That needs a written reason on the record.",
-            screen_hint="Opening it on your screen.",
-        ).to_text(),
+        "spoken_response": Spoken(spoken, screen_hint="Opening it on your screen.").to_text(),
         "console_url": target,
     }
 
@@ -229,10 +293,14 @@ def display_on(surface: str) -> dict:
     connection (see src/relay/push.py) to whatever display page most
     recently registered under that name — not a description of what
     would happen, an actual delivery, reported honestly if the named
-    device isn't currently connected rather than pretending it worked."""
+    device isn't currently connected rather than pretending it worked.
+
+    Either way this records every pushed alert as recently shown — see
+    request_risk_acceptance."""
     normalised = (surface or "").strip().lower() or "here"
 
     if normalised == "here":
+        blocked_pull_requests()  # records the review; same payload the caller already has
         return {
             "modality": Modality.ACTION.value, "surface": normalised, "delivered": True,
             "console_url": _console("/dashboard"),

@@ -45,13 +45,19 @@ class _FakeTable:
         self._boom()
         return {"Items": list(self.rows.values())}
 
-    def update_item(self, Key, **kwargs):
+    def update_item(self, Key, UpdateExpression, **kwargs):
+        # Real enough to distinguish mark_event_seen() (sets status +
+        # last_event_at) from mark_reviewed() (sets only last_reviewed_at)
+        # rather than a hardcoded update every caller triggers identically.
         self._boom()
         name = Key["repo_full_name"]
         if name not in self.rows:
             raise _ConditionalCheckFailedException("no such row")
-        self.rows[name]["status"] = STATUS_WATCHING
-        self.rows[name]["last_event_at"] = "2026-09-08T00:00:00+00:00"
+        if "#s" in UpdateExpression:
+            self.rows[name]["status"] = STATUS_WATCHING
+            self.rows[name]["last_event_at"] = "2026-09-08T00:00:00+00:00"
+        if "last_reviewed_at" in UpdateExpression:
+            self.rows[name]["last_reviewed_at"] = "2026-09-08T00:05:00+00:00"
 
 
 class _ConditionalCheckFailedException(Exception):
@@ -167,3 +173,66 @@ def test_marking_never_raises_even_if_the_datastore_is_down(monkeypatch):
     # the webhook delivery it is describing.
     monkeypatch.setattr(repo_store, "_table", lambda: _FakeTable(raises=RuntimeError("dynamodb down")))
     repo_store.mark_event_seen("pandayv/micro-finance")  # must not raise
+
+
+# --- received-vs-reviewed visibility ---
+
+
+def test_reviewing_records_completion_time(table):
+    repo_store.connect_repo("pandayv/micro-finance")
+    repo_store.mark_reviewed("pandayv/micro-finance")
+    assert repo_store.get_repo("pandayv/micro-finance").last_reviewed_at is not None
+
+
+def test_reviewing_a_bootstrap_only_repo_does_not_create_a_row(table, monkeypatch):
+    monkeypatch.setattr(repo_store, "BOOTSTRAP_REPOS", ("pandayv/micro-finance",))
+    repo_store.mark_reviewed("pandayv/micro-finance")
+    assert table.rows == {}
+
+
+def test_reviewing_never_raises_even_if_the_datastore_is_down(monkeypatch):
+    monkeypatch.setattr(repo_store, "_table", lambda: _FakeTable(raises=RuntimeError("dynamodb down")))
+    repo_store.mark_reviewed("pandayv/micro-finance")  # must not raise
+
+
+def test_not_stuck_before_any_event():
+    assert WatchedRepo(repo_full_name="a/b", status=STATUS_AWAITING, connected_at="x").stuck is False
+
+
+def test_not_stuck_when_reviewed_after_the_event():
+    repo = WatchedRepo(
+        repo_full_name="a/b", status=STATUS_WATCHING, connected_at="x",
+        last_event_at="2026-09-27T00:00:00+00:00", last_reviewed_at="2026-09-27T00:01:00+00:00",
+    )
+    assert repo.stuck is False
+
+
+def test_not_stuck_within_the_grace_window():
+    # An event that arrived 5 minutes ago with nothing reviewed since is
+    # normal — a real Detector call alone can take several minutes.
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    repo = WatchedRepo(repo_full_name="a/b", status=STATUS_WATCHING, connected_at="x", last_event_at=recent)
+    assert repo.stuck is False
+
+
+def test_stuck_past_the_grace_window_with_nothing_reviewed():
+    # This is exactly the 2026-09-27 bug: an event received, a disabled
+    # SQS consumer, nothing ever completes review.
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    repo = WatchedRepo(repo_full_name="a/b", status=STATUS_WATCHING, connected_at="x", last_event_at=old)
+    assert repo.stuck is True
+
+
+def test_stuck_when_the_last_review_predates_the_last_event():
+    # A second event arrived after the last completed review — still
+    # pending, even though an older review did once succeed.
+    from datetime import datetime, timedelta, timezone
+    old_review = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+    new_event = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+    repo = WatchedRepo(
+        repo_full_name="a/b", status=STATUS_WATCHING, connected_at="x",
+        last_event_at=new_event, last_reviewed_at=old_review,
+    )
+    assert repo.stuck is True

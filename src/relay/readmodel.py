@@ -83,32 +83,39 @@ class ReleaseStatus:
         """One sentence. Never a list — see src/relay/modality.py.
 
         Deliberately does not name files, taxonomy ids, citations or risk
-        scores. Those are screen facts. Voice answers only "is anything
-        wrong, how bad, and where do I look".
+        scores, or a specific PR/repo label. Those are screen facts. Voice
+        states one actionable fact (how many, blocking or not, how many
+        places) and always ends with what to do next — never a bare status
+        with no implied action.
+
+        The middle band (REVIEW, non-blocking) is a real, equally
+        dismissable Gate alert, exactly like a blocking one — the only
+        difference is whether the merge is stopped meanwhile. An earlier
+        version of this sentence said "N blocking findings and M flagged
+        for review", which reads as if "flagged for review" is a separate,
+        lesser category the blocking ones aren't also part of. They are.
+        When there are blockers, only the blocking count is spoken; the
+        non-blocking ones are still real and still on the screen, just not
+        headline material when something is already actively stopping the
+        merge.
         """
         if self.total == 0:
-            return Spoken("Nothing is blocked. Everything reviewed clean.")
+            return Spoken("No blocking issues. Good to move ahead.")
+
+        multi_pr = len(self.pull_requests) > 1
 
         if self.blocking:
-            sentence = (
-                f"{self.blocking} blocking "
-                f"{'finding' if self.blocking == 1 else 'findings'}"
-            )
-            if self.review:
-                sentence += f" and {self.review} flagged for review"
+            noun = "blocker" if self.blocking == 1 else "blockers"
+            sentence = f"{self.blocking} {noun} found"
+            if multi_pr:
+                sentence += f" across {len(self.pull_requests)} PRs"
+            sentence += ". Ready for your decision."
         else:
-            sentence = (
-                f"{self.review} finding{'s' if self.review != 1 else ''} flagged for review, "
-                f"nothing blocking"
-            )
-
-        urgent = self.most_urgent
-        if urgent and len(self.pull_requests) == 1:
-            sentence += f" on {urgent.label}."
-        elif urgent:
-            sentence += f" across {len(self.pull_requests)} pull requests, the oldest on {urgent.label}."
-        else:
-            sentence += "."
+            noun = "issue" if self.review == 1 else "issues"
+            sentence = f"{self.review} {noun} found"
+            if multi_pr:
+                sentence += f" across {len(self.pull_requests)} PRs"
+            sentence += ". None blocking. Ready for your review."
 
         return Spoken(sentence, screen_hint=screen_hint)
 

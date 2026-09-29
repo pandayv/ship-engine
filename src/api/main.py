@@ -95,7 +95,7 @@ from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_diff, is_pr_event
 from src.api.github_writeback import comment_for_finding, post_pr_comment, sync_pr_check
 from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
-from src.storage.repo_store import is_watched, mark_event_seen
+from src.storage.repo_store import is_watched, mark_event_seen, mark_reviewed
 from src.storage.status_store import refresh_summary
 
 app = FastAPI(title="SHIP")
@@ -215,6 +215,7 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # already stored, and the next finding or decision re-refreshes.
         refresh_summary()
 
+    mark_reviewed(repo_full_name)
     log.info("fragment result: file=%s action=%s blocks_build=%s alert_id=%s",
              file, decision.action.value, decision.blocks_build, alert_id)
     return {
@@ -404,6 +405,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
         # rather than "reviewed and fine" — and a required check that never
         # reports blocks the merge just as effectively as a failing one.
         sync_pr_check(repo_full_name, pr_number, head_sha)
+        mark_reviewed(repo_full_name)
         return {"action": "pass", "reason": "Screener found no trigger matches."}
 
     # finding #44: this used to call process_pr() synchronously inline for

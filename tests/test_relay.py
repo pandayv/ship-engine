@@ -8,11 +8,14 @@ than left to code review:
      list, no citation and no code. This is enforced by the server, so a
      future prompt or a well-meaning change cannot quietly turn Relay
      into a narrator.
-  2. No compliance risk can be accepted by voice. SHIP flags exactly this
+  2. No compliance risk can be accepted BLIND. SHIP flags exactly this
      pattern in other people's code (TLGP-002 — an automated decision with
      no human checkpoint); doing it in its own interface would be the same
-     violation. The tool surface must make it impossible, not merely
-     unimplemented.
+     violation. Revised 2026-09-28: the rule isn't "never by voice," it's
+     "never without the finding having actually been shown on a screen in
+     this session first" — see src/relay/server.py's module docstring for
+     the full reasoning. What must still be impossible is a decision with
+     no review behind it at all, regardless of channel.
 """
 
 import asyncio
@@ -22,8 +25,41 @@ import pytest
 import src.relay.server as relay
 from src.relay.modality import SPEECH_CHAR_BUDGET, ModalityViolation, Spoken
 from src.relay.readmodel import ReleaseStatus, _group
+from src.storage import session_store
 from src.storage.alert_store import Alert
 from src.storage.status_store import PullRequestCounts, ReleaseSummary
+
+
+class _FakeSessionTable:
+    """Real session_store logic against a fake DynamoDB table — exercises
+    the actual mark_shown()/was_shown_recently() integration, not a
+    mocked pass-through, matching this project's established testing
+    convention (see test_session_store.py's own _FakeTable)."""
+
+    def __init__(self):
+        self.rows = {}
+
+    def get_item(self, Key):
+        row = self.rows.get(Key["alert_id"])
+        return {"Item": row} if row else {}
+
+    def put_item(self, Item):
+        self.rows[Item["alert_id"]] = Item
+
+
+@pytest.fixture(autouse=True)
+def session_table(monkeypatch):
+    """Autouse, not opt-in: blocked_pull_requests/finding_detail/display_on
+    all call session_store.mark_shown() unconditionally now, and it fails
+    SILENTLY by design (see session_store.py's own docstring) — a test
+    that forgets to mock this doesn't fail, it quietly writes to the real
+    ship-recent-reviews table instead. Caught live: several tests here did
+    exactly that before this became autouse. Making it automatic for every
+    test in this file removes the failure mode instead of relying on
+    every future test author to remember it."""
+    fake = _FakeSessionTable()
+    monkeypatch.setattr(session_store, "_table", lambda: fake)
+    return fake
 
 
 def _alert(repo="pandayv/micro-finance", pr=2, severity="blocking", score=9.0,
@@ -94,9 +130,10 @@ def test_spoken_status_never_leaks_screen_facts(one_blocking):
     # Citations, file paths, taxonomy ids and code are screen facts. If any
     # of them reach the spoken path, voice has started narrating.
     spoken = relay.release_status().lower()
-    # Naming the pull request IS appropriate for voice — it is the
-    # destination, not detail. Citations, files, taxonomy ids and code are
-    # the screen facts that must never be spoken.
+    # A specific PR/repo label is also a screen fact now, not a voice one —
+    # a raw "repo#42" reference is unpronounceable and meaningless to a
+    # non-technical listener. Voice states counts only (how many, how many
+    # places); which one is what "want it on a screen?" is for.
     for leak in ["gdpr", "art.", "piie", ".py", "hash identifiers", "risk score"]:
         assert leak not in spoken, f"spoken response leaked a screen fact: {leak!r}"
 
@@ -117,7 +154,7 @@ def test_clean_state_is_reassuring_and_short(monkeypatch):
     # through to a real (and possibly non-empty) DynamoDB table.
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: ReleaseSummary())
     spoken = relay.release_status()
-    assert "nothing is blocked" in spoken.lower()
+    assert "no blocking issues" in spoken.lower()
     assert len(spoken) <= SPEECH_CHAR_BUDGET
 
 
@@ -131,7 +168,7 @@ def test_release_status_never_reads_the_alerts_table_directly(monkeypatch):
 
     monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: _must_not_be_called())
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: ReleaseSummary())
-    assert "nothing is blocked" in relay.release_status().lower()
+    assert "no blocking issues" in relay.release_status().lower()
 
 
 def test_screen_tools_are_marked_display_only(one_blocking):
@@ -160,21 +197,85 @@ async def mcp_tools():
     return await relay.mcp.list_tools()
 
 
-def test_requesting_acceptance_never_performs_it(one_blocking):
-    result = relay.request_risk_acceptance("a1")
+def test_blind_acceptance_never_performs_it(one_blocking, session_table):
+    # No screen tool was ever called for this alert — the exact "ignore
+    # it, go ahead" shape that must still never work.
+    result = relay.request_risk_acceptance("a1", reason="looks fine")
     assert result["performed"] is False
     assert result["reason"] == "requires_attested_human_decision"
 
 
-def test_the_refusal_is_short_enough_to_speak(one_blocking):
+def test_blind_refusal_is_short_enough_to_speak_and_names_the_real_gap(one_blocking, session_table):
     spoken = relay.request_risk_acceptance("a1")["spoken_response"]
     assert len(spoken) <= SPEECH_CHAR_BUDGET
-    assert "written reason" in spoken.lower()
+    assert "screen" in spoken.lower()
 
 
-def test_refusal_routes_to_a_surface_where_the_decision_can_be_made(one_blocking, monkeypatch):
+def test_refusal_routes_to_a_surface_where_the_decision_can_be_made(one_blocking, session_table, monkeypatch):
     monkeypatch.setattr(relay, "CONSOLE_URL", "https://ship.example")
     assert relay.request_risk_acceptance("a1")["console_url"].startswith("https://ship.example/dashboard")
+
+
+def test_reviewed_then_confirmed_with_a_reason_actually_performs_it(one_blocking, session_table, monkeypatch):
+    resolved = {}
+    monkeypatch.setattr(relay, "resolve_alert",
+                         lambda alert_id, approved, reason, resolved_by: resolved.update(
+                             alert_id=alert_id, approved=approved, reason=reason, resolved_by=resolved_by))
+
+    relay.finding_detail("a1")  # the actual review
+    result = relay.request_risk_acceptance("a1", reason="known internal test fixture")
+
+    assert result["performed"] is True
+    assert resolved == {"alert_id": "a1", "approved": True,
+                         "reason": "known internal test fixture", "resolved_by": "voice"}
+
+
+def test_reviewed_but_no_reason_still_refuses(one_blocking, session_table, monkeypatch):
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve without a reason"))
+
+    relay.finding_detail("a1")
+    result = relay.request_risk_acceptance("a1")  # no reason
+
+    assert result["performed"] is False
+    assert "reason" in result["spoken_response"].lower()
+
+
+def test_a_stale_review_past_the_window_does_not_unlock_it(one_blocking, session_table, monkeypatch):
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
+    relay.finding_detail("a1")
+    # Simulate the review having happened outside the recent window,
+    # rather than asserting against wall-clock timing.
+    session_table.rows["a1"]["shown_at"] -= session_store.RECENT_WINDOW_SECONDS + 1
+
+    result = relay.request_risk_acceptance("a1", reason="go ahead")
+
+    assert result["performed"] is False
+
+
+def test_display_on_a_named_screen_also_counts_as_reviewed(one_blocking, session_table, monkeypatch):
+    # Asking Alexa to push to the TV and then saying "override it" in the
+    # same breath must work — the person asking is who'll plausibly say
+    # that next, regardless of which physical screen it renders on.
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": ["tv1"], "not_connected": False})
+    resolved = {}
+    monkeypatch.setattr(relay, "resolve_alert",
+                         lambda alert_id, approved, reason, resolved_by: resolved.update(performed=True))
+
+    relay.display_on("tv")
+    result = relay.request_risk_acceptance("a1", reason="reviewed on the tv")
+
+    assert result["performed"] is True
+
+
+def test_hearing_only_release_status_does_not_count_as_reviewed(one_blocking, session_table, monkeypatch):
+    # release_status is voice-only and never names a specific finding — it
+    # must not be mistaken for having shown anything.
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
+
+    relay.release_status()  # never touches session_store at all
+    result = relay.request_risk_acceptance("a1", reason="go ahead")
+
+    assert result["performed"] is False
 
 
 # --- routing ---
@@ -237,14 +338,49 @@ def test_display_on_pushes_the_real_findings_payload(one_blocking, monkeypatch):
 # --- the summary voice is allowed to give ---
 
 
-def test_blocking_findings_are_prioritised_over_volume():
-    urgent = _status([
-        _alert(repo="a/one", pr=1, severity="review", score=6.0, created="2026-09-24T01:00:00+00:00", alert_id="x1"),
-        _alert(repo="a/one", pr=1, severity="review", score=6.0, created="2026-09-24T01:01:00+00:00", alert_id="x2"),
-        _alert(repo="b/two", pr=2, severity="blocking", score=9.0, created="2026-09-24T02:00:00+00:00", alert_id="y1"),
-    ]).most_urgent
-    # One stopped merge outranks two advisory flags.
-    assert urgent.label == "b/two#2"
+def test_spoken_blocking_single_pr():
+    spoken = _status([_alert(pr=1, severity="blocking")]).to_spoken().to_text().lower()
+    assert "1 blocker found" in spoken
+    assert "ready for your decision" in spoken
+    assert "across" not in spoken  # no PR count for a single PR
+
+
+def test_spoken_blocking_multiple_prs():
+    spoken = _status([
+        _alert(repo="a/one", pr=1, severity="blocking", alert_id="x1"),
+        _alert(repo="b/two", pr=2, severity="review", score=6.0, alert_id="x2"),
+    ]).to_spoken().to_text().lower()
+    assert "1 blocker found across 2 prs" in spoken
+    assert "ready for your decision" in spoken
+
+
+def test_spoken_mixed_severity_states_only_the_blocking_count():
+    # A blocking finding and a separate, non-blocking one on the SAME
+    # PR — the REVIEW-band one is still a real, dismissable Gate alert
+    # (see ALERTING_ACTIONS in src/agents/triage.py), just not spoken
+    # here, to avoid implying it's the blocking ones that aren't reviewable.
+    spoken = _status([
+        _alert(pr=1, severity="blocking", alert_id="x1"),
+        _alert(pr=1, severity="review", score=6.0, alert_id="x2"),
+    ]).to_spoken().to_text().lower()
+    assert "1 blocker found" in spoken
+    assert "2" not in spoken  # the review-band count never reaches voice
+
+
+def test_spoken_review_only_single_pr():
+    spoken = _status([_alert(pr=1, severity="review", score=6.0)]).to_spoken().to_text().lower()
+    assert "1 issue found" in spoken
+    assert "none blocking" in spoken
+    assert "ready for your review" in spoken
+
+
+def test_spoken_review_only_multiple_prs():
+    spoken = _status([
+        _alert(repo="a/one", pr=1, severity="review", score=6.0, alert_id="x1"),
+        _alert(repo="b/two", pr=2, severity="review", score=6.0, alert_id="x2"),
+    ]).to_spoken().to_text().lower()
+    assert "2 issues found across 2 prs" in spoken
+    assert "none blocking" in spoken
 
 
 def test_missing_finding_is_reported_not_faked(one_blocking):
