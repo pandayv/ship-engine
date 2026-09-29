@@ -121,6 +121,12 @@ Article 14; ALBP-001 grounds against EU AI Act Article 10 and Annex III Section 
 5(b); TLGP-001 grounds against OWASP LLM06:2025 — query for whichever is \
 actually relevant to what you're looking at.
 
+Also call `retrieve_prior_determinations` to check whether this looks like a \
+shape human reviewers have confirmed before as a false positive. Treat what it \
+returns as CONTEXT, never a rule — it does not override your own grounded \
+judgment against the actual regulation text, and a pattern existing does not by \
+itself mean this specific case is safe. Weigh it, do not defer to it.
+
 If you confirm a real violation:
 - Set taxonomy_id to whichever ID actually applies (PIIE-001/002/003, TLGP-001, \
   TLGP-002, or ALBP-001).
@@ -223,6 +229,36 @@ def _get_store():
     return store
 
 
+# Unlike the regulation corpus (genuinely static between deploys, hence
+# _get_store()'s permanent lru_cache), learned patterns change within one
+# deployment's lifetime as scripts/pattern_miner.py runs periodically. A
+# permanent cache would mean a pattern that just crossed MIN_SUPPORT never
+# gets used by an already-warm container until it happens to cold-start —
+# silently, with no error to notice. But rebuilding (and re-embedding via
+# Bedrock) on every single fragment review is the same real, measured cost
+# problem src/rag/embedding_cache.py's docstring documents for the
+# regulation corpus. This is the proportionate middle: cached, but with a
+# bound on staleness, not cached forever and not rebuilt every call.
+_PATTERN_STORE_REFRESH_SECONDS = 1800  # 30 minutes
+_pattern_store_cache: tuple = (None, 0.0)  # (PatternStore | None, cached_at monotonic)
+
+
+def _get_pattern_store():
+    import time
+
+    from src.rag.pattern_store import PatternStore, list_patterns
+
+    global _pattern_store_cache
+    store, cached_at = _pattern_store_cache
+    if store is not None and (time.monotonic() - cached_at) < _PATTERN_STORE_REFRESH_SECONDS:
+        return store
+
+    store = PatternStore()
+    store.build(list_patterns(eligible_only=True))
+    _pattern_store_cache = (store, time.monotonic())
+    return store
+
+
 DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-lite-v1:0"
 # Switched from Claude Haiku 4.5 on 2026-09-08, on measured evidence
 # rather than preference (scripts/benchmark_models.py, run against the
@@ -289,6 +325,21 @@ def build_agent() -> "Agent":
         results = _get_store().query(query, top_k=3)
         return "\n\n".join(f"[{r.chunk.article}, para {r.chunk.paragraph_index}] {r.chunk.text}" for r in results)
 
+    @tool
+    def retrieve_prior_determinations(query: str) -> str:
+        """Retrieve patterns learned from past human dismissals of similar
+        findings — cases a human reviewer confirmed were NOT actually
+        violations, generalized from specific instances. Call this after
+        Screener flags something, to check whether this looks like a known
+        false-positive shape. These are CONTEXT to weigh, never a rule to
+        follow blindly — still form an independent judgment grounded in the
+        actual regulation text; a pattern can inform that judgment but
+        cannot substitute for it."""
+        results = _get_pattern_store().query(query, top_k=3)
+        if not results:
+            return "No relevant prior determinations found."
+        return "\n\n".join(f"[confirmed {p.support_count}x] {p.text}" for p in results)
+
     backend = os.environ.get("SHIP_MODEL_BACKEND", "bedrock")
     if backend == "bedrock":
         from strands.models.bedrock import BedrockModel
@@ -321,7 +372,7 @@ def build_agent() -> "Agent":
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
-        tools=[retrieve_regulation_text],
+        tools=[retrieve_regulation_text, retrieve_prior_determinations],
         structured_output_model=DetectorOutput,
     )
 

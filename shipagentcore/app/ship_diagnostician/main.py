@@ -30,6 +30,7 @@ from strands.models.bedrock import BedrockModel
 from aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 from rag.chunker import chunk_corpus
 from rag.embedding_cache import default_cache_path
+from rag.pattern_store import PatternStore, list_patterns
 from rag.vector_store import VectorStore
 
 app = BedrockAgentCoreApp()
@@ -120,6 +121,12 @@ Article 14; ALBP-001 grounds against EU AI Act Article 10 and Annex III Section 
 5(b); TLGP-001 grounds against OWASP LLM06:2025 — query for whichever is \
 actually relevant to what you're looking at.
 
+Also call `retrieve_prior_determinations` to check whether this looks like a \
+shape human reviewers have confirmed before as a false positive. Treat what it \
+returns as CONTEXT, never a rule — it does not override your own grounded \
+judgment against the actual regulation text, and a pattern existing does not by \
+itself mean this specific case is safe. Weigh it, do not defer to it.
+
 If you confirm a real violation:
 - Set taxonomy_id to whichever ID actually applies (PIIE-001/002/003, TLGP-001, \
   TLGP-002, or ALBP-001).
@@ -194,6 +201,44 @@ def retrieve_regulation_text(query: str) -> str:
     return "\n\n".join(f"[{chunk.article}, para {chunk.paragraph_index}] {chunk.text}" for chunk, _score in results)
 
 
+# Time-bound, not permanent, unlike _get_store()'s corpus cache — see
+# src/agents/detector.py's identical mirror of this function for why a
+# permanent cache here would silently miss newly-eligible patterns for the
+# life of a warm container.
+_PATTERN_STORE_REFRESH_SECONDS = 1800
+_pattern_store_cache: tuple = (None, 0.0)
+
+
+def _get_pattern_store() -> PatternStore:
+    import time
+
+    global _pattern_store_cache
+    store, cached_at = _pattern_store_cache
+    if store is not None and (time.monotonic() - cached_at) < _PATTERN_STORE_REFRESH_SECONDS:
+        return store
+
+    store = PatternStore()
+    store.build(list_patterns(eligible_only=True))
+    _pattern_store_cache = (store, time.monotonic())
+    return store
+
+
+@tool
+def retrieve_prior_determinations(query: str) -> str:
+    """Retrieve patterns learned from past human dismissals of similar
+    findings — cases a human reviewer confirmed were NOT actually
+    violations, generalized from specific instances. Call this after
+    Screener flags something, to check whether this looks like a known
+    false-positive shape. These are CONTEXT to weigh, never a rule to
+    follow blindly — still form an independent judgment grounded in the
+    actual regulation text; a pattern can inform that judgment but cannot
+    substitute for it."""
+    results = _get_pattern_store().query(query, top_k=3)
+    if not results:
+        return "No relevant prior determinations found."
+    return "\n\n".join(f"[confirmed {p.support_count}x] {p.text}" for p in results)
+
+
 @app.entrypoint
 async def invoke(payload: dict, context) -> dict:
     """
@@ -229,7 +274,7 @@ async def invoke(payload: dict, context) -> dict:
             model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session(), boto_client_config=BEDROCK_RETRY_CONFIG,
         ),
         system_prompt=SYSTEM_PROMPT,
-        tools=[retrieve_regulation_text],
+        tools=[retrieve_regulation_text, retrieve_prior_determinations],
         structured_output_model=DetectorOutput,
     )
     # finding #11: this used to be the synchronous `agent(...)` call inside
