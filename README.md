@@ -54,47 +54,23 @@ ever renders on a screen (see [Ask, don't read](#ask-dont-read-the-alexa-experie
 
 ## Guiding principles
 
-### Trust, but verify
-- Detector's every citation is grounded in retrieved regulation text
-  (GDPR, EU AI Act, OWASP), never a model's unaided recollection. It must
-  call its retrieval tool before judging anything.
-- Screener's keyword match is a *signal*, not a verdict. Detector
-  independently judges whether it's a real violation or a false positive,
-  verified against genuine violations and deliberate look-alikes designed
-  specifically to trip a naive pattern match.
-- The stricter categories carry an explicit evidence bar in the prompt
-  itself. A protected characteristic must connect to an actual scoring
-  *operation* (an arithmetic adjustment, a conditional) rather than merely
-  appear in the same function, so a field that's present isn't confused
-  with a field that's actually driving the decision.
+**1. Grounded, not guessed.**
+Rely on facts, not memory or guesswork. Keep improving to make that
+grounding sharper.
 
-### A human always makes the call
-- Triage only ever proposes an action: log-and-continue, or freeze. It
-  never resolves anything by itself.
-- A frozen alert resolves through Gate (the review console, gated behind
-  its own credential separate from the webhook's), or through a spoken
-  confirmation once a finding has genuinely been shown on a screen. Either
-  way it's a one-way, guarded transition. A retry or a duplicate webhook
-  delivery cannot silently re-open or overwrite a decision a human
-  already made.
+**2. Cost efficiency.**
+Free deterministic checks first, LLM only when needed. Only the right
+model for the job, measured.
 
-### AI-specific scope, on purpose
-The pipeline underneath is mechanically generic enough to flag other
-things too, but SHIP deliberately stays scoped to AI-feature risk (raw
-data reaching a model, an AI output driving a decision with no
-checkpoint, a protected characteristic feeding a score, an agent granted
-an unscoped dangerous capability). That scope *is* the product. Diluting
-it into general-purpose static analysis would trade away the one thing
-that differentiates this from tools that already exist.
+**3. Scalability and resilience.**
+Survive retries, failures, and heavy load without breaking.
 
-### Built to survive real traffic, not just a demo
-A webhook redelivery or a retried job can never create a duplicate alert,
-and can never silently reopen or overwrite a decision a human already
-made. Every flagged issue in a PR is reviewed independently and in
-parallel, so one slow or unlucky issue can never crowd out the review of
-another in the same PR (see [Architecture](#architecture) below). Every
-property on this list is verified against the real, deployed system, not
-asserted from a passing test suite alone.
+**4. Last line of defense.**
+Assume nothing was checked before this. It doesn't matter who wrote the
+code, a person or an AI. It doesn't matter if the feature uses AI or not.
+
+See [What it does](#what-it-does), [Architecture](#architecture), and
+[Tech stack](#tech-stack) below for how each of these is actually built.
 
 ## What it does
 
