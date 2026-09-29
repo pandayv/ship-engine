@@ -1,22 +1,64 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>SHIP — Sign in</title>
-  <style>
-    body { font-family: -apple-system, sans-serif; color: #1a1a1a; }
-    .wrap { max-width: 360px; margin: 18vh auto 0; padding: 0 1rem; }
-    h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
-    .subtitle { color: #666; margin-bottom: 1.75rem; font-size: 0.92rem; }
-    form { border: 1px solid #ddd; border-radius: 8px; padding: 1.25rem; }
-    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
-    input { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.95rem;
-      padding: 0.55rem 0.65rem; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 0.9rem; }
-    button { width: 100%; background: #1a1a1a; color: white; border: none; border-radius: 6px;
-      padding: 0.6rem 1rem; cursor: pointer; font-size: 0.95rem; }
-    .error { background: #fbeae6; color: #c0392b; border-radius: 6px; padding: 0.6rem 0.75rem;
-      font-size: 0.88rem; margin-bottom: 1rem; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHIP — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #12161c; --ink-soft: #5b6472;
+  --border: #e2e5ea; --border-strong: #cbd1da;
+  --accent: #1c3a5e; --accent-tint: #e8eef5;
+  --blocking: #b3392c; --blocking-tint: #fbeae6;
+  --shadow: 0 1px 2px rgba(18,22,28,0.04), 0 4px 12px rgba(18,22,28,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+    --border: #2a3138; --border-strong: #3a434c;
+    --accent: #86aed8; --accent-tint: #1c2a3a;
+    --blocking: #e2735c; --blocking-tint: #3a1f18;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+  --border: #2a3138; --border-strong: #3a434c;
+  --accent: #86aed8; --accent-tint: #1c2a3a;
+  --blocking: #e2735c; --blocking-tint: #3a1f18;
+  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  padding: 20px;
+}
+.wrap { max-width: 360px; width: 100%; }
+h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5rem;
+     margin: 0 0 4px; letter-spacing: -0.01em; }
+.subtitle { color: var(--ink-soft); margin-bottom: 22px; font-size: 0.9rem; }
+form { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+       padding: 22px; box-shadow: var(--shadow); }
+label { display: block; font-size: 0.84rem; font-weight: 600; margin-bottom: 7px; }
+input { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.95rem;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px; margin-bottom: 16px;
+  background: var(--surface); color: var(--ink); }
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { width: 100%; background: var(--accent); color: white; border: none; border-radius: 8px;
+  padding: 11px 1rem; cursor: pointer; font-size: 0.95rem; font-weight: 600; font-family: inherit; }
+button:hover { filter: brightness(1.1); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.error { background: var(--blocking-tint); color: var(--blocking); border-radius: 8px;
+  padding: 10px 13px; font-size: 0.88rem; margin-bottom: 14px; }
+</style>
 </head>
 <body>
   <div class="wrap">

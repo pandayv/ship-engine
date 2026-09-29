@@ -1,57 +1,121 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>SHIP — Gate — History</title>
-  <style>
-    body { font-family: -apple-system, sans-serif; max-width: 780px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-    h1 { font-size: 1.3rem; }
-    .subtitle { color: #666; margin-bottom: 2rem; }
-    .nav { margin-bottom: 1.25rem; font-size: 0.9rem; }
-    .nav a { color: #666; text-decoration: none; margin-right: 1rem; }
-    .nav a:hover { text-decoration: underline; }
-    .alert { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .alert.approved { border-left: 4px solid #27ae60; }
-    .alert.rejected { border-left: 4px solid #c0392b; }
-    .meta { color: #666; font-size: 0.85rem; margin-bottom: 0.5rem; }
-    .score { font-weight: 600; color: #c0392b; }
-    .tag { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
-           text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; }
-    .tag.approved { background: #27ae60; color: white; }
-    .tag.rejected { background: #c0392b; color: white; }
-    .citation { font-family: monospace; background: #f5f5f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
-    .reason { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #eee; font-size: 0.92rem; }
-    .reason .who { color: #666; font-size: 0.85rem; }
-    .empty { color: #666; padding: 2rem 0; text-align: center; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHIP — Gate — History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #12161c; --ink-soft: #5b6472;
+  --border: #e2e5ea; --border-strong: #cbd1da;
+  --accent: #1c3a5e; --accent-tint: #e8eef5;
+  --blocking: #b3392c; --blocking-tint: #fbeae6;
+  --approved: #1e8f5f; --approved-tint: #e5f4ed;
+  --review: #b8720f; --review-tint: #f8eede;
+  --shadow: 0 1px 2px rgba(18,22,28,0.04), 0 4px 12px rgba(18,22,28,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+    --border: #2a3138; --border-strong: #3a434c;
+    --accent: #86aed8; --accent-tint: #1c2a3a;
+    --blocking: #e2735c; --blocking-tint: #3a1f18;
+    --approved: #4fc98a; --approved-tint: #163425;
+    --review: #e0a052; --review-tint: #3a2a12;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+  --border: #2a3138; --border-strong: #3a434c;
+  --accent: #86aed8; --accent-tint: #1c2a3a;
+  --blocking: #e2735c; --blocking-tint: #3a1f18;
+  --approved: #4fc98a; --approved-tint: #163425;
+  --review: #e0a052; --review-tint: #3a2a12;
+  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5; padding: 40px 20px 90px;
+}
+.wrap { max-width: 760px; margin: 0 auto; }
+h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5rem;
+     letter-spacing: -0.01em; margin: 0 0 4px; }
+.subtitle { color: var(--ink-soft); font-size: 0.92rem; margin-bottom: 28px; max-width: 60ch; }
+.nav { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; font-size: 0.88rem; }
+.nav a { color: var(--ink-soft); text-decoration: none; }
+.nav a.current { color: var(--ink); font-weight: 600; }
+.nav a:hover { color: var(--accent); }
+.nav .spacer { flex: 1; }
+
+.alert { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+         padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.alert.approved { border-left: 3px solid var(--approved); }
+.alert.rejected { border-left: 3px solid var(--blocking); }
+
+.tag { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700;
+       letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 9px 3px 8px; border-radius: 999px;
+       margin-bottom: 10px; }
+.tag .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tag.approved { background: var(--approved-tint); color: var(--approved); }
+.tag.rejected { background: var(--blocking-tint); color: var(--blocking); }
+
+.meta { color: var(--ink-soft); font-size: 0.82rem; margin-bottom: 10px; display: flex;
+        flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.meta .file { font-family: "JetBrains Mono", monospace; font-size: 0.8rem; }
+.score { font-family: "JetBrains Mono", monospace; font-weight: 600; color: var(--blocking);
+         font-variant-numeric: tabular-nums; }
+.citation { font-family: "JetBrains Mono", monospace; background: var(--accent-tint); color: var(--accent);
+            padding: 1px 7px; border-radius: 4px; font-size: 0.78rem; }
+
+.reason { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 0.92rem; }
+.reason .who { color: var(--ink-soft); font-size: 0.82rem; margin-top: 4px; }
+.empty { color: var(--ink-soft); padding: 60px 0; text-align: center; font-size: 0.95rem; }
+</style>
 </head>
 <body>
-  <h1>SHIP — Gate</h1>
-  <div class="nav">
-    <a href="/dashboard">Active</a>
-    <a href="/dashboard/history"><strong>History</strong></a>
-    <a href="/dashboard/repos">Connected repos</a>
-    <a href="/dashboard/logout" style="float:right">Sign out</a>
-  </div>
-  <div class="subtitle">Every finding a human has already decided, and why. Same record posted to the pull request.</div>
-
-  {% if alerts %}
-    {% for alert in alerts %}
-    <div class="alert {{ alert.resolution }}">
-      <div class="tag {{ alert.resolution }}">{{ alert.resolution }}</div>
-      <div class="meta">{{ alert.repo }} #{{ alert.pr_number }} &middot; <code>{{ alert.file }}</code> &middot; {{ alert.taxonomy_id }} &middot;
-        <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
-      <div>{{ alert.plain_english_summary }}</div>
-      {% if alert.resolution_reason %}
-      <div class="reason">
-        {{ alert.resolution_reason }}
-        <div class="who">&mdash; {{ alert.resolved_by }}, {{ alert.resolved_at }}</div>
-      </div>
-      {% endif %}
+  <div class="wrap">
+    <h1>SHIP — Gate</h1>
+    <div class="nav">
+      <a href="/dashboard">Active</a>
+      <a href="/dashboard/history" class="current">History</a>
+      <a href="/dashboard/repos">Connected repos</a>
+      <div class="spacer"></div>
+      <a href="/dashboard/logout">Sign out</a>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">Nothing resolved yet.</div>
-  {% endif %}
+    <div class="subtitle">Every finding a human has already decided, and why. Same record posted to the pull request.</div>
+
+    {% if alerts %}
+      {% for alert in alerts %}
+      <div class="alert {{ alert.resolution }}">
+        <div class="tag {{ alert.resolution }}"><span class="dot"></span>{{ alert.resolution }}</div>
+        <div class="meta">
+          <span>{{ alert.repo }} #{{ alert.pr_number }}</span>
+          <span class="file">{{ alert.file }}</span>
+          <span>{{ alert.taxonomy_id }}</span>
+          <span class="score">risk {{ alert.risk_score }}</span>
+          <span class="citation">{{ alert.citation }}</span>
+        </div>
+        <div>{{ alert.plain_english_summary }}</div>
+        {% if alert.resolution_reason %}
+        <div class="reason">
+          {{ alert.resolution_reason }}
+          <div class="who">&mdash; {{ alert.resolved_by }}, {{ alert.resolved_at }}</div>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">Nothing resolved yet.</div>
+    {% endif %}
+  </div>
 </body>
 </html>

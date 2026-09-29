@@ -1,79 +1,155 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>SHIP — Gate</title>
-  <style>
-    body { font-family: -apple-system, sans-serif; max-width: 780px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-    h1 { font-size: 1.3rem; }
-    .subtitle { color: #666; margin-bottom: 2rem; }
-    .alert { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .alert.blocking { border-left: 4px solid #c0392b; }
-    .alert.review { border-left: 4px solid #e67e22; }
-    .meta { color: #666; font-size: 0.85rem; margin-bottom: 0.5rem; }
-    .score { font-weight: 600; color: #c0392b; }
-    .tier { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
-            text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; }
-    .tier.blocking { background: #c0392b; color: white; }
-    .tier.review { background: #e67e22; color: white; }
-    .citation { font-family: monospace; background: #f5f5f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
-    pre { background: #f5f5f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
-    .actions { margin-top: 0.9rem; padding-top: 0.85rem; border-top: 1px solid #eee; }
-    .actions label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
-    .actions .hint { font-weight: 400; color: #666; }
-    .actions textarea { width: 100%; font: inherit; font-size: 0.88rem; padding: 0.5rem 0.6rem;
-      border: 1px solid #ccc; border-radius: 6px; resize: vertical; min-height: 3.4rem; margin-bottom: 0.6rem; }
-    .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    button { padding: 0.4rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.9rem; margin-right: 0.5rem; }
-    .approve { background: #27ae60; color: white; }
-    .reject { background: #c0392b; color: white; }
-    .empty { color: #666; padding: 2rem 0; text-align: center; }
-    .nav { margin-bottom: 1.25rem; font-size: 0.9rem; }
-    .nav a { color: #666; text-decoration: none; margin-right: 1rem; }
-    .nav a:hover { text-decoration: underline; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHIP — Gate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #12161c; --ink-soft: #5b6472;
+  --border: #e2e5ea; --border-strong: #cbd1da;
+  --accent: #1c3a5e; --accent-tint: #e8eef5;
+  --blocking: #b3392c; --blocking-tint: #fbeae6;
+  --approved: #1e8f5f; --approved-tint: #e5f4ed;
+  --review: #b8720f; --review-tint: #f8eede;
+  --shadow: 0 1px 2px rgba(18,22,28,0.04), 0 4px 12px rgba(18,22,28,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+    --border: #2a3138; --border-strong: #3a434c;
+    --accent: #86aed8; --accent-tint: #1c2a3a;
+    --blocking: #e2735c; --blocking-tint: #3a1f18;
+    --approved: #4fc98a; --approved-tint: #163425;
+    --review: #e0a052; --review-tint: #3a2a12;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1317; --surface: #171c22; --ink: #eef1f4; --ink-soft: #9aa5b1;
+  --border: #2a3138; --border-strong: #3a434c;
+  --accent: #86aed8; --accent-tint: #1c2a3a;
+  --blocking: #e2735c; --blocking-tint: #3a1f18;
+  --approved: #4fc98a; --approved-tint: #163425;
+  --review: #e0a052; --review-tint: #3a2a12;
+  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5; padding: 40px 20px 90px;
+}
+.mono { font-family: "JetBrains Mono", monospace; }
+.wrap { max-width: 760px; margin: 0 auto; }
+h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5rem;
+     letter-spacing: -0.01em; margin: 0 0 4px; text-wrap: balance; }
+.subtitle { color: var(--ink-soft); font-size: 0.92rem; margin-bottom: 28px; max-width: 60ch; }
+.nav { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; font-size: 0.88rem; }
+.nav a { color: var(--ink-soft); text-decoration: none; }
+.nav a.current { color: var(--ink); font-weight: 600; }
+.nav a:hover { color: var(--accent); }
+.nav .spacer { flex: 1; }
+
+.alert { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+         padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.alert.blocking { border-left: 3px solid var(--blocking); }
+.alert.review { border-left: 3px solid var(--review); }
+
+.tier { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700;
+        letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 9px 3px 8px; border-radius: 999px;
+        margin-bottom: 10px; }
+.tier.blocking { background: var(--blocking-tint); color: var(--blocking); }
+.tier.review { background: var(--review-tint); color: var(--review); }
+.tier .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.meta { color: var(--ink-soft); font-size: 0.82rem; margin-bottom: 10px; display: flex;
+        flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.meta .file { font-family: "JetBrains Mono", monospace; font-size: 0.8rem; }
+.score { font-family: "JetBrains Mono", monospace; font-weight: 600; color: var(--blocking);
+         font-variant-numeric: tabular-nums; }
+.citation { font-family: "JetBrains Mono", monospace; background: var(--accent-tint); color: var(--accent);
+            padding: 1px 7px; border-radius: 4px; font-size: 0.78rem; }
+
+.summary { font-size: 0.96rem; }
+pre { background: var(--bg); border: 1px solid var(--border); color: var(--ink);
+      padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem;
+      font-family: "JetBrains Mono", monospace; margin: 12px 0 0; }
+
+.actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.actions label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 6px; }
+.actions .hint { font-weight: 400; color: var(--ink-soft); }
+.actions textarea { width: 100%; font: inherit; font-size: 0.88rem; padding: 9px 11px;
+  border: 1px solid var(--border-strong); border-radius: 8px; resize: vertical; min-height: 3.4rem;
+  margin-bottom: 10px; background: var(--surface); color: var(--ink); }
+.actions textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+button { padding: 8px 15px; border-radius: 7px; border: 1px solid transparent; cursor: pointer;
+         font-size: 0.86rem; font-weight: 600; font-family: inherit; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.approve { background: var(--approved); color: white; }
+.approve:hover { filter: brightness(1.08); }
+.reject { background: var(--surface); color: var(--blocking); border-color: var(--blocking); }
+.reject:hover { background: var(--blocking-tint); }
+
+.empty { color: var(--ink-soft); padding: 60px 0; text-align: center; font-size: 0.95rem; }
+</style>
 </head>
 <body>
-  <h1>SHIP — Gate</h1>
-  <div class="nav">
-    <a href="/dashboard"><strong>Active</strong></a>
-    <a href="/dashboard/history">History</a>
-    <a href="/dashboard/repos">Connected repos</a>
-    <a href="/dashboard/logout" style="float:right">Sign out</a>
-  </div>
-  <div class="subtitle">Findings awaiting your decision. Blocking findings stop the merge; flagged findings do not.</div>
-
-  {% if alerts %}
-    {% for alert in alerts %}
-    <div class="alert {{ alert.severity }}">
-      {% if alert.severity == "blocking" %}
-        <div class="tier blocking">Blocking &middot; merge stopped</div>
-      {% else %}
-        <div class="tier review">Flagged for review &middot; merge not stopped</div>
-      {% endif %}
-      <div class="meta">{{ alert.repo }} #{{ alert.pr_number }} &middot; <code>{{ alert.file }}</code> &middot; {{ alert.taxonomy_id }} &middot;
-        <span class="score">risk {{ alert.risk_score }}</span> &middot; <span class="citation">{{ alert.citation }}</span></div>
-      <div>{{ alert.plain_english_summary }}</div>
-      {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
-      <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
-        <label for="reason-{{ alert.alert_id }}">Your reason
-          <span class="hint">Posted on the pull request as the record of this decision.</span></label>
-        <textarea id="reason-{{ alert.alert_id }}" name="reason" required
-                  placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
-        <div class="btn-row">
-          <button class="approve" type="submit">
-            {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
-          </button>
-          <button class="reject" type="submit"
-                  formaction="/dashboard/{{ alert.alert_id }}/reject">
-            {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
-          </button>
-        </div>
-      </form>
+  <div class="wrap">
+    <h1>SHIP — Gate</h1>
+    <div class="nav">
+      <a href="/dashboard" class="current">Active</a>
+      <a href="/dashboard/history">History</a>
+      <a href="/dashboard/repos">Connected repos</a>
+      <div class="spacer"></div>
+      <a href="/dashboard/logout">Sign out</a>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">No active alerts. Everything's clear.</div>
-  {% endif %}
+    <div class="subtitle">Findings awaiting your decision. Blocking findings stop the merge; flagged findings do not.</div>
+
+    {% if alerts %}
+      {% for alert in alerts %}
+      <div class="alert {{ alert.severity }}" id="{{ alert.alert_id }}">
+        {% if alert.severity == "blocking" %}
+          <div class="tier blocking"><span class="dot"></span>Blocking &middot; merge stopped</div>
+        {% else %}
+          <div class="tier review"><span class="dot"></span>Flagged for review &middot; merge not stopped</div>
+        {% endif %}
+        <div class="meta">
+          <span>{{ alert.repo }} #{{ alert.pr_number }}</span>
+          <span class="file">{{ alert.file }}</span>
+          <span>{{ alert.taxonomy_id }}</span>
+          <span class="score">risk {{ alert.risk_score }}</span>
+          <span class="citation">{{ alert.citation }}</span>
+        </div>
+        <div class="summary">{{ alert.plain_english_summary }}</div>
+        {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
+        <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
+          <label for="reason-{{ alert.alert_id }}">Your reason
+            <span class="hint">Posted on the pull request as the record of this decision.</span></label>
+          <textarea id="reason-{{ alert.alert_id }}" name="reason" required
+                    placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
+          <div class="btn-row">
+            <button class="approve" type="submit">
+              {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
+            </button>
+            <button class="reject" type="submit"
+                    formaction="/dashboard/{{ alert.alert_id }}/reject">
+              {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
+            </button>
+          </div>
+        </form>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No active alerts. Everything's clear.</div>
+    {% endif %}
+  </div>
 </body>
 </html>
