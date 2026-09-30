@@ -39,24 +39,29 @@ drafts the fix. You only get pulled in when the problem is real. It's
 connected across devices, so it meets you where you are. Ask "what's up"
 out loud on an Alexa device, and review findings on any screen you have:
 laptop, iPad, even a smart fridge (see
-[Ask, don't read](#ask-dont-read-the-alexa-experience)).
+[Meet you where you are](#meet-you-where-you-are-the-alexa-experience)).
 
 ## Guiding principles
 
-**1. Grounded, not guessed.**
+**1. Last line of defense.**
+Assume nothing was checked before this. It doesn't matter who wrote the
+code, a person or an AI. It doesn't matter if the feature uses AI or not.
+
+**2. Grounded, not guessed.**
 Rely on facts, not memory or guesswork. Keep improving to make that
 grounding sharper.
 
-**2. Cost efficiency.**
-Free deterministic checks first, LLM only when needed. Only the right
-model for the job, measured.
+**3. Meet you where you are.**
+The answer finds you, on whatever device is nearest, not the other way
+around. Ask by voice from anywhere. See the detail on whatever screen is
+closest, a laptop, a TV, even a fridge.
 
-**3. Scalability and resilience.**
+**4. Scalability and resilience.**
 Survive retries, failures, and heavy load without breaking.
 
-**4. Last line of defense.**
-Assume nothing was checked before this. It doesn't matter who wrote the
-code, a person or an AI. It doesn't matter if the feature uses AI or not.
+**5. Cost efficiency.**
+Free deterministic checks first, LLM only when needed. Only the right
+model for the job, measured.
 
 See [What it does](#what-it-does), [Architecture](#architecture), and
 [Tech stack](#tech-stack) below for how each of these is built.
@@ -149,16 +154,16 @@ in isolation. A GitHub webhook, delivered to the deployed endpoint,
 produced the findings sitting on
 [PR #1](https://github.com/pandayv/micro-finance/pull/1) right now.
 
-## Ask, don't read: the Alexa+ experience
+## Meet you where you are: the Alexa+ experience
 
-Nobody wants a voice assistant reading a two-minute monologue of PII
-findings and article citations aloud. Voice is good at exactly one thing
-here, an ambient, hands-free check for whether anything's wrong and where
-to look. It's bad at everything after that. Relay, SHIP's MCP server,
-hard-caps every spoken response to one short sentence with no line
-breaks. A finding list cannot fit in that space, so the attempt fails
-loudly instead of narrating. Citations, file paths, and code only ever
-reach a screen.
+Ask, don't read. Nobody wants a voice assistant reading a two-minute
+monologue of PII findings and article citations aloud. Voice is good at
+exactly one thing here, an ambient, hands-free check for whether
+anything's wrong and where to look. It's bad at everything after that.
+Relay, SHIP's MCP server, hard-caps every spoken response to one short
+sentence with no line breaks. A finding list cannot fit in that space,
+so the attempt fails loudly instead of narrating. Citations, file paths,
+and code only ever reach a screen.
 
 > *"Alexa, what's up?"*
 > **"2 blockers found. Ready for your decision. Want it on a screen?"**
@@ -538,8 +543,8 @@ to a human decision to the merge button itself.
 
 Relay (the MCP server), the Alexa+ simulated experience, and cross-device
 push are also live. See
-[Ask, don't read](#ask-dont-read-the-alexa-experience) above for the full
-walkthrough.
+[Meet you where you are](#meet-you-where-you-are-the-alexa-experience)
+above for the full walkthrough.
 
 Things known and deliberately not built yet, not overlooked:
 - **Approving an alert doesn't yet push the suggested patch back to the PR
