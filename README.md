@@ -15,12 +15,12 @@ hackathon's own submission window.
 
 ## The problem
 
-A five-person startup ships an AI feature this week: a model that reads
-loan applications and recommends approval. It works, so everyone moves
-on. Months later, someone finds a Social Security number sitting in a
-prompt. Or a zip code quietly swaying who got approved. Or a decision
-nobody ever actually reviewed. Nobody meant for it to happen. Nobody's
-job was to catch it.
+You're a founder or CEO of a small startup. Your team ships a feature
+this week. It's tested, it works, you ship it. Months later, someone
+finds a Social Security number sitting in a prompt. Or a zip code
+quietly swaying who gets approved. Or a decision the AI made that no
+human ever reviewed. Nobody meant for it to happen. Nobody's job was to
+catch it either.
 
 This isn't hypothetical. GDPR has required real protection for personal
 data since 2018, with fines reaching tens of millions of euros. The EU AI
@@ -32,11 +32,13 @@ The usual fixes both fail. Ship blind and hope. Or slow every PR down for
 a human to review by hand. Neither is something a fast-moving team can
 live with.
 
-SHIP is the third option. It reads every PR the moment it opens, works
-out whether something's actually wrong, not just risky-looking, explains
-what it found in plain English, cites the exact rule, and drafts the fix.
-A person only gets pulled in when something's real. Ask "what's up" out
-loud, and SHIP answers in one sentence, no laptop required (see
+SHIP is the third option. It monitors every PR the moment it opens,
+works out whether something's actually wrong, not just risky-looking,
+explains what it found in plain English, cites the exact rule, and
+drafts the fix. You only get pulled in when the problem is real. It's
+connected across devices, so it meets you where you are. Ask "what's up"
+out loud on an Alexa device, and review findings on any screen you have:
+laptop, iPad, even a smart fridge (see
 [Ask, don't read](#ask-dont-read-the-alexa-experience)).
 
 ## Guiding principles
