@@ -38,7 +38,7 @@ explains what it found in plain English, cites the exact rule, and
 drafts the fix. You only get pulled in when the problem is real. It
 meets you where you are, too. Ask Alexa, then review the details on
 whatever screen is nearest: laptop, iPad, even a smart fridge (see
-[Meet you where you are](#meet-you-where-you-are-the-alexa-experience)).
+[Meet you where you are](#the-alexa-experience)).
 
 ## Guiding principles
 
@@ -65,9 +65,7 @@ model for the job, measured.
 See [What it does](#what-it-does), [Architecture](#architecture), and
 [Tech stack](#tech-stack) below for how each of these is built.
 
-## Meet you where you are: the Alexa+ experience
-
-SHIP meets you where you are.
+## The Alexa+ experience
 
 It speaks up only when something actually needs your attention. Ask it
 naturally, from your phone, an Echo, or anywhere else Alexa+ works.
@@ -79,11 +77,8 @@ a smart fridge.
 > **"2 blockers found. Ready for your decision. Want it on a screen?"**
 > *"Show me on the TV."*
 
-The actual findings then appear, live, on whatever device just answered
-to that name. Any device with a browser (a TV's browser, an iPad, a
-laptop, even a smart fridge's) can open
-[`ship-display.html`](docs/ship-display.html), name itself once, and
-wait for Relay to push a finding to it by name.
+The actual findings then appear, live, on whatever screen just answered
+to that name.
 
 **Voice can confirm a decision. It can never make one blind.** Ask to
 approve a finding you've never looked at, and SHIP refuses. That's the
@@ -91,7 +86,7 @@ exact pattern its own TLGP-002 detector flags in *other* people's code,
 an AI-mediated decision applied with no human checkpoint. Try it:
 
 > *"Approve it."*
-> **"Take a look on a screen first, then tell me why."**
+> **"Could you take a look on a screen first, then tell me why?"**
 
 Look at it first, then give a reason, and it goes through for real:
 
@@ -116,7 +111,7 @@ web app, source included.
 Every response above comes from the real, deployed Relay endpoint over
 Streamable HTTP, not a mock.
 
-## See it in action
+## Demo
 
 The engine runs against a fork of
 [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
@@ -137,14 +132,15 @@ submission. Nothing from it is incorporated here.
   correctly dismissed.
 
 Prefer not to leave GitHub? The
-[Alexa+ simulator](#meet-you-where-you-are-the-alexa-experience) above
+[Alexa+ simulator](#the-alexa-experience) above
 is live and public right now, and answers from these same real findings.
 
 *(Demo video: added here before final submission.)*
 
 ## What it does
 
-Four stages, in order, each one narrow and specific:
+Four stages review every PR, in order, plus one more that carries the
+result to you. Each piece is narrow and specific:
 
 1. **Screener**: a fast, free regex/AST pre-filter. It runs on every commit.
    If nothing matches, the PR passes in milliseconds and never costs a
@@ -185,6 +181,11 @@ Four stages, in order, each one narrow and specific:
    with the reason a human gave, and a **connected-repos** view.
    Connecting a repository is a form submission here, not a redeploy (see
    [Tech stack](#tech-stack)).
+5. **Relay**: SHIP's voice and screen layer. Connects Alexa+ to the same
+   alerts Gate shows, answering in one sentence and pushing the full
+   detail to whatever screen is nearest. The same rule from Gate applies
+   here too: a finding can't be resolved by voice until it's been shown
+   on a screen (see [The Alexa+ experience](#the-alexa-experience)).
 
 Six specific problems get caught this way, each grounded in a real law:
 a person's data leaving with no one seeing it, a decision landing with
@@ -340,7 +341,7 @@ to a human decision to the merge button itself.
 
 Relay (the MCP server), the Alexa+ simulated experience, and cross-device
 push are also live. See
-[Meet you where you are](#meet-you-where-you-are-the-alexa-experience)
+[Meet you where you are](#the-alexa-experience)
 above for the full walkthrough.
 
 Things known and deliberately not built yet, not overlooked:
