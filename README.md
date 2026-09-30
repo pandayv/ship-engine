@@ -3,9 +3,9 @@
 **Every AI feature your team ships is also a decision nobody signed off
 on.** SHIP is an AI reviewer that reads every pull request the moment it
 opens, catches the ones that quietly cross a real legal line, and only
-ever interrupts a human when it's found something. Ask it what's
-going on out loud and it tells you in one line, then puts the actual
-findings on whatever screen is nearby. Never in your ear.
+interrupts you when it's actually found something. Ask it anytime. It
+answers in one honest sentence, and shows the details on your nearest
+screen.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
 (Alexa+ track, AWS Builder mini-challenge), from scratch, inside this
@@ -35,10 +35,9 @@ live with.
 SHIP is the third option. It monitors every PR the moment it opens,
 works out whether something's actually wrong, not just risky-looking,
 explains what it found in plain English, cites the exact rule, and
-drafts the fix. You only get pulled in when the problem is real. It's
-connected across devices, so it meets you where you are. Ask "what's up"
-out loud on an Alexa device, and review findings on any screen you have:
-laptop, iPad, even a smart fridge (see
+drafts the fix. You only get pulled in when the problem is real. It
+meets you where you are, too. Ask Alexa, then review the details on
+whatever screen is nearest: laptop, iPad, even a smart fridge (see
 [Meet you where you are](#meet-you-where-you-are-the-alexa-experience)).
 
 ## Guiding principles
@@ -68,10 +67,13 @@ See [What it does](#what-it-does), [Architecture](#architecture), and
 
 ## Meet you where you are: the Alexa+ experience
 
-The answer finds you, wherever you are. Ask Alexa what's up from across
-the room, hear one honest sentence, and walk to whatever screen is
-nearest, a TV, an iPad, even a fridge, to see the real finding and act
-on it. Nothing about the review itself waits for you to be at a laptop.
+SHIP meets you where you are.
+
+It speaks up only when something actually needs your attention. Ask it
+naturally, from your phone, an Echo, or anywhere else Alexa+ works.
+Findings aren't read aloud. Instead, anything that needs your review
+shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even
+a smart fridge.
 
 > *"Alexa, what's up?"*
 > **"2 blockers found. Ready for your decision. Want it on a screen?"**
