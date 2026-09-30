@@ -66,7 +66,83 @@ model for the job, measured.
 See [What it does](#what-it-does), [Architecture](#architecture), and
 [Tech stack](#tech-stack) below for how each of these is built.
 
+## Meet you where you are: the Alexa+ experience
+
+The answer finds you, wherever you are. Ask Alexa what's up from across
+the room, hear one honest sentence, and walk to whatever screen is
+nearest, a TV, an iPad, even a fridge, to see the real finding and act
+on it. Nothing about the review itself waits for you to be at a laptop.
+
+> *"Alexa, what's up?"*
+> **"2 blockers found. Ready for your decision. Want it on a screen?"**
+> *"Show me on the TV."*
+
+The actual findings then appear, live, on whatever device just answered
+to that name. Any device with a browser (a TV's browser, an iPad, a
+laptop, even a smart fridge's) can open
+[`ship-display.html`](docs/ship-display.html), name itself once, and
+wait for Relay to push a finding to it by name.
+
+**Voice can confirm a decision. It can never make one blind.** Ask to
+approve a finding you've never looked at, and SHIP refuses. That's the
+exact pattern its own TLGP-002 detector flags in *other* people's code,
+an AI-mediated decision applied with no human checkpoint. Try it:
+
+> *"Approve it."*
+> **"Take a look on a screen first, then tell me why."**
+
+Look at it first, then give a reason, and it goes through for real:
+
+> *"Approve it. Hashed identifiers, this is a false positive."*
+> **"Done. Accepted, on the record: hashed identifiers, this is a false
+> positive."**
+
+That gate is enforced server-side, because `request_risk_acceptance`
+only acts once the finding has genuinely been shown on a screen in the
+last ten minutes, and a reason is required either way, not by a prompt
+asking the model to behave. Skip the review, and there is nothing voice
+can say to talk its way past that check.
+
+Alexa+'s own MCP toolkit requires a live account relationship with an
+Amazon Solutions Architect before its CLI/device path will connect at
+all. That requirement isn't documented anywhere until you're already
+mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
+how it surfaced). The hackathon's own rules anticipate exactly this gap
+and name a first-class alternative: a simulated Alexa+ experience in a
+web app, source included.
+**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
+Every response above comes from the real, deployed Relay endpoint over
+Streamable HTTP, not a mock.
+
+## See it in action
+
+The engine runs against a fork of
+[MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
+(MIT-licensed, a real Django lending app), used purely as a realistic
+third-party target and kept as a fully separate repository from this
+submission. Nothing from it is incorporated here.
+
+- **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
+  AI-assisted underwriting function sending an applicant's full raw
+  profile to an external LLM. Open it and scroll to the bottom: SHIP's
+  own comment and a failing `ship/compliance` status check are sitting
+  there right now, posted by the real, deployed pipeline.
+- **[PR #2](https://github.com/pandayv/micro-finance/pull/2)** plants one
+  genuine violation per remaining detector across three new files,
+  interleaved with four deliberate false-positive look-alikes. Run
+  directly against real Bedrock, both PRs together: **9 for 9**, every
+  genuine violation caught with an accurate citation, every look-alike
+  correctly dismissed.
+
+Prefer not to leave GitHub? The
+[Alexa+ simulator](#meet-you-where-you-are-the-alexa-experience) above
+is live and public right now, and answers from these same real findings.
+
+*(Demo video: added here before final submission.)*
+
 ## What it does
+
+Four stages, in order, each one narrow and specific:
 
 1. **Screener**: a fast, free regex/AST pre-filter. It runs on every commit.
    If nothing matches, the PR passes in milliseconds and never costs a
@@ -108,108 +184,16 @@ See [What it does](#what-it-does), [Architecture](#architecture), and
    Connecting a repository is a form submission here, not a redeploy (see
    [Tech stack](#tech-stack)).
 
-### Detectors
-
-Each is independently verified against real, deliberately adversarial
-test cases: genuine violations and deliberate false-positive look-alikes
-alike.
-
-| ID | What it catches | Grounded in |
-|---|---|---|
-| **PIIE-001** | Raw, direct PII (SSN, account number, full profile) reaching an external sink with no masking | GDPR Article 32 |
-| **PIIE-002** | The same kind of raw PII, written to a log stream | GDPR Article 32 |
-| **PIIE-003** | Raw PII stored in a cache/session store with no encryption | GDPR Article 32 |
-| **TLGP-002** | An AI-produced decision applied as final with no human checkpoint anywhere in the fragment | EU AI Act Article 14 |
-| **ALBP-001** | A protected characteristic (or a clear proxy) directly driving a scoring calculation | EU AI Act Article 10 + Annex III §5(b) |
-| **TLGP-001** | A dangerous capability (shell exec, unscoped DB write) granted to an AI agent with no gate | OWASP Top 10 for LLM Apps, LLM06:2025 |
+Six specific problems get caught this way, each grounded in a real law:
+a person's data leaving with no one seeing it, a decision landing with
+no one checking it, a protected trait swaying an outcome, or a process
+handed power with no limit on what it can do. Full detector-by-detector
+detail, including the taxonomy IDs used internally, is in
+[architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
 
 SHIP is deliberately scoped to what a single PR diff can actually prove.
 See the architecture doc for the reasoning behind that boundary, and
 what's on the roadmap next.
-
-## See it in action
-
-The engine is demonstrated against a fork of
-[MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
-(MIT-licensed, a real Django lending app), used purely as a realistic
-third-party target and kept as a fully separate repository from this
-submission. Nothing from it is incorporated here:
-
-- **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
-  AI-assisted underwriting function sending an applicant's full raw
-  profile to an external LLM.
-- **[PR #2](https://github.com/pandayv/micro-finance/pull/2)** plants one
-  genuine violation per remaining detector across three new files,
-  interleaved with four deliberate false-positive look-alikes (a
-  non-agent backup job, a display-only profile field, a properly-hashed
-  log call, a non-PII cache write).
-
-Run directly against real Bedrock, both PRs together: **9 for 9**. Every
-genuine violation correctly caught with an accurate citation, every
-look-alike correctly dismissed with real reasoning for why, not a
-coin-flip.
-
-The fork is also connected through SHIP's own pipeline, not just tested
-in isolation. A GitHub webhook, delivered to the deployed endpoint,
-produced the findings sitting on
-[PR #1](https://github.com/pandayv/micro-finance/pull/1) right now.
-
-## Meet you where you are: the Alexa+ experience
-
-Ask, don't read. Nobody wants a voice assistant reading a two-minute
-monologue of PII findings and article citations aloud. Voice is good at
-exactly one thing here, an ambient, hands-free check for whether
-anything's wrong and where to look. It's bad at everything after that.
-Relay, SHIP's MCP server, hard-caps every spoken response to one short
-sentence with no line breaks. A finding list cannot fit in that space,
-so the attempt fails loudly instead of narrating. Citations, file paths,
-and code only ever reach a screen.
-
-> *"Alexa, what's up?"*
-> **"2 blockers found. Ready for your decision. Want it on a screen?"**
-> *"Show me on the TV."*
-
-The actual findings then appear, live, on whatever device just answered
-to that name. That last step is a real push, not a shared-tab trick. Any
-device with a browser (a TV's browser, an iPad, a laptop, even a smart
-fridge's) can open [`ship-display.html`](docs/ship-display.html), name
-itself once, and sit idle with no polling until Relay pushes a finding to
-it by name over an open WebSocket connection. A real compliance event
-happens on the order of weeks, not seconds. A display that polled for it
-every few seconds would spend nearly all of that traffic finding nothing
-changed. An idle connection costs nothing until there's actually
-something to say.
-
-**Voice can confirm a decision. It can never make one blind.** Ask to
-approve a finding you've never looked at, and SHIP refuses. That's the
-exact pattern its own TLGP-002 detector flags in *other* people's code,
-an AI-mediated decision applied with no human checkpoint. Try it:
-
-> *"Approve it."*
-> **"Take a look on a screen first, then tell me why."**
-
-Look at it first, then give a reason, and it goes through for real:
-
-> *"Approve it. Hashed identifiers, this is a false positive."*
-> **"Done. Accepted, on the record: hashed identifiers, this is a false
-> positive."**
-
-That gate is enforced server-side, because `request_risk_acceptance`
-only acts once the finding has genuinely been shown on a screen in the
-last ten minutes, and a reason is required either way, not by a prompt
-asking the model to behave. Skip the review, and there is nothing voice
-can say to talk its way past that check.
-
-Alexa+'s own MCP toolkit requires a live account relationship with an
-Amazon Solutions Architect before its CLI/device path will connect at
-all. That requirement isn't documented anywhere until you're already
-mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
-how it surfaced). The hackathon's own rules anticipate exactly this gap
-and name a first-class alternative: a simulated Alexa+ experience in a
-web app, source included.
-**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
-Every response above comes from the real, deployed Relay endpoint over
-Streamable HTTP, not a mock.
 
 ## Architecture
 
@@ -284,206 +268,17 @@ silently dropped.
   Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
   handling connect/disconnect/register, deliberately separate from Relay
   so Relay's own IAM role stays scoped to exactly what answering a
-  question requires
+  question requires. A display sits idle with no polling until Relay
+  pushes a finding to it; a real compliance event happens on the order
+  of weeks, not seconds, so a poll-every-few-seconds design would spend
+  nearly all its traffic finding nothing changed
 
-## Setting this up yourself
+## Setup
 
-### What you need
-
-- An AWS account with Bedrock model access enabled for at least one
-  Claude model (a brand-new account may need a one-time use-case
-  submission and/or an AWS Support request before this works. See
-  the troubleshooting note below if `bedrock:InvokeModel` fails with a
-  quota or subscription error).
-- The AWS CLI, configured (`aws configure`) with a scoped IAM identity,
-  not root credentials.
-- Python 3.12+, `pip`, and `npm` (for the AgentCore CLI).
-- A GitHub repo to protect, and a personal access token with read access
-  to it.
-
-### 1. Clone and set up the local environment
-
-```bash
-git clone https://github.com/pandayv/ship-engine.git
-cd ship-engine
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Source the RAG corpus
-
-The regulation text this project cites is already checked into
-[`rag_corpus/`](rag_corpus/) (GDPR Art. 32, EU AI Act Art. 10/14 + Annex
-III §5(b), OWASP LLM06:2025), sourced verbatim, not paraphrased. There's
-nothing to do here unless you're extending the taxonomy with a new
-category. [`src/taxonomy.py`](src/taxonomy.py) has the registry a new
-category needs to join.
-
-### 3. Confirm Bedrock actually works before deploying anything
-
-```bash
-export SHIP_MODEL_BACKEND=bedrock
-export SHIP_DETECTOR_MODE=in_process
-python3 -m src.agents.detector
-```
-
-This runs a hardcoded violation through the real agent end to end and
-prints the structured verdict. It's the fastest way to find out if
-Bedrock access, model availability, or region config needs fixing before
-anything else. If it fails with an access or quota error, the model needs
-enabling in the Bedrock console first (Model access → request access),
-and a brand-new AWS account specifically may need its own quota raised
-via a support case. This is an account-activation gate, not a code
-problem.
-
-### 4. Create the DynamoDB tables
-
-```bash
-python3 -m src.storage.alert_store
-python3 -m src.storage.repo_store
-```
-
-`alert_store` calls `create_table_if_not_exists()` and then a self-test
-write/read/resolve cycle against the real `ship-alerts` table.
-`repo_store` creates `ship-repos`, the table backing Gate's
-connected-repos view. Needs `dynamodb:CreateTable` plus the basic
-item-level actions on your IAM identity first.
-
-### 5. Deploy Detector to a real AgentCore Runtime
-
-```bash
-npm install -g @aws/agentcore
-cd shipagentcore
-agentcore deploy --yes
-```
-
-Note the deployed runtime ARN from the output. You'll need it in step 7.
-**If Detector's prompt, schema, or RAG corpus ever changes, both
-`src/agents/detector.py` and `shipagentcore/app/ship_diagnostician/main.py`
-need the same change and a fresh deploy.** See
-[`tests/test_taxonomy_consistency.py`](tests/test_taxonomy_consistency.py),
-which exists specifically to catch the two copies drifting apart before
-that reaches production silently. (The AgentCore app's folder and runtime
-are named `ship_diagnostician`, not `detector`; that's internal deployment
-plumbing and doesn't affect anything above.)
-
-### 6. Create the fragment queue, its dead-letter queue, and the fragment-processor Lambda
-
-```bash
-aws sqs create-queue --queue-name ship-fragment-queue-dlq \
-  --attributes MessageRetentionPeriod=1209600
-
-DLQ_ARN=$(aws sqs get-queue-attributes \
-  --queue-url "$(aws sqs get-queue-url --queue-name ship-fragment-queue-dlq --query QueueUrl --output text)" \
-  --attribute-names QueueArn --query Attributes.QueueArn --output text)
-
-aws sqs create-queue --queue-name ship-fragment-queue \
-  --attributes "{\"VisibilityTimeout\":\"960\",\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"$DLQ_ARN\\\",\\\"maxReceiveCount\\\":3}\"}"
-```
-
-The fragment-processor Lambda needs its own execution role (permission to
-consume the queue, call `bedrock-agentcore:InvokeAgentRuntime` against
-the ARN from step 5, and write to the DynamoDB table from step 4).
-
-Both Lambdas in this project deploy from the same zip. Build it once,
-including real Linux dependency wheels: the `--platform`/`--only-binary`
-flags matter even if you're building on macOS or Windows. Skip them and
-the zip will contain the wrong platform's compiled packages, failing at
-import time on Lambda rather than at build time.
-
-```bash
-mkdir -p build && cp -r src fragment_lambda_handler.py lambda_handler.py build/
-pip install -r requirements-lambda.txt -t build/ \
-  --platform manylinux2014_aarch64 --only-binary=:all: --python-version 3.12
-cd build && zip -r ../ship-webhook.zip . -x "*.dist-info/*" && cd ..
-```
-
-(Building for `arm64`/`manylinux2014_aarch64` above to match Lambda's
-cheaper Graviton architecture. Switch both the `--platform` flag here and
-`--architectures` below to `x86_64` consistently if you'd rather not deal
-with cross-compiling.)
-
-```bash
-aws lambda create-function --function-name ship-fragment-processor \
-  --runtime python3.12 --architectures arm64 \
-  --role <YOUR_FRAGMENT_PROCESSOR_ROLE_ARN> \
-  --handler fragment_lambda_handler.handler \
-  --timeout 900 --memory-size 512 \
-  --zip-file fileb://ship-webhook.zip \
-  --environment "Variables={SHIP_DETECTOR_MODE=agentcore,SHIP_MODEL_BACKEND=bedrock,SHIP_AGENTCORE_RUNTIME_ARN=<ARN_FROM_STEP_5>}"
-
-aws lambda create-event-source-mapping --function-name ship-fragment-processor \
-  --event-source-arn <FRAGMENT_QUEUE_ARN> --batch-size 1 \
-  --scaling-config MaximumConcurrency=5
-```
-
-`MaximumConcurrency` is the knob that keeps parallel fragment reviews
-within your account's real Bedrock request-rate limit. Raise it once you
-know what that limit actually is for your account.
-
-### 7. Deploy the webhook Lambda
-
-Needs its own execution role: permission to send to the queue from step
-6, and, if you also want the fast-ack path itself to fall back to
-processing inline with no queue configured, the same Bedrock/DynamoDB
-permissions as step 6's role.
-
-```bash
-aws lambda create-function --function-name ship-webhook \
-  --runtime python3.12 --architectures arm64 \
-  --role <YOUR_WEBHOOK_ROLE_ARN> \
-  --handler lambda_handler.handler \
-  --timeout 30 --memory-size 512 \
-  --zip-file fileb://ship-webhook.zip \
-  --environment "Variables={
-    SHIP_DETECTOR_MODE=agentcore,
-    SHIP_MODEL_BACKEND=bedrock,
-    SHIP_AGENTCORE_RUNTIME_ARN=<ARN_FROM_STEP_5>,
-    SHIP_FRAGMENT_QUEUE_URL=<QUEUE_URL_FROM_STEP_6>,
-    GITHUB_TOKEN=<a token with read access to that repo>,
-    GITHUB_WEBHOOK_SECRET=<a random secret you generate>,
-    SHIP_DASHBOARD_TOKEN=<a second random secret you generate>
-  }"
-
-aws lambda create-function-url-config --function-name ship-webhook \
-  --auth-type NONE
-```
-
-`GITHUB_WEBHOOK_SECRET` and `SHIP_DASHBOARD_TOKEN` must be two genuinely
-different values. The webhook's signature check and the dashboard's auth
-are deliberately independent, so compromising one can't silently disable
-the other.
-
-### 8. Connect the repo, then point a real GitHub webhook at it
-
-Open `https://<your-function-url>/dashboard/repos?token=<SHIP_DASHBOARD_TOKEN>`
-and connect `<owner>/<repo>`. A payload naming any other repo gets
-rejected before it can spend your GitHub token or Bedrock quota (see
-[`src/storage/repo_store.py`](src/storage/repo_store.py)). That link only
-needs to be visited once. The token in the URL establishes a session
-cookie, and every page from there on (Active, History, Connected repos)
-is just a normal link with no secret in it. Visiting `/dashboard` cold
-prompts a login form instead. An optional
-`SHIP_ALLOWED_REPOS=<owner>/<repo>` environment variable pre-seeds this
-same allowlist without needing the table at all, useful for a first
-bring-up before step 4's tables exist, or as a fallback if DynamoDB is
-briefly unreachable.
-
-Then, in the target repo's Settings → Webhooks: the Lambda Function URL
-from step 7, content type `application/json`, secret matching
-`GITHUB_WEBHOOK_SECRET` above, event: Pull requests.
-
-### 9. Verify
-
-```bash
-curl https://<your-function-url>/health
-# {"status":"ok"}
-```
-
-Open a real PR against the target repo containing something Screener
-would flag (raw PII reaching an external call is the easiest to trigger)
-and confirm an alert appears at
-`https://<your-function-url>/dashboard?token=<SHIP_DASHBOARD_TOKEN>`.
+Deploying this yourself needs a real AWS account (Bedrock, Lambda,
+DynamoDB, SQS, API Gateway) and about 30–45 minutes. Full step-by-step
+walkthrough, including troubleshooting for a brand-new AWS account:
+[SETUP.md](SETUP.md).
 
 ## Project structure
 
