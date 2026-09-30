@@ -3,7 +3,7 @@
 **Every AI feature your team ships is also a decision nobody signed off
 on.** SHIP is an AI reviewer that reads every pull request the moment it
 opens, catches the ones that quietly cross a real legal line, and only
-ever interrupts a human when it's actually found something. Ask it what's
+ever interrupts a human when it's found something. Ask it what's
 going on out loud and it tells you in one line, then puts the actual
 findings on whatever screen is nearby. Never in your ear.
 
@@ -15,42 +15,29 @@ hackathon's own submission window.
 
 ## The problem
 
-Say a five-person startup adds a feature this week, an AI that reads a
-loan application and suggests whether to approve it. It works, it ships,
-everyone moves on. Then months later someone realizes the AI's prompt
-included the applicant's Social Security number in plain text, or that a
-zip code was quietly swaying who got approved, or that the AI's opinion
-had quietly become the actual decision, with no person ever looking at
-it. Nobody meant for any of that to happen. It's just what happens when a
-small team ships fast and nobody's job is to catch it.
+A five-person startup ships an AI feature this week: a model that reads
+loan applications and recommends approval. It works, so everyone moves
+on. Months later, someone finds a Social Security number sitting in a
+prompt. Or a zip code quietly swaying who got approved. Or a decision
+nobody ever actually reviewed. Nobody meant for it to happen. Nobody's
+job was to catch it.
 
-That's not a hypothetical, and it's not a someday problem. GDPR's security
-obligations (Article 32, the exact rule this project's PII detectors
-enforce) have been binding, actively enforced law since 2018, with real
-fines reaching tens of millions of euros for exactly this kind of raw
-personal data reaching somewhere it shouldn't. Credit-scoring AI is
-separately named, in the EU AI Act's own Annex III, as a high-risk use
-case subject to human-oversight and bias-examination duties once its
-compliance timeline lands. That timeline is currently December 2027,
-pushed back from a mid-2026 extension, and worth watching precisely
-because it has already moved once. A small team's exposure here is real
-today under GDPR and growing on a clock that's still ticking. The team
-that shipped the feature has no compliance person, no legal review queue,
-and no time to build one.
+This isn't hypothetical. GDPR has required real protection for personal
+data since 2018, with fines reaching tens of millions of euros. The EU AI
+Act separately names credit-scoring AI as high-risk, with human-oversight
+rules on the way. A small team has no compliance hire and no time to
+build one, and the exposure is real today.
 
-The obvious fixes both fail. Ship blind and hope nothing surfaces. Or
-slow every single pull request down for a human to review by hand. That
-defeats the entire point of moving fast with AI in the first place.
+The usual fixes both fail. Ship blind and hope. Or slow every PR down for
+a human to review by hand. Neither is something a fast-moving team can
+live with.
 
-SHIP is the third option. It reads the diff the moment a PR opens, works
-out whether something's actually wrong instead of just checking whether a
-risky-looking word shows up, explains what it found in plain English,
-points to the exact rule it breaks, and drafts the fix. A person only
-ever gets pulled in when it's found something real. Every other PR ships
-exactly as fast as it always would have. You don't even have to open a
-laptop to ask. Say "what's up" out loud and SHIP tells you in one
-sentence whether anything needs you. Never the finding itself, which only
-ever renders on a screen (see [Ask, don't read](#ask-dont-read-the-alexa-experience)).
+SHIP is the third option. It reads every PR the moment it opens, works
+out whether something's actually wrong, not just risky-looking, explains
+what it found in plain English, cites the exact rule, and drafts the fix.
+A person only gets pulled in when something's real. Ask "what's up" out
+loud, and SHIP answers in one sentence, no laptop required (see
+[Ask, don't read](#ask-dont-read-the-alexa-experience)).
 
 ## Guiding principles
 
@@ -70,7 +57,7 @@ Assume nothing was checked before this. It doesn't matter who wrote the
 code, a person or an AI. It doesn't matter if the feature uses AI or not.
 
 See [What it does](#what-it-does), [Architecture](#architecture), and
-[Tech stack](#tech-stack) below for how each of these is actually built.
+[Tech stack](#tech-stack) below for how each of these is built.
 
 ## What it does
 
@@ -79,7 +66,7 @@ See [What it does](#what-it-does), [Architecture](#architecture), and
    model call. A match doesn't mean a violation. It means "worth a real
    look."
 2. **Detector**: a Strands Agent, RAG-grounded against real, sourced
-   regulation text. Runs only on the fragments Screener actually flagged,
+   regulation text. Runs only on the fragments Screener flagged,
    one fragment at a time, and returns a structured verdict: matched or
    not, which category, a 1–10 risk score, a plain-English explanation,
    the exact citation, and a draft remediation patch. It also learns from
@@ -155,9 +142,9 @@ genuine violation correctly caught with an accurate citation, every
 look-alike correctly dismissed with real reasoning for why, not a
 coin-flip.
 
-The fork is also genuinely connected through SHIP's own live pipeline,
-not just tested in isolation. A real GitHub webhook, delivered to the
-real deployed endpoint, produced the real findings sitting on
+The fork is also connected through SHIP's own pipeline, not just tested
+in isolation. A GitHub webhook, delivered to the deployed endpoint,
+produced the findings sitting on
 [PR #1](https://github.com/pandayv/micro-finance/pull/1) right now.
 
 ## Ask, don't read: the Alexa+ experience
@@ -369,11 +356,9 @@ Note the deployed runtime ARN from the output. You'll need it in step 7.
 need the same change and a fresh deploy.** See
 [`tests/test_taxonomy_consistency.py`](tests/test_taxonomy_consistency.py),
 which exists specifically to catch the two copies drifting apart before
-that reaches production silently. (The AgentCore app's own folder/runtime
-name, `ship_diagnostician`, predates this project's Detector naming pass.
-Left as-is deliberately, since renaming it mints a brand-new runtime ARN
-for no visible benefit. It's internal deployment plumbing, not something
-this README's naming otherwise touches.)
+that reaches production silently. (The AgentCore app's folder and runtime
+are named `ship_diagnostician`, not `detector`; that's internal deployment
+plumbing and doesn't affect anything above.)
 
 ### 6. Create the fragment queue, its dead-letter queue, and the fragment-processor Lambda
 
@@ -542,19 +527,17 @@ tests/                     # 200 tests, no AWS credentials required to run
 
 ## Status & what's next
 
-The full review pipeline, Screener through Gate, is live and deployed,
-with the PR's own merge button actually gated by a real commit status.
-Verified end to end against real Bedrock and a real GitHub webhook, not a
-mocked demo. Freezing an alert sets `ship/compliance` to failing
-(promotable to a required check in branch protection) and resolving one
-recomputes it, so the loop from detection to a human decision to the
-PR's own merge button actually closes.
+The full review pipeline, Screener through Gate, is live and deployed.
+The PR's own merge button is gated by a commit status, not a dashboard
+entry someone has to remember to check. Freezing an alert sets
+`ship/compliance` to failing (promotable to a required check in branch
+protection); resolving one recomputes it, closing the loop from detection
+to a human decision to the merge button itself.
 
-On top of that, Relay (the MCP server), the Alexa+ simulated experience,
-and real cross-device push are also live. See
+Relay (the MCP server), the Alexa+ simulated experience, and cross-device
+push are also live. See
 [Ask, don't read](#ask-dont-read-the-alexa-experience) above for the full
-walkthrough. Every claim in that section is checked against the deployed
-endpoint, the same standard the rest of this README holds itself to.
+walkthrough.
 
 Things known and deliberately not built yet, not overlooked:
 - **Approving an alert doesn't yet push the suggested patch back to the PR
@@ -562,16 +545,11 @@ Things known and deliberately not built yet, not overlooked:
   reviewed it in Gate. A real GitHub-API integration away, not an
   architecture change.
 - **Healing Loop** ([`scripts/healing_loop.py`](scripts/healing_loop.py))
-  closes part of this: run periodically (deliberately not on Detector's
-  per-fragment hot path, see the script's own docstring for why), it
-  re-fetches each sourced regulation page and flags any chunk that no
-  longer appears verbatim, so a citation is never silently resting on
-  text a regulator has since amended. Verified against the real live
-  sources rather than fixtures alone, which caught and fixed two genuine
-  false-positive causes: HTML entity decoding, and CSS-rendered clause
-  numbering. Not yet wired to an actual schedule (cron/
-  EventBridge) or to an alert channel beyond its own stdout report. That
-  part is still manual.
+  runs periodically, separately from Detector's own fast path, and
+  re-fetches each sourced regulation page to check it still matches word
+  for word. A citation never quietly rests on text a regulator has since
+  amended. It isn't yet wired to a schedule or an alert channel; running
+  it is still a manual step.
 - **The Alexa+ CLI/device path itself isn't connected.** It requires an
   AWS account already registered by an Amazon Solutions Architect, a live
   account relationship rather than a self-service step (see
