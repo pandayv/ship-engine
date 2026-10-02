@@ -25,7 +25,7 @@ import pytest
 import src.relay.server as relay
 from src.relay.modality import SPEECH_CHAR_BUDGET, ModalityViolation, Spoken
 from src.relay.readmodel import ReleaseStatus, _group
-from src.storage import session_store
+from src.storage import pending_store, session_store
 from src.storage.alert_store import Alert
 from src.storage.status_store import PullRequestCounts, ReleaseSummary
 
@@ -47,6 +47,24 @@ class _FakeSessionTable:
         self.rows[Item["alert_id"]] = Item
 
 
+class _FakePendingTable:
+    """Same approach as _FakeSessionTable — real pending_store logic
+    against a fake table, not a pass-through mock."""
+
+    def __init__(self):
+        self.rows = {}
+
+    def get_item(self, Key):
+        row = self.rows.get(Key["pr_key"])
+        return {"Item": row} if row else {}
+
+    def put_item(self, Item):
+        self.rows[Item["pr_key"]] = Item
+
+    def delete_item(self, Key):
+        self.rows.pop(Key["pr_key"], None)
+
+
 @pytest.fixture(autouse=True)
 def session_table(monkeypatch):
     """Autouse, not opt-in: blocked_pull_requests/finding_detail/display_on
@@ -59,6 +77,32 @@ def session_table(monkeypatch):
     every future test author to remember it."""
     fake = _FakeSessionTable()
     monkeypatch.setattr(session_store, "_table", lambda: fake)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def no_real_writeback(monkeypatch):
+    """Autouse, same reasoning as session_table above, and caught the same
+    way: a real dynamodb:PutItem landed in the live ship-status table
+    during a local pytest run, because request_risk_acceptance's success
+    path calls refresh_summary(), which was unmocked, and this machine's
+    boto3 picks up real ship-agent credentials with no extra setup. GitHub
+    write-back (post_pr_comment/sync_pr_check) is already safe without
+    mocking — _writeback_enabled() short-circuits with no GITHUB_TOKEN
+    configured — but refresh_summary() has no such guard, by design
+    (status_store.py's own docstring: best-effort, not opt-out). Faked
+    here rather than relying on every test that exercises a resolve path
+    to remember it individually."""
+    monkeypatch.setattr(relay, "refresh_summary", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def pending_table(monkeypatch):
+    """Same reasoning as session_table — stage_decisions/proceed read and
+    write pending_store for real; fake the table so tests never touch the
+    real ship-pending-dispositions table."""
+    fake = _FakePendingTable()
+    monkeypatch.setattr(pending_store, "_table", lambda: fake)
     return fake
 
 
@@ -114,6 +158,17 @@ def one_blocking(monkeypatch):
     monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: alerts)
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: _summary_from(alerts))
     monkeypatch.setattr(relay, "get_alert", lambda aid: alerts[0] if aid == "a1" else None)
+    return alerts
+
+
+@pytest.fixture
+def two_blocking(monkeypatch):
+    """Two findings on the same PR, both blocking, same shape as
+    one_blocking but for the multi-finding staging/proceed tools."""
+    alerts = [_alert(alert_id="a1", score=9.0), _alert(alert_id="a2", score=8.0)]
+    monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: alerts)
+    monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: _summary_from(alerts))
+    monkeypatch.setattr(relay, "get_alert", lambda aid: next((a for a in alerts if a.alert_id == aid), None))
     return alerts
 
 
@@ -276,6 +331,113 @@ def test_hearing_only_release_status_does_not_count_as_reviewed(one_blocking, se
     result = relay.request_risk_acceptance("a1", reason="go ahead")
 
     assert result["performed"] is False
+
+
+def test_single_reviewed_resolution_also_writes_back_to_the_pr(one_blocking, session_table, monkeypatch):
+    # finding #(2026-10-02): request_risk_acceptance used to only call
+    # resolve_alert() — durably recorded in ship-alerts, but never
+    # reached GitHub at all, unlike Gate's web path. _resolve_one() is
+    # the fix; this asserts both write-back calls actually happen now.
+    posted, synced = [], []
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: None)
+    monkeypatch.setattr(relay, "post_pr_comment", lambda *a, **k: posted.append(a))
+    monkeypatch.setattr(relay, "sync_pr_check", lambda *a, **k: synced.append(a))
+
+    relay.finding_detail("a1")
+    relay.request_risk_acceptance("a1", reason="known internal test fixture")
+
+    assert posted and synced
+
+
+# --- staging and batch resolution (docs/voice-resolution-workflow.md) ---
+
+
+def test_stage_without_a_recent_review_refuses(two_blocking, session_table):
+    # Same rule as single-item approval, checked per finding in a batch.
+    result = relay.stage_decisions("pandayv/micro-finance", 2,
+                                    [{"position": 1, "approved": True, "reason": "fine"}])
+    assert result["performed"] is False
+    assert "screen" in result["spoken_response"].lower() or "shown" in result["spoken_response"].lower()
+
+
+def test_stage_out_of_range_position_refuses_the_whole_batch(two_blocking, session_table, monkeypatch):
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve anything"))
+    relay.blocked_pull_requests()  # reviews both findings
+
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"position": 1, "approved": True, "reason": "fine"},
+        {"position": 5, "approved": False, "reason": "needs a fix"},  # only 2 exist
+    ])
+
+    assert result["performed"] is False
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_stage_missing_reason_refuses(two_blocking, session_table):
+    relay.blocked_pull_requests()
+    result = relay.stage_decisions("pandayv/micro-finance", 2,
+                                    [{"position": 1, "approved": True, "reason": ""}])
+    assert result["performed"] is False
+    assert "reason" in result["spoken_response"].lower()
+
+
+def test_stage_valid_batch_captures_but_does_not_resolve(two_blocking, session_table, monkeypatch):
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("staging must not resolve"))
+    relay.blocked_pull_requests()
+
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"position": 1, "approved": True, "reason": "non-issue"},
+        {"position": 2, "approved": False, "reason": "needs a fix"},
+    ])
+
+    assert result["staged"] == 2
+    staged = pending_store.get_pending("pandayv/micro-finance", 2)
+    assert {d["alert_id"]: d["approved"] for d in staged} == {"a1": True, "a2": False}
+
+
+def test_proceed_with_nothing_staged_says_so(two_blocking, session_table):
+    result = relay.proceed("pandayv/micro-finance", 2)
+    assert result["performed"] == 0
+    assert "nothing" in result["spoken_response"].lower()
+
+
+def test_proceed_commits_every_staged_decision_and_clears_pending(two_blocking, session_table, monkeypatch):
+    resolved = []
+    monkeypatch.setattr(relay, "resolve_alert",
+                         lambda alert_id, approved, reason, resolved_by: resolved.append((alert_id, approved, reason)))
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"position": 1, "approved": True, "reason": "non-issue"},
+        {"position": 2, "approved": False, "reason": "needs a fix"},
+    ])
+
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 2
+    assert set(resolved) == {("a1", True, "non-issue"), ("a2", False, "needs a fix")}
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_proceed_rechecks_staleness_at_commit_time_not_just_at_staging(two_blocking, session_table, monkeypatch):
+    # The review window could lapse between "I've reviewed these" and
+    # "proceed" — proceed() must not trust a stage-time check that's gone
+    # stale by the time it actually commits.
+    resolved = []
+    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, **k: resolved.append(alert_id))
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2,
+                           [{"position": 1, "approved": True, "reason": "fine"}])
+
+    session_table.rows["a1"]["shown_at"] -= session_store.RECENT_WINDOW_SECONDS + 1
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 0
+    assert resolved == []
+
+
+def test_proceed_is_the_tool_name_exposed_alongside_stage(two_blocking):
+    names = {t.name for t in asyncio.run(mcp_tools())}
+    assert {"stage_decisions", "proceed"} <= names
 
 
 # --- routing ---

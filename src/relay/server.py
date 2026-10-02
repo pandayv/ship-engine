@@ -78,12 +78,14 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 
+from src.api.github_writeback import comment_for_decision, post_pr_comment, sync_pr_check
 from src.relay.modality import Modality, Spoken
 from src.relay.push import push_to_device
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
-from src.storage import session_store
+from src.storage import pending_store, session_store
 from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert, theme_for
+from src.storage.status_store import refresh_summary
 
 CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
 
@@ -157,19 +159,19 @@ def release_status() -> str:
     return status.to_spoken(screen_hint=hint).to_text()
 
 
-def blocked_pull_requests() -> dict:
-    """Every pull request with unresolved findings, with counts and the
-    findings themselves. SCREEN ONLY — this is a list and must be displayed,
-    never spoken. Use after release_status when the person asks to see detail.
-
-    Calling this records every returned alert as recently shown — see
-    request_risk_acceptance and src/storage/session_store.py. That is a
-    side effect of what this tool already does (surfacing the findings on
-    a screen), not a new responsibility."""
-    status = _findings_detail()
-    for pr in status.pull_requests:
-        for f in pr.findings:
-            session_store.mark_shown(f.alert_id)
+def _findings_payload(status) -> dict:
+    """Builds the SCREEN-shaped payload both blocked_pull_requests() and
+    the staging tools below push — one implementation, so a finding
+    numbered "2" means the same thing whether it got there via a tool
+    call or a WebSocket push mid-conversation. Each finding carries its
+    pending disposition, if any is currently staged for that PR (see
+    src/storage/pending_store.py) — "position" is never recomputed from a
+    live pending record, it comes from the same stable ordering
+    readmodel._group() already produced, pending or not."""
+    pending_by_pr = {
+        (pr.repo, pr.pr_number): {d["alert_id"]: d for d in (pending_store.get_pending(pr.repo, pr.pr_number) or [])}
+        for pr in status.pull_requests
+    }
     return {
         "modality": Modality.SCREEN.value,
         "display_only": True,
@@ -192,6 +194,11 @@ def blocked_pull_requests() -> dict:
                         "risk_score": f.risk_score,
                         "what_is_wrong": f.plain_english_summary,
                         "citation": f.citation,
+                        "pending": (
+                            {"approved": p["approved"], "reason": p["reason"]}
+                            if (p := pending_by_pr[(pr.repo, pr.pr_number)].get(f.alert_id))
+                            else None
+                        ),
                     }
                     for i, f in enumerate(pr.findings, start=1)
                 ],
@@ -200,6 +207,22 @@ def blocked_pull_requests() -> dict:
         ],
         "console_url": _console("/dashboard"),
     }
+
+
+def blocked_pull_requests() -> dict:
+    """Every pull request with unresolved findings, with counts and the
+    findings themselves. SCREEN ONLY — this is a list and must be displayed,
+    never spoken. Use after release_status when the person asks to see detail.
+
+    Calling this records every returned alert as recently shown — see
+    request_risk_acceptance and src/storage/session_store.py. That is a
+    side effect of what this tool already does (surfacing the findings on
+    a screen), not a new responsibility."""
+    status = _findings_detail()
+    for pr in status.pull_requests:
+        for f in pr.findings:
+            session_store.mark_shown(f.alert_id)
+    return _findings_payload(status)
 
 
 def finding_detail(alert_id: str) -> dict:
@@ -231,6 +254,25 @@ def finding_detail(alert_id: str) -> dict:
     }
 
 
+def _resolve_one(alert, approved: bool, reason: str) -> None:
+    """Shared by request_risk_acceptance and proceed() — the one place a
+    voice-driven resolution actually happens, so both the single-finding
+    and batch paths write back to the PR the same way Gate's web console
+    already does (comment + commit-status sync), not two implementations
+    that could quietly drift. Before this, request_risk_acceptance only
+    called resolve_alert() — the decision was durably recorded in
+    ship-alerts but never reached GitHub at all, found while building the
+    batch path, fixed here rather than left inconsistent between the two
+    tools. Both calls fail soft, same as the web path (see
+    src/api/github_writeback.py) — the decision stands either way."""
+    resolve_alert(alert.alert_id, approved=approved, reason=reason, resolved_by="voice")
+    post_pr_comment(
+        alert.repo, alert.pr_number,
+        comment_for_decision(alert, accepted=approved, reason=reason, who="voice"),
+    )
+    sync_pr_check(alert.repo, alert.pr_number, alert.head_sha)
+
+
 def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
     """Called when someone asks to approve, accept, override or clear a
     blocking finding. Only completes if BOTH are true: blocked_pull_requests
@@ -252,7 +294,8 @@ def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
     reviewed = alert is not None and session_store.was_shown_recently(alert_id)
 
     if reviewed and reason.strip():
-        resolve_alert(alert_id, approved=True, reason=reason.strip(), resolved_by="voice")
+        _resolve_one(alert, approved=True, reason=reason.strip())
+        refresh_summary()
         return {
             "modality": Modality.ACTION.value,
             "performed": True,
@@ -281,6 +324,129 @@ def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
         ),
         "spoken_response": Spoken(spoken, screen_hint="Opening it on your screen.").to_text(),
         "console_url": target,
+    }
+
+
+def _findings_for(repo: str, pr_number: int):
+    """The ordered findings for one PR, exactly as currently on screen —
+    shared by stage_decisions and proceed so "position 2" means the same
+    finding in both. None if that PR has no active findings right now."""
+    status = _findings_detail()
+    for pr in status.pull_requests:
+        if pr.repo == repo and pr.pr_number == pr_number:
+            return pr.findings
+    return None
+
+
+def stage_decisions(repo: str, pr_number: int, decisions: list[dict], device: str = "") -> dict:
+    """Captures a decision (approve or reject, with a reason) for one or
+    more findings currently shown for this PR, WITHOUT resolving anything
+    yet — see docs/voice-resolution-workflow.md. Use when someone reviews
+    several findings in one turn, by position ("first one's a non-issue,
+    second one's an actual blocker") or as a group ("approve all of
+    these"). Each item in `decisions` is {"position": int, "approved":
+    bool, "reason": str}, position matching the numbers blocked_pull_requests
+    showed. Nothing in ship-alerts changes until proceed() is called —
+    say what was captured and ask the person to confirm, don't claim this
+    is done. If `device` is given (whatever surface they're looking at),
+    the pending state is pushed there so they can see what's about to
+    happen before confirming.
+
+    Every position must belong to a finding shown on a screen recently —
+    same rule request_risk_acceptance enforces, just checked once per
+    finding here instead of once. A position that doesn't exist, or a
+    finding not recently reviewed, refuses the WHOLE batch rather than
+    guessing which ones were meant — see the workflow doc's "when a
+    reference doesn't land cleanly" section for why silent partial
+    success is worse than a clear refusal."""
+    findings = _findings_for(repo, pr_number)
+    if not findings:
+        return {
+            "modality": Modality.ACTION.value, "performed": False,
+            "spoken_response": Spoken(f"I don't see any open findings on {repo} #{pr_number} right now.").to_text(),
+            "console_url": _console("/dashboard"),
+        }
+
+    staged = []
+    for d in decisions:
+        position = d.get("position")
+        if not isinstance(position, int) or not (1 <= position <= len(findings)):
+            return {
+                "modality": Modality.ACTION.value, "performed": False,
+                "spoken_response": Spoken(
+                    f"I only see {len(findings)} finding{'s' if len(findings) != 1 else ''} here — "
+                    "which one did you mean?"
+                ).to_text(),
+                "console_url": _console("/dashboard"),
+            }
+        alert = findings[position - 1]
+        if not session_store.was_shown_recently(alert.alert_id):
+            return {
+                "modality": Modality.ACTION.value, "performed": False,
+                "spoken_response": Spoken(f"Finding {position} hasn't actually been shown on a screen recently — take a look first.").to_text(),
+                "console_url": _console("/dashboard"),
+            }
+        reason = str(d.get("reason", "")).strip()
+        if not reason:
+            return {
+                "modality": Modality.ACTION.value, "performed": False,
+                "spoken_response": Spoken(f"What's the reason for finding {position}?").to_text(),
+                "console_url": _console("/dashboard"),
+            }
+        staged.append({"position": position, "alert_id": alert.alert_id,
+                        "approved": bool(d.get("approved")), "reason": reason})
+
+    pending_store.stage(repo, pr_number, staged)
+
+    if device:
+        push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+
+    return {
+        "modality": Modality.ACTION.value,
+        "performed": False,
+        "staged": len(staged),
+        "spoken_response": Spoken("Got it, take a look and say proceed when you're ready.").to_text(),
+        "console_url": _console("/dashboard"),
+    }
+
+
+def proceed(repo: str, pr_number: int, device: str = "") -> dict:
+    """Commits whatever stage_decisions most recently staged for this PR —
+    the one action that actually writes to ship-alerts in the batch flow.
+    Use when someone says "proceed," "go ahead," "that's right," or
+    similar, after reviewing a pending screen. "Nothing pending" if
+    stage_decisions was never called, or if it's been more than ten
+    minutes (see src/storage/pending_store.py's staleness window) — ask
+    them to run through their decisions again rather than silently acting
+    on stale context."""
+    staged = pending_store.get_pending(repo, pr_number)
+    if not staged:
+        return {
+            "modality": Modality.ACTION.value, "performed": False,
+            "spoken_response": Spoken("Nothing pending to confirm.").to_text(),
+            "console_url": _console("/dashboard"),
+        }
+
+    performed = 0
+    for d in staged:
+        alert = get_alert(d["alert_id"])
+        if alert is None or not session_store.was_shown_recently(d["alert_id"]):
+            continue  # re-checked at commit time, not just at staging time
+        _resolve_one(alert, approved=d["approved"], reason=d["reason"])
+        performed += 1
+
+    pending_store.clear_pending(repo, pr_number)
+    refresh_summary()
+
+    if device:
+        push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+
+    return {
+        "modality": Modality.ACTION.value,
+        "performed": performed,
+        "of": len(staged),
+        "spoken_response": Spoken("Done.").to_text(),
+        "console_url": _console("/dashboard"),
     }
 
 
@@ -325,7 +491,8 @@ def display_on(surface: str) -> dict:
     }
 
 
-TOOLS = (release_status, blocked_pull_requests, finding_detail, request_risk_acceptance, display_on)
+TOOLS = (release_status, blocked_pull_requests, finding_detail, request_risk_acceptance,
+         stage_decisions, proceed, display_on)
 
 
 def create_app() -> Starlette:
