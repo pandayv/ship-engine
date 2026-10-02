@@ -58,30 +58,42 @@ supporting the feature:
   same file). Resolving the wrong one is a real, bad outcome for a
   compliance tool specifically, not a minor UX miss.
 
-## Read back what happened, every time, success included
+## Stage on screen, confirm with "proceed"
 
-Settled: no separate confirm-before-acting step. That adds friction to
-every single use to guard against a rare misunderstanding, exactly what
-this feature is trying to reduce. Instead, every action gets a complete,
-specific read-back after it executes, not a vague "okay, done":
+Not a voice read-back. A read-back of several findings ("Finding 1
+accepted... Finding 2 confirmed...") would strain or break the existing
+one-sentence voice cap the moment there are more than two or three
+findings, and it adds exactly the friction this feature is trying to
+remove.
 
-> *"Alexa, I've reviewed these. We're good to move forward."*
-> **"Done. All three approved, on the record: reviewed via voice,
-> cleared to proceed."**
+Instead: the voice utterance captures the decisions and reasons, but
+doesn't resolve anything yet. It pushes the captured decisions to the
+screen as **pending**, next to the findings they apply to, and voice
+gives one short prompt:
 
-> *"Alexa, first one's a non-issue. Second one's an actual blocker, we
-> need a fix."*
-> **"Done. Finding 1 accepted: non-issue. Finding 2 confirmed, needs a
-> fix."**
+> *"Alexa, I've reviewed these. First one's a non-issue. Second one's an
+> actual blocker, we need a fix."*
+> **"Got it, take a look and say proceed when you're ready."**
+>
+> *[Screen updates: Finding 1 shows "Pending: Accept — non-issue".
+> Finding 2 shows "Pending: Needs fix — needs a fix".]*
+>
+> *"Proceed."*
+> **"Done."**
 
-Silent success is as bad as silent failure. The read-back is what lets a
-misunderstanding get caught and corrected immediately, in the same
-conversation, instead of discovered later.
+Nothing is actually resolved until "proceed." This gets two things at
+once: voice responses stay short regardless of how many findings are
+involved, and a misunderstanding is caught by looking at the pending
+screen and saying so, before anything is committed, not after. That
+also means there's no "undo" problem to solve, correcting a pending
+decision before commit isn't an undo, it's just not having said
+"proceed" yet.
 
 ## Conversation continuity
 
-- Changing your mind mid-flow ("wait, reverse that") has to be possible
-  without starting the whole review over.
+- Changing your mind before committing is just restating the decision
+  ("actually, finding 2 is fine too") and the pending screen updates
+  again, still nothing resolved until "proceed."
 - Asking for a reminder of what something was without re-navigating to
   the screen ("what was wrong with the second one again?") is a natural
   ask mid-review.
@@ -109,22 +121,42 @@ finding in a single conversation instead of being limited to one.
 
 ## What the screen has to show for this to work
 
-Numbered order, not just a stack of cards. "First" and "second" only
-mean something if the screen shows 1. and 2. explicitly, in the same
-order voice will resolve them against. This is the same display change
-the PR-grouped Gate redesign already needs, one UI change serves both,
-not two separate pieces of work.
+Numbered order, not just a stack of cards, grouped by PR, and within a
+PR:
+
+1. **Blockers before review-only findings.** A blocking finding outranks
+   a review-only one regardless of risk score, it's the one actually
+   stopping the merge.
+2. **Clustered by detector theme within that**, all the PII findings
+   together, then the human-oversight-gap ones, and so on, which also
+   makes "approve all the PII ones" a natural thing to say.
+3. **Risk score descending as the final tiebreaker.**
+
+The numbering itself stays one flat sequence straight through the whole
+list, 1, 2, 3, regardless of the visual theme clusters, so "first" and
+"second" are never ambiguous between "first overall" and "first in this
+theme." "First" and "second" only mean anything if the screen shows
+these numbers explicitly, in the same order voice resolves them against.
+This is the same display change the PR-grouped Gate redesign already
+needs, one UI change serves both, not two separate pieces of work.
 
 ## What's actually new, mechanically
 
-One new capability: given a repo and PR, list the findings currently on
-screen for it, each with a stable position number, built from the same
-data that already generates the screen push, not new logic, and frozen
-for the duration of the conversation. Everything after that reuses the
-existing approve/reject tool, called once per finding, with whatever
-reason the person actually said. The existing safety check, a finding
-must have been shown recently, doesn't change at all. It already works
-per finding regardless of how voice found that finding's id.
+One tool, given a repo and PR, that takes a list of decisions (position,
+approve or reject, reason) and **stages** them rather than resolving
+anything immediately: it writes a pending-disposition record and pushes
+the updated screen state showing each touched finding as pending. A
+second trigger, "proceed," reads that pending record and loops through
+it, calling the existing approve/reject logic once per finding, same
+safety check as always (must have been shown recently), then clears the
+pending record. The model only ever has to construct one call with a
+structured list, not make several separate tool calls in one turn,
+removing a dependency on orchestration behavior that didn't need to be
+there.
+
+Finding order and numbering reuse the same data that already generates
+the screen push, extended with the severity/theme/risk sort above, and
+frozen for the duration of the conversation.
 
 ## Settled
 
@@ -135,17 +167,11 @@ per finding regardless of how voice found that finding's id.
   responsible for it. If other people are in the room and that person
   can't control who talks, that's not something SHIP needs to solve.
   Keep it simple.
-
-## Still open
-
-- **No way to undo a resolution today.** Status moves from frozen to
-  resolved one-way; nothing currently reopens it. A good read-back
-  should make a wrong resolution rare, but "rare" isn't "never." Worth
-  deciding: build a narrow, tightly-scoped reopen path, or accept this
-  as a manual-intervention edge case for now?
-- **Does the Alexa+/Bedrock orchestration actually support making
-  several tool calls inside one turn?** Needs verifying, not assuming,
-  before any of the multi-finding scenarios above can work at all.
-- **Stable sort order.** Risk score descending is the obvious default
-  for numbering findings, worth confirming that's actually what a
-  reviewer wants to see first.
+- **No undo needed.** Resolved by the stage-then-"proceed" design above,
+  not by building a reopen mechanism. Nothing is final until "proceed,"
+  so there's nothing to undo.
+- **One tool handles the batch**, rather than depending on whether the
+  Alexa+/Bedrock orchestration supports several tool calls in a single
+  turn. Removes the dependency instead of needing to verify it.
+- **Sort order: severity, then detector theme, then risk score, numbered
+  flat.** See "What the screen has to show" above.
