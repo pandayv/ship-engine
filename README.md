@@ -1,107 +1,43 @@
 # SHIP
 
-**Every AI feature your team ships is also a decision nobody signed off
-on.** SHIP is an AI reviewer that reads every pull request the moment it
-opens, catches the ones that quietly cross a real legal line, and only
-interrupts you when it's actually found something. Ask it anytime. It
-answers in one honest sentence, and shows the details on your nearest
-screen.
+**Every AI feature your team ships is also a legal or operational
+decision nobody signed off on.** SHIP is an AI reviewer that reads
+every pull request the moment it opens, catches the ones that quietly
+cross a real legal line, and only interrupts you when it's actually
+found something. Ask it anytime. It answers in one honest sentence, and
+shows the details on your nearest screen.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
-(Alexa+ track, AWS Builder mini-challenge), from scratch, inside this
-hackathon's own submission window.
+(Alexa+ track, AWS Builder mini-challenge).
 
 ![Gate, SHIP's review console, showing a real blocking finding with its GDPR and EU AI Act citations, risk score, and suggested fix](docs/screenshots/gate-dashboard.png)
 
 ---
 
+## How to see it in action
+
+Three ways to try this.
+
+1. **Experience it live.** Judges: instructions for adding a test PR
+   and trying it live are included in the submission materials.
+2. **Watch the demo video.** *(Video link goes here before final
+   submission.)*
+3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
+
 ## The problem
 
-You're a founder or CEO of a small startup. Your team ships a feature
-this week. It's tested, it works, you ship it. Months later, someone
-finds a Social Security number sitting in a prompt. Or a zip code
-quietly swaying who gets approved. Or a decision the AI made that no
-human ever reviewed. Nobody meant for it to happen. Nobody's job was to
-catch it either.
+Fast-moving teams shipping Gen AI features routinely introduce
+compliance hazards without meaning to: unmasked personal data (an SSN,
+a zip code) sitting in a prompt, race or gender quietly swaying a
+credit decision, an AI decision loop running with no one watching it.
 
-This isn't hypothetical. GDPR has required real protection for personal
-data since 2018, with fines reaching tens of millions of euros. The EU AI
-Act separately names credit-scoring AI as high-risk, with human-oversight
-rules on the way. A small team has no compliance hire and no time to
-build one, and the exposure is real today.
+These hazards hurt the people affected, and risk penalties under GDPR
+and the EU AI Act. A small team can't afford a dedicated compliance
+hire, and reviewing every PR by hand would grind feature velocity to a
+crawl.
 
-The usual fixes both fail. Ship blind and hope. Or slow every PR down for
-a human to review by hand. Neither is something a fast-moving team can
-live with.
-
-SHIP is the third option. It monitors every PR the moment it opens,
-works out whether something's actually wrong, not just risky-looking,
-explains what it found in plain English, cites the exact rule, and
-drafts the fix. You only get pulled in when the problem is real. Here's
-exactly how:
-
-## What it does
-
-Four stages review every PR, in order, plus one more that carries the
-result to you. Each piece is narrow and specific:
-
-1. **Screener**: a fast, free regex/AST pre-filter. It runs on every commit.
-   If nothing matches, the PR passes in milliseconds and never costs a
-   model call. A match doesn't mean a violation. It means "worth a real
-   look."
-2. **Detector**: a Strands Agent, RAG-grounded against real, sourced
-   regulation text. Runs only on the fragments Screener flagged,
-   one fragment at a time, and returns a structured verdict: matched or
-   not, which category, a 1–10 risk score, a plain-English explanation,
-   the exact citation, and a draft remediation patch. It also learns from
-   Gate's own decisions. A periodic batch job
-   ([`scripts/pattern_miner.py`](scripts/pattern_miner.py)) turns
-   dismissed false positives into a small, bounded set of generalized
-   patterns, retrieved the same way as regulation text and weighed as
-   context, never as a rule that overrides Detector's own grounded
-   judgment. A pattern only earns a say once independent dismissals have
-   confirmed it, not from one person's single call.
-3. **Triage**: routes the verdict. Below the threshold, it's logged and
-   nothing else happens. At or above it, the build freezes. An alert is
-   created, pending human review, and the PR's own commit status turns
-   red (`ship/compliance`, promotable to a required check in branch
-   protection. This is what actually blocks the merge button, not just a
-   dashboard entry). The threshold is per-category, not one number for
-   everything. A confirmed violation that breaks a required safety
-   guarantee (unmasked PII reaching an external service, an automated
-   decision with no human checkpoint at all) is held to a lower bar than
-   one that's more a matter of degree.
-4. **Gate**: the review console. Every frozen alert shows the file, the
-   category, the risk score, the plain-English summary, the exact
-   regulatory citation, and the suggested patch. A human clicks Approve or
-   Reject, and that decision is recorded as the one-way resolution of the
-   alert, posted back to the PR as a comment, and folded into the
-   recomputed commit status. Resolving the last blocking finding is what
-   turns the check green. (Actually pushing the approved patch back to the
-   PR via the GitHub API is a scoped-out next step, not yet wired in.
-   Today, a human still applies the fix themselves once they've reviewed
-   it here.) Gate also has a **history** view of every past disposition
-   with the reason a human gave, and a **connected-repos** view.
-   Connecting a repository is a form submission here, not a redeploy (see
-   [Tech stack](#tech-stack)).
-5. **Relay**: SHIP's voice and screen layer. Connects Alexa+ to the same
-   alerts Gate shows, answering in one sentence and pushing the full
-   detail to whatever screen is nearest. The same rule from Gate applies
-   here too: a finding can't be resolved by voice until it's been shown
-   on a screen (see [The Alexa+ experience](#the-alexa-experience)).
-
-Six specific problems get caught this way, each grounded in a real law:
-a person's data leaving with no one seeing it, a decision landing with
-no one checking it, a protected trait swaying an outcome, or a process
-handed power with no limit on what it can do. Full detector-by-detector
-detail, including the taxonomy IDs used internally, is in
-[architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
-
-SHIP is deliberately scoped to what a single PR diff can actually prove.
-See the architecture doc for the reasoning behind that boundary, and
-what's on the roadmap next.
-
-Every choice above traces back to a short list of commitments:
+SHIP closes that gap: it catches AI compliance risk before it ships,
+without slowing the team down.
 
 ## Guiding principles
 
@@ -125,8 +61,35 @@ Survive retries, failures, and heavy load without breaking.
 Free deterministic checks first, LLM only when needed. Only the right
 model for the job, measured.
 
-Principle 3 is what the next section actually sounds like. [Architecture](#architecture)
-and [Tech stack](#tech-stack) further down are where the rest come from.
+## What it does
+
+1. **Filters fast, for free.** Screener runs a regex/AST scan on every
+   commit. Nothing matches, the PR passes in milliseconds, no model
+   call spent.
+2. **Judges what's actually wrong.** Detector reviews only what
+   Screener flagged, one fragment at a time, grounded against sourced
+   regulation text, not memory. It returns a verdict, a risk score, a
+   plain-English explanation, a citation, and a draft fix, and learns
+   from Gate's own past decisions over time.
+3. **Blocks the merge, not just a dashboard.** Triage routes the
+   verdict by risk. At or above threshold, the PR's own commit status
+   turns red, which is what actually blocks the merge button.
+4. **Puts a human in the loop.** Gate is the review console: file,
+   risk, explanation, citation, suggested fix, one click to approve or
+   reject. The decision posts back to the PR and clears the block.
+5. **Reaches you by voice.** Relay carries the same findings to Alexa+
+   and your nearest screen, so resolving a finding doesn't require
+   opening a dashboard.
+
+SHIP watches for four kinds of risk, backed by six detectors tied to
+real law: exposing sensitive personal data, decisions made with no
+human review, bias from a protected trait, and AI handed more
+authority than it should have. Full detector-by-detector detail,
+including the taxonomy IDs used internally, is in
+[architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
+
+SHIP is scoped to what a single PR diff can prove. See the architecture
+doc for that boundary and what's next.
 
 ## The Alexa+ experience
 
@@ -173,21 +136,6 @@ web app, source included.
 **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
 Every response above comes from the deployed Relay endpoint, over
 Streamable HTTP.
-
-That link is one of three ways to see this for yourself.
-
-## How to see it in action
-
-Three ways to try this.
-
-1. **Experience it live.** Judges: instructions for adding a test PR and
-   trying it live are included in the submission materials.
-2. **Watch the video.** *(Added here before final submission.)*
-   The [Alexa+ simulator](#the-alexa-experience) above answers from the
-   same real findings shown in it.
-3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
-
-For exactly how any of this works under the hood, start here:
 
 ## Architecture
 
@@ -332,7 +280,7 @@ to a human decision to the merge button itself.
 
 Relay (the MCP server), the Alexa+ simulated experience, and cross-device
 push are also live. See
-[Meet you where you are](#the-alexa-experience)
+[The Alexa+ experience](#the-alexa-experience)
 above for the full walkthrough.
 
 Things known and deliberately not built yet, not overlooked:
