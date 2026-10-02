@@ -3,14 +3,14 @@
 **Every AI feature your team ships is also a legal or operational
 decision nobody signed off on.** SHIP is an AI reviewer that reads
 every pull request the moment it opens, catches the ones that quietly
-cross a real legal line, and only interrupts you when it's actually
-found something. Ask it anytime. It answers in one honest sentence, and
-shows the details on your nearest screen.
+cross a legal line, and only interrupts you when it's found something.
+Ask it anytime. It answers in one sentence, and shows the details on
+your nearest screen.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
 (Alexa+ track, AWS Builder mini-challenge).
 
-![Gate, SHIP's review console, showing a real blocking finding with its GDPR and EU AI Act citations, risk score, and suggested fix](docs/screenshots/gate-dashboard.png)
+![Gate, SHIP's review console, showing a blocking finding with its GDPR and EU AI Act citations, risk score, and suggested fix](docs/screenshots/gate-dashboard.png)
 
 ---
 
@@ -73,7 +73,7 @@ model for the job, measured.
    from Gate's own past decisions over time.
 3. **Blocks the merge, not just a dashboard.** Triage routes the
    verdict by risk. At or above threshold, the PR's own commit status
-   turns red, which is what actually blocks the merge button.
+   turns red, blocking the merge button itself.
 4. **Puts a human in the loop.** Gate is the review console: file,
    risk, explanation, citation, suggested fix, one click to approve or
    reject. The decision posts back to the PR and clears the block.
@@ -93,7 +93,7 @@ doc for that boundary and what's next.
 
 ## The Alexa+ experience
 
-It speaks up only when something actually needs your attention. Ask it
+It speaks up only when something needs your attention. Ask it
 naturally, from your phone, an Echo, or anywhere else Alexa+ works.
 Findings aren't read aloud. Instead, anything that needs your review
 shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even
@@ -121,7 +121,7 @@ Look at it first, then give a reason, and it goes through for real:
 > positive."**
 
 That gate is enforced server-side, because `request_risk_acceptance`
-only acts once the finding has genuinely been shown on a screen in the
+only acts once the finding has been shown on a screen in the
 last ten minutes, and a reason is required either way, not by a prompt
 asking the model to behave. Skip the review, and there is nothing voice
 can say to talk its way past that check.
