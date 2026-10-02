@@ -37,92 +37,8 @@ live with.
 SHIP is the third option. It monitors every PR the moment it opens,
 works out whether something's actually wrong, not just risky-looking,
 explains what it found in plain English, cites the exact rule, and
-drafts the fix. You only get pulled in when the problem is real. It
-meets you where you are, too. Ask Alexa, then review the details on
-whatever screen is nearest: laptop, iPad, even a smart fridge (see
-[Meet you where you are](#the-alexa-experience)).
-
-## Guiding principles
-
-**1. Last line of defense.**
-Assume nothing was checked before this. It doesn't matter who wrote the
-code, a person or an AI. It doesn't matter if the feature uses AI or not.
-
-**2. Grounded, not guessed.**
-Rely on facts, not memory or guesswork. Keep improving to make that
-grounding sharper.
-
-**3. Meet you where you are.**
-The answer finds you, on whatever device is nearest, not the other way
-around. Ask by voice from anywhere. See the detail on whatever screen is
-closest, a laptop, a TV, even a fridge.
-
-**4. Scalability and resilience.**
-Survive retries, failures, and heavy load without breaking.
-
-**5. Cost efficiency.**
-Free deterministic checks first, LLM only when needed. Only the right
-model for the job, measured.
-
-See [What it does](#what-it-does), [Architecture](#architecture), and
-[Tech stack](#tech-stack) below for how each of these is built.
-
-## The Alexa+ experience
-
-It speaks up only when something actually needs your attention. Ask it
-naturally, from your phone, an Echo, or anywhere else Alexa+ works.
-Findings aren't read aloud. Instead, anything that needs your review
-shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even
-a smart fridge.
-
-> *"Alexa, what's up?"*
-> **"2 blockers found. Ready for your decision. Want it on a screen?"**
-> *"Show me on the TV."*
-
-The actual findings then appear, live, on whatever screen just answered
-to that name.
-
-**Voice can confirm a decision. It can never make one blind.** Ask to
-approve a finding you've never looked at, and SHIP refuses. That's the
-exact pattern its own TLGP-002 detector flags in *other* people's code,
-an AI-mediated decision applied with no human checkpoint. Try it:
-
-> *"Approve it."*
-> **"Could you take a look on a screen first, then tell me why?"**
-
-Look at it first, then give a reason, and it goes through for real:
-
-> *"Approve it. Hashed identifiers, this is a false positive."*
-> **"Done. Accepted, on the record: hashed identifiers, this is a false
-> positive."**
-
-That gate is enforced server-side, because `request_risk_acceptance`
-only acts once the finding has genuinely been shown on a screen in the
-last ten minutes, and a reason is required either way, not by a prompt
-asking the model to behave. Skip the review, and there is nothing voice
-can say to talk its way past that check.
-
-Alexa+'s own MCP toolkit requires a live account relationship with an
-Amazon Solutions Architect before its CLI/device path will connect at
-all. That requirement isn't documented anywhere until you're already
-mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
-how it surfaced). The hackathon's own rules anticipate exactly this gap
-and name a first-class alternative: a simulated Alexa+ experience in a
-web app, source included.
-**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
-Every response above comes from the deployed Relay endpoint, over
-Streamable HTTP.
-
-## Demo
-
-Three ways to try this.
-
-1. **Experience it live.** Judges: instructions for adding a test PR and
-   trying it live are included in the submission materials.
-2. **Watch the demo.** *(Video: added here before final submission.)*
-   The [Alexa+ simulator](#the-alexa-experience) answers from the same
-   real findings shown in the demo.
-3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
+drafts the fix. You only get pulled in when the problem is real. Here's
+exactly how:
 
 ## What it does
 
@@ -184,6 +100,94 @@ detail, including the taxonomy IDs used internally, is in
 SHIP is deliberately scoped to what a single PR diff can actually prove.
 See the architecture doc for the reasoning behind that boundary, and
 what's on the roadmap next.
+
+Every choice above traces back to a short list of commitments:
+
+## Guiding principles
+
+**1. Last line of defense.**
+Assume nothing was checked before this. It doesn't matter who wrote the
+code, a person or an AI. It doesn't matter if the feature uses AI or not.
+
+**2. Grounded, not guessed.**
+Rely on facts, not memory or guesswork. Keep improving to make that
+grounding sharper.
+
+**3. Meet you where you are.**
+The answer finds you, on whatever device is nearest, not the other way
+around. Ask by voice from anywhere. See the detail on whatever screen is
+closest, a laptop, a TV, even a fridge.
+
+**4. Scalability and resilience.**
+Survive retries, failures, and heavy load without breaking.
+
+**5. Cost efficiency.**
+Free deterministic checks first, LLM only when needed. Only the right
+model for the job, measured.
+
+Principle 3 is what the next section actually sounds like. [Architecture](#architecture)
+and [Tech stack](#tech-stack) further down are where the rest come from.
+
+## The Alexa+ experience
+
+It speaks up only when something actually needs your attention. Ask it
+naturally, from your phone, an Echo, or anywhere else Alexa+ works.
+Findings aren't read aloud. Instead, anything that needs your review
+shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even
+a smart fridge.
+
+> *"Alexa, what's up?"*
+> **"2 blockers found. Ready for your decision. Want it on a screen?"**
+> *"Show me on the TV."*
+
+The actual findings then appear, live, on whatever screen just answered
+to that name.
+
+**Voice can confirm a decision. It can never make one blind.** Ask to
+approve a finding you've never looked at, and SHIP refuses. That's the
+exact pattern its own TLGP-002 detector flags in *other* people's code,
+an AI-mediated decision applied with no human checkpoint. Try it:
+
+> *"Approve it."*
+> **"Could you take a look on a screen first, then tell me why?"**
+
+Look at it first, then give a reason, and it goes through for real:
+
+> *"Approve it. Hashed identifiers, this is a false positive."*
+> **"Done. Accepted, on the record: hashed identifiers, this is a false
+> positive."**
+
+That gate is enforced server-side, because `request_risk_acceptance`
+only acts once the finding has genuinely been shown on a screen in the
+last ten minutes, and a reason is required either way, not by a prompt
+asking the model to behave. Skip the review, and there is nothing voice
+can say to talk its way past that check.
+
+Alexa+'s own MCP toolkit requires a live account relationship with an
+Amazon Solutions Architect before its CLI/device path will connect at
+all. That requirement isn't documented anywhere until you're already
+mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
+how it surfaced). The hackathon's own rules anticipate exactly this gap
+and name a first-class alternative: a simulated Alexa+ experience in a
+web app, source included.
+**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
+Every response above comes from the deployed Relay endpoint, over
+Streamable HTTP.
+
+That link is one of three ways to see this for yourself.
+
+## How to see it in action
+
+Three ways to try this.
+
+1. **Experience it live.** Judges: instructions for adding a test PR and
+   trying it live are included in the submission materials.
+2. **Watch the video.** *(Added here before final submission.)*
+   The [Alexa+ simulator](#the-alexa-experience) above answers from the
+   same real findings shown in it.
+3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
+
+For exactly how any of this works under the hood, start here:
 
 ## Architecture
 
