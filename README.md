@@ -108,8 +108,8 @@ how it surfaced). The hackathon's own rules anticipate exactly this gap
 and name a first-class alternative: a simulated Alexa+ experience in a
 web app, source included.
 **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
-Every response above comes from the real, deployed Relay endpoint over
-Streamable HTTP, not a mock.
+Every response above comes from the deployed Relay endpoint, over
+Streamable HTTP.
 
 ## Demo
 
@@ -117,8 +117,8 @@ Three ways to see this working, not just read about it.
 
 ### 1. Two real PRs
 
-SHIP reviewed two pull requests on a fork of
-[MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance),
+SHIP connects to any repo you add through Gate. For this demo, that's a
+fork of [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance),
 an open-source Django lending app.
 
 - **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
@@ -245,8 +245,7 @@ silently dropped.
   Claude models vs. 200/min for Nova Lite). See the benchmark table in
   [`src/agents/detector.py`](src/agents/detector.py). Google Gemini serves
   as a credit-exhaustion fallback and a local Ollama model as a fully
-  offline reliability fallback. Both are switchable via one env var and
-  genuinely functional, not unverified stretch goals.
+  offline reliability fallback. Both are switchable via one env var.
 - **Agent runtime:** Amazon Bedrock AgentCore Runtime, the same Detector
   logic deployed to a real managed runtime ([`shipagentcore/`](shipagentcore/)),
   callable in-process for local development or remotely for the deployed
@@ -380,9 +379,9 @@ Things known and deliberately not built yet, not overlooked:
   AWS account already registered by an Amazon Solutions Architect, a live
   account relationship rather than a self-service step (see
   [`FRICTION_LOG.md`](FRICTION_LOG.md)). The simulated web experience
-  calls the identical, real Relay endpoint a live connection would, so
-  nothing about the review logic itself is untested. Only the transport
-  Alexa+'s own infrastructure would use to reach it is missing.
+  calls the identical Relay endpoint a live connection would, exercising
+  the same review logic. Only the transport Alexa+'s own infrastructure
+  would use to reach it is missing.
 - New detectors, beyond what's listed above, for risk patterns that need
   more than a single PR diff to prove: infrastructure/deployment context,
   or behavior observed across multiple files or over time. See the
