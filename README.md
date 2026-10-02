@@ -1,18 +1,52 @@
 # SHIP
 
-**Every AI feature your team ships is also a legal or operational
-decision nobody signed off on.** SHIP is an AI reviewer that reads
-every pull request the moment it opens, catches the ones that quietly
-cross a legal line, and only interrupts you when it's found something.
-Ask it anytime. It answers in one sentence, and shows the details on
-your nearest screen.
+Fast-moving teams shipping Gen AI features routinely introduce compliance hazards without meaning to: unmasked personal data (an SSN, a zip code) sitting in a prompt, race or gender quietly swaying a credit decision, an AI decision loop running with no one watching it.
 
-Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/)
-(Alexa+ track, AWS Builder mini-challenge).
+These hazards not only hurt the people affected, but also risk penalties under GDPR and the EU AI Act. 
+
+A small team can't afford a dedicated compliance hire, and reviewing every PR by hand would grind feature velocity to a crawl.
+
+SHIP closes that gap: it catches AI compliance risk before it ships, without slowing the team down.
+
+**SHIP is a multi-agentic gatekeeper that reads every pull request the moment it opens, catches the ones that quietly cross a legal line, and interacts with you only when it's found something.**
+
+Interact anytime from any Alexa enabled device. It provides brief answers, and shows easy-to-understand details on your nearest screen.
+
+Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/) (Alexa+ track, AWS Builder mini-challenge).
 
 ![Gate, SHIP's review console, showing a blocking finding with its GDPR and EU AI Act citations, risk score, and suggested fix](docs/screenshots/gate-dashboard.png)
 
 ---
+
+## What it does
+
+1. **Filters fast, for free.** Screener runs a regex/AST scan on every
+   commit. Nothing matches, the PR passes in milliseconds, no model
+   call spent.
+2. **Judges what's actually wrong.** Detector reviews only what
+   Screener flagged, one fragment at a time, grounded against sourced
+   regulation text, not memory. It returns a verdict, a risk score, a
+   plain-English explanation, a citation, and a draft fix, and learns
+   from Gate's own past decisions over time.
+3. **Blocks the merge, not just a dashboard.** Triage routes the
+   verdict by risk. At or above threshold, the PR's own commit status
+   turns red, blocking the merge button itself.
+4. **Puts a human in the loop.** Gate is the review console: file,
+   risk, explanation, citation, suggested fix, one click to approve or
+   reject. The decision posts back to the PR and clears the block.
+5. **Reaches you by voice.** Relay carries the same findings to Alexa+
+   and your nearest screen, so resolving a finding doesn't require
+   opening a dashboard.
+
+SHIP watches for four kinds of risks: exposing sensitive personal data, decisions made with no
+human review, bias from a protected trait, and AI handed more
+authority than it should have. 
+
+Backed by six detectors tied to real law. For further details on detectors ceheck: 
+[architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
+
+SHIP is scoped to what a single PR diff can prove. See the architecture
+doc for that boundary and what's next.
 
 ## How to see it in action
 
@@ -24,20 +58,54 @@ Three ways to try this.
    submission.)*
 3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
 
-## The problem
+### Integrated Alexa+ experience
 
-Fast-moving teams shipping Gen AI features routinely introduce
-compliance hazards without meaning to: unmasked personal data (an SSN,
-a zip code) sitting in a prompt, race or gender quietly swaying a
-credit decision, an AI decision loop running with no one watching it.
+SHIP actively works in the background and alerts only when something needs your attention. Interact with it
+naturally, from your phone, an Echo, or anywhere else Alexa+ works.
 
-These hazards hurt the people affected, and risk penalties under GDPR
-and the EU AI Act. A small team can't afford a dedicated compliance
-hire, and reviewing every PR by hand would grind feature velocity to a
-crawl.
+**1. Meets you where you are**
+Findings aren't read aloud in a long monologue. Instead, anything that needs your review shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even a smart fridge.
 
-SHIP closes that gap: it catches AI compliance risk before it ships,
-without slowing the team down.
+> *"Alexa, what's up?"*
+> **"2 blockers found. Ready for your decision. Want to review now?"**
+> *"Show me on the TV."*
+
+The actual findings then appear, live, on whatever screen just answered
+to that screen/device name.
+
+**2. Voice can confirm a decision. It can never make one blind.** Ask to
+approve a finding you've never looked at, and SHIP refuses. That's the
+exact pattern SHIP is designed to flag in *other* people's code: an AI-mediated decision applied with no human checkpoint. Try it:
+
+> *"Approve it."*
+> **"Could you take a look on a screen first, then tell me why?"**
+
+Look at it first, then give a reason, and it goes through for real:
+
+> *"Approve it. this is a false positive."*
+> **"Done. Accepted, on the record: this is a false
+> positive."**
+
+That gate is enforced server-side, because `request_risk_acceptance`
+only acts once the finding has been shown on a screen in the
+last ten minutes, and a reason is required either way, not by a prompt
+asking the model to behave. Skip the review, and there is nothing voice
+can say to talk its way past that check.
+
+Note: Alexa+'s own MCP toolkit requires a live account relationship with an
+Amazon Solutions Architect before its CLI/device path will connect at
+all. That requirement isn't documented anywhere until you're already
+mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
+how it surfaced). The hackathon's own rules anticipate exactly this gap
+and name a first-class alternative: a simulated Alexa+ experience in a
+web app, source included.
+**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
+Every response above comes from the deployed Relay endpoint, over
+Streamable HTTP.
+
+
+
+## How it is built: 
 
 ## Guiding principles
 
@@ -61,81 +129,6 @@ Survive retries, failures, and heavy load without breaking.
 Free deterministic checks first, LLM only when needed. Only the right
 model for the job, measured.
 
-## What it does
-
-1. **Filters fast, for free.** Screener runs a regex/AST scan on every
-   commit. Nothing matches, the PR passes in milliseconds, no model
-   call spent.
-2. **Judges what's actually wrong.** Detector reviews only what
-   Screener flagged, one fragment at a time, grounded against sourced
-   regulation text, not memory. It returns a verdict, a risk score, a
-   plain-English explanation, a citation, and a draft fix, and learns
-   from Gate's own past decisions over time.
-3. **Blocks the merge, not just a dashboard.** Triage routes the
-   verdict by risk. At or above threshold, the PR's own commit status
-   turns red, blocking the merge button itself.
-4. **Puts a human in the loop.** Gate is the review console: file,
-   risk, explanation, citation, suggested fix, one click to approve or
-   reject. The decision posts back to the PR and clears the block.
-5. **Reaches you by voice.** Relay carries the same findings to Alexa+
-   and your nearest screen, so resolving a finding doesn't require
-   opening a dashboard.
-
-SHIP watches for four kinds of risk, backed by six detectors tied to
-real law: exposing sensitive personal data, decisions made with no
-human review, bias from a protected trait, and AI handed more
-authority than it should have. Full detector-by-detector detail,
-including the taxonomy IDs used internally, is in
-[architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
-
-SHIP is scoped to what a single PR diff can prove. See the architecture
-doc for that boundary and what's next.
-
-## The Alexa+ experience
-
-It speaks up only when something needs your attention. Ask it
-naturally, from your phone, an Echo, or anywhere else Alexa+ works.
-Findings aren't read aloud. Instead, anything that needs your review
-shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even
-a smart fridge.
-
-> *"Alexa, what's up?"*
-> **"2 blockers found. Ready for your decision. Want it on a screen?"**
-> *"Show me on the TV."*
-
-The actual findings then appear, live, on whatever screen just answered
-to that name.
-
-**Voice can confirm a decision. It can never make one blind.** Ask to
-approve a finding you've never looked at, and SHIP refuses. That's the
-exact pattern its own TLGP-002 detector flags in *other* people's code,
-an AI-mediated decision applied with no human checkpoint. Try it:
-
-> *"Approve it."*
-> **"Could you take a look on a screen first, then tell me why?"**
-
-Look at it first, then give a reason, and it goes through for real:
-
-> *"Approve it. Hashed identifiers, this is a false positive."*
-> **"Done. Accepted, on the record: hashed identifiers, this is a false
-> positive."**
-
-That gate is enforced server-side, because `request_risk_acceptance`
-only acts once the finding has been shown on a screen in the
-last ten minutes, and a reason is required either way, not by a prompt
-asking the model to behave. Skip the review, and there is nothing voice
-can say to talk its way past that check.
-
-Alexa+'s own MCP toolkit requires a live account relationship with an
-Amazon Solutions Architect before its CLI/device path will connect at
-all. That requirement isn't documented anywhere until you're already
-mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
-how it surfaced). The hackathon's own rules anticipate exactly this gap
-and name a first-class alternative: a simulated Alexa+ experience in a
-web app, source included.
-**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
-Every response above comes from the deployed Relay endpoint, over
-Streamable HTTP.
 
 ## Architecture
 
