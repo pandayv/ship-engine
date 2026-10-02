@@ -279,7 +279,8 @@ silently dropped.
 ## Setup
 
 Deploying this yourself needs a real AWS account (Bedrock, Lambda,
-DynamoDB, SQS, API Gateway) and about 30–45 minutes. Full step-by-step
+DynamoDB, SQS, API Gateway) and about 30–45 minutes, less with
+[`deploy.sh`](deploy.sh), which scripts most of it. Full step-by-step
 walkthrough, including troubleshooting for a brand-new AWS account:
 [SETUP.md](SETUP.md).
 

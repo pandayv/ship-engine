@@ -4,6 +4,15 @@ Full step-by-step walkthrough for standing up a real deployment: your own
 AWS account, your own GitHub repo, your own Gate dashboard. Takes about
 30–45 minutes for a first bring-up.
 
+**In a hurry?** [`deploy.sh`](deploy.sh) runs steps 3–7 below for you.
+That includes creating the two IAM roles steps 6 and 7 otherwise leave
+as placeholders (`<YOUR_..._ROLE_ARN>`), and generating both secrets. It
+still stops for the two manual steps at the end, 8 and 9, connecting
+your repo and pointing GitHub's webhook at it, since those need a
+browser and your repo's settings page. Read the script before running
+it against an account that matters, it creates real IAM roles and
+Lambda functions.
+
 ## What you need
 
 - An AWS account with Bedrock model access enabled for at least one
@@ -200,3 +209,21 @@ Open a real PR against the target repo containing something Screener
 would flag (raw PII reaching an external call is the easiest to trigger)
 and confirm an alert appears at
 `https://<your-function-url>/dashboard?token=<SHIP_DASHBOARD_TOKEN>`.
+
+## Optional: connect a physical screen
+
+Alexa handles voice on its own, nothing to set up there. Getting a
+finding to show up on a TV, an iPad, a laptop, or any other screen is a
+separate piece SHIP built itself (Relay's push path), and it needs a
+one-time step per screen, not something repeated on every use:
+
+1. Open [`docs/ship-display.html`](docs/ship-display.html) in that
+   device's browser. If you're pointing it at your own deployment
+   rather than the hosted reference instance, edit the `WS_URL` constant
+   near the top of the file first to your own WebSocket endpoint from
+   step 6.
+2. Give the screen a name when prompted (e.g. "TV", "Conference Room").
+3. Leave that tab open. It sits idle, no polling, until Relay pushes a
+   finding to it by that name.
+
+Ask Alexa to show a finding on that name and it appears there live.
