@@ -1,8 +1,13 @@
 # Voice-driven multi-finding resolution — workflow
 
-Planning doc, not yet built. First step before touching Relay or Gate's
-template: agree on the experience across real scenarios, not just the
-happy path, then design the mechanism to fit it.
+**Built and verified live** (2026-10-02): `stage_decisions` and `proceed`
+are real Relay tools, deployed, exercised end to end against the live
+system, a staged decision, confirmed pending on screen, committed with
+proceed, and confirmed on GitHub (a real comment, a real commit-status
+update on the commit the finding was found on). See
+`src/relay/server.py` and `src/storage/pending_store.py`. This doc stays
+as the design record; the "still open" items below are resolved, not
+hypothetical.
 
 ## The problem this solves
 
