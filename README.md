@@ -113,6 +113,10 @@ Streamable HTTP, not a mock.
 
 ## Demo
 
+Three ways to see this working, not just read about it.
+
+### 1. Two real PRs
+
 The engine runs against a fork of
 [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
 (MIT-licensed, a real Django lending app), used purely as a realistic
@@ -143,9 +147,15 @@ And Gate, the review console, showing those same findings waiting on a human:
 
 ![The Gate dashboard showing four real blocking findings for PR #1, each with risk score, citation, and an approve or reject action](docs/screenshots/gate-dashboard.png)
 
-Prefer not to leave GitHub? The
-[Alexa+ simulator](#the-alexa-experience) above
-is live and public right now, and answers from these same real findings.
+### 2. The Alexa+ simulator
+
+No GitHub needed. The [Alexa+ simulator](#the-alexa-experience) above is
+live and public right now, and answers from these same real findings.
+
+### 3. Try it yourself
+
+Judges: instructions for opening your own test PR and watching SHIP
+review it live are included in the submission materials.
 
 *(Demo video: added here before final submission.)*
 
