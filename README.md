@@ -20,23 +20,22 @@ Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonapp
 
 ## What it does
 
-1. **Filters fast, for free.** Screener runs a regex/AST scan on every
-   commit. Nothing matches, the PR passes in milliseconds, no model
-   call spent.
-2. **Judges what's actually wrong.** Detector reviews only what
-   Screener flagged, one fragment at a time, grounded against sourced
-   regulation text, not memory. It returns a verdict, a risk score, a
-   plain-English explanation, a citation, and a draft fix, and learns
-   from Gate's own past decisions over time.
-3. **Blocks the merge, not just a dashboard.** Triage routes the
-   verdict by risk. At or above threshold, the PR's own commit status
-   turns red, blocking the merge button itself.
-4. **Puts a human in the loop.** Gate is the review console: file,
-   risk, explanation, citation, suggested fix, one click to approve or
+1. **A PR opens, and Screener checks it first.** A free regex/AST scan
+   runs on every commit. Nothing matches, the PR passes in
+   milliseconds, no model call spent.
+2. **If something matches, Detector takes a closer look.** It reviews
+   just that fragment, grounded against sourced regulation text, not
+   memory, and returns a verdict: risk score, plain-English explanation,
+   citation, and a draft fix. It also learns from Gate's own past
+   decisions over time.
+3. **If Detector confirms a real violation, Triage blocks the merge.**
+   The PR's own commit status turns red, which is what actually stops
+   the merge button, not just a dashboard entry.
+4. **A human resolves it in Gate**, the review console: file, risk,
+   explanation, citation, suggested fix, one click to approve or
    reject. The decision posts back to the PR and clears the block.
-5. **Reaches you by voice.** Relay carries the same findings to Alexa+
-   and your nearest screen, so resolving a finding doesn't require
-   opening a dashboard.
+5. **Relay carries that same review to voice and screen**, so it comes
+   to you wherever you are, instead of you having to go find it in Gate.
 
 SHIP watches for four kinds of risk: exposing sensitive personal data,
 decisions made with no human review, bias from a protected trait, and
