@@ -10,7 +10,7 @@ SHIP closes that gap: it catches AI compliance risk before it ships, without slo
 
 **SHIP is a multi-agentic gatekeeper that reads every pull request the moment it opens, catches the ones that quietly cross a legal line, and interacts with you only when it's found something.**
 
-Interact anytime from any Alexa enabled device. It provides brief answers, and shows easy-to-understand details on your nearest screen.
+Ask it anytime through Alexa+. It answers in one sentence, and shows the full detail on your nearest screen.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/) (Alexa+ track, AWS Builder mini-challenge).
 
@@ -19,6 +19,9 @@ Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonapp
 ---
 
 ## What it does
+
+SHIP is five pieces working as one pipeline, each named for its job:
+Screener, Detector, Triage, Gate, Relay.
 
 1. **A PR opens, and Screener checks it first.** A free regex/AST scan
    runs on every commit. Nothing matches, the PR passes in
@@ -90,7 +93,7 @@ its way past it.
 Connecting a live Alexa+ device needs an account relationship set up by
 Amazon, not available during the hackathon. This uses a simulated
 Alexa+ experience instead, a web app calling the same deployed Relay
-endpoint over Streamable HTTP, source included.
+backend, source included.
 **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
 
 ## How it's built
