@@ -11,6 +11,8 @@ Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonapp
 (Alexa+ track, AWS Builder mini-challenge), from scratch, inside this
 hackathon's own submission window.
 
+![Gate, SHIP's review console, showing a real blocking finding with its GDPR and EU AI Act citations, risk score, and suggested fix](docs/screenshots/gate-dashboard.png)
+
 ---
 
 ## The problem
