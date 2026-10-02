@@ -117,25 +117,23 @@ Three ways to see this working, not just read about it.
 
 ### 1. Two real PRs
 
-The engine runs against a fork of
-[MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance)
-(MIT-licensed, a real Django lending app), used purely as a realistic
-third-party target and kept as a fully separate repository from this
-submission. Nothing from it is incorporated here.
+This isn't staged. SHIP is running against a fork of
+[MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance),
+a real, open-source lending app it had no part in writing.
 
 - **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
   AI-assisted underwriting function sending an applicant's full raw
-  profile to an external LLM. Open it and scroll to the bottom: SHIP's
-  own comment and a failing `ship/compliance` status check are sitting
-  there right now, posted by the real, deployed pipeline.
+  profile to an external LLM. Open it and scroll to the bottom. SHIP's
+  own comment and a failing `ship/compliance` status check are already
+  there.
 - **[PR #2](https://github.com/pandayv/micro-finance/pull/2)** plants one
   genuine violation per remaining detector across three new files,
-  interleaved with four deliberate false-positive look-alikes. Run
-  directly against real Bedrock, both PRs together: **9 for 9**, every
-  genuine violation caught with an accurate citation, every look-alike
-  correctly dismissed.
+  interleaved with four deliberate false-positive look-alikes. Both PRs
+  together: **9 for 9**, run against real Bedrock, every genuine
+  violation caught with an accurate citation, every look-alike correctly
+  dismissed.
 
-A real commit on PR #1, with a real failing status check:
+The commit on PR #1, with a failing status check:
 
 ![A commit on PR #1 with a red failing ship/compliance status check, and SHIP's own finding comment below it](docs/screenshots/pr-status-check.png)
 
@@ -143,7 +141,7 @@ The same PR, with SHIP's full finding, citation, and suggested fix:
 
 ![SHIP's comment on PR #1 showing a compliance finding with GDPR and EU AI Act citations and a suggested change](docs/screenshots/pr-finding.png)
 
-And Gate, the review console, showing those same findings waiting on a human:
+And Gate, the review console, showing those findings waiting on a human:
 
 ![The Gate dashboard showing four real blocking findings for PR #1, each with risk score, citation, and an approve or reject action](docs/screenshots/gate-dashboard.png)
 
