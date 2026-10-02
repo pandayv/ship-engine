@@ -42,11 +42,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.github_writeback import comment_for_decision, post_pr_comment, sync_pr_check
+from src.relay.readmodel import _group as _group_findings_for_review
 from src.storage import alert_store, repo_store
 from src.storage.status_store import refresh_summary
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "dashboard_ui" / "templates"))
+templates.env.globals["theme_for"] = alert_store.theme_for
 
 DASHBOARD_TOKEN = os.environ.get("SHIP_DASHBOARD_TOKEN", "")
 ALLOW_UNAUTHENTICATED = os.environ.get("SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD", "").lower() == "true"
@@ -138,8 +140,12 @@ def view_dashboard(request: Request, token: str | None = Query(default=None)):
     _check_configured()
     if not _authenticated(request, token):
         return RedirectResponse(url="/dashboard/login?next=/dashboard", status_code=303)
-    alerts = alert_store.list_active_alerts()
-    resp = templates.TemplateResponse(request, "gate.html", {"alerts": alerts})
+    # Same grouping and ordering Relay's screen push uses (severity, then
+    # detector theme, then risk score), so a finding numbered "2" here is
+    # the same finding "second" means over voice — one implementation,
+    # not a second one that could quietly drift out of sync.
+    pull_requests = _group_findings_for_review(alert_store.list_active_alerts())
+    resp = templates.TemplateResponse(request, "gate.html", {"pull_requests": pull_requests})
     _set_session(resp, request, token)
     return resp
 

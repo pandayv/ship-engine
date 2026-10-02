@@ -31,6 +31,34 @@ TABLE_NAME = "ship-alerts"
 SEVERITY_BLOCKING = "blocking"  # Triage froze the build; merge should not proceed
 SEVERITY_REVIEW = "review"      # flagged for a human, but the build was not stopped
 
+# Groups the six detectors into the four themes "Last line of defense" in
+# the README names: a person's data leaving unseen, a decision landing
+# unchecked, a protected trait swaying an outcome, a process handed power
+# with no limit. Used to cluster findings for review (Gate, the screen
+# push) so someone can act on "all the data-exposure ones" as a unit
+# instead of reading six unrelated-looking cards. TLGP-001 and TLGP-002
+# share a taxonomy prefix but are different themes — grouping by the full
+# code, not the prefix, is deliberate.
+THEME_ORDER = ["Data exposure", "Human oversight", "Bias & fairness", "Agent capability"]
+_THEME_BY_TAXONOMY = {
+    "PIIE-001": "Data exposure",
+    "PIIE-002": "Data exposure",
+    "PIIE-003": "Data exposure",
+    "TLGP-002": "Human oversight",
+    "ALBP-001": "Bias & fairness",
+    "TLGP-001": "Agent capability",
+}
+
+
+def theme_for(taxonomy_id: str) -> str:
+    """A fragment that matches more than one detector stores a
+    comma-joined taxonomy_id (e.g. "PIIE-001, ALBP-001, TLGP-002"); the
+    first one is Detector's primary classification, and is what's used
+    for clustering. Unrecognized codes land in "Other" rather than
+    raising, new detectors shouldn't break review grouping on day one."""
+    primary = taxonomy_id.split(",")[0].strip()
+    return _THEME_BY_TAXONOMY.get(primary, "Other")
+
 
 @dataclass
 class Alert:

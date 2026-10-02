@@ -83,7 +83,7 @@ from src.relay.push import push_to_device
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
 from src.storage import session_store
-from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert
+from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert, theme_for
 
 CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
 
@@ -183,6 +183,8 @@ def blocked_pull_requests() -> dict:
                 "flagged": pr.review,
                 "findings": [
                     {
+                        "position": i,
+                        "theme": theme_for(f.taxonomy_id),
                         "alert_id": f.alert_id,
                         "file": f.file,
                         "severity": f.severity,
@@ -191,7 +193,7 @@ def blocked_pull_requests() -> dict:
                         "what_is_wrong": f.plain_english_summary,
                         "citation": f.citation,
                     }
-                    for f in pr.findings
+                    for i, f in enumerate(pr.findings, start=1)
                 ],
             }
             for pr in status.pull_requests

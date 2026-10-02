@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.relay.modality import Spoken
-from src.storage.alert_store import SEVERITY_BLOCKING, Alert, list_active_alerts
+from src.storage.alert_store import SEVERITY_BLOCKING, THEME_ORDER, Alert, list_active_alerts, theme_for
 from src.storage.status_store import read_summary
 
 
@@ -120,6 +120,22 @@ class ReleaseStatus:
         return Spoken(sentence, screen_hint=screen_hint)
 
 
+def _review_sort_key(alert: Alert) -> tuple:
+    """Blockers before review-only findings, regardless of risk score — a
+    blocker outranks a higher-scored review-only finding by what it
+    actually does to the merge. Clustered by detector theme within that
+    (all the data-exposure ones together, then oversight, etc.), risk
+    score descending as the final tiebreaker. The position this produces
+    (1, 2, 3...) is a single flat sequence straight through every theme
+    cluster — "first" and "second" must mean the same thing on screen and
+    in a spoken ordinal reference, not drift between "first overall" and
+    "first in this theme"."""
+    severity_rank = 0 if alert.severity == SEVERITY_BLOCKING else 1
+    theme = theme_for(alert.taxonomy_id)
+    theme_rank = THEME_ORDER.index(theme) if theme in THEME_ORDER else len(THEME_ORDER)
+    return (severity_rank, theme_rank, -alert.risk_score, alert.file)
+
+
 def _group(alerts: list[Alert]) -> list[PullRequestFindings]:
     buckets: dict[tuple[str, int], list[Alert]] = {}
     for alert in alerts:
@@ -131,7 +147,7 @@ def _group(alerts: list[Alert]) -> list[PullRequestFindings]:
             pr_number=pr,
             blocking=sum(1 for a in items if a.severity == SEVERITY_BLOCKING),
             review=sum(1 for a in items if a.severity != SEVERITY_BLOCKING),
-            findings=sorted(items, key=lambda a: (-a.risk_score, a.file)),
+            findings=sorted(items, key=_review_sort_key),
         )
         for (repo, pr), items in buckets.items()
     ]

@@ -57,17 +57,34 @@ h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5re
 .nav a:hover { color: var(--accent); }
 .nav .spacer { flex: 1; }
 
+.pr-group { margin-bottom: 28px; }
+.pr-header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+             margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.pr-label { font-family: "JetBrains Mono", monospace; font-weight: 600; font-size: 0.92rem; }
+.pr-count { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.02em; padding: 2px 8px;
+            border-radius: 999px; }
+.pr-count.blocking { background: var(--blocking-tint); color: var(--blocking); }
+.pr-count.review { background: var(--review-tint); color: var(--review); }
+
 .alert { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
          padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
 .alert.blocking { border-left: 3px solid var(--blocking); }
 .alert.review { border-left: 3px solid var(--review); }
 
+.alert-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.position { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 0.78rem;
+            color: var(--ink-soft); background: var(--bg); border: 1px solid var(--border-strong);
+            width: 20px; height: 20px; border-radius: 50%; display: inline-flex;
+            align-items: center; justify-content: center; flex-shrink: 0; }
+
 .tier { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700;
-        letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 9px 3px 8px; border-radius: 999px;
-        margin-bottom: 10px; }
+        letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 9px 3px 8px; border-radius: 999px; }
 .tier.blocking { background: var(--blocking-tint); color: var(--blocking); }
 .tier.review { background: var(--review-tint); color: var(--review); }
 .tier .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.theme-pill { font-size: 0.72rem; font-weight: 600; color: var(--ink-soft); background: var(--bg);
+              border: 1px solid var(--border-strong); padding: 2px 8px; border-radius: 999px; }
 
 .meta { color: var(--ink-soft); font-size: 0.82rem; margin-bottom: 10px; display: flex;
         flex-wrap: wrap; gap: 4px 10px; align-items: center; }
@@ -113,38 +130,50 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     </div>
     <div class="subtitle">Findings awaiting your decision. Blocking findings stop the merge; flagged findings do not.</div>
 
-    {% if alerts %}
-      {% for alert in alerts %}
-      <div class="alert {{ alert.severity }}" id="{{ alert.alert_id }}">
-        {% if alert.severity == "blocking" %}
-          <div class="tier blocking"><span class="dot"></span>Blocking &middot; merge stopped</div>
-        {% else %}
-          <div class="tier review"><span class="dot"></span>Flagged for review &middot; merge not stopped</div>
-        {% endif %}
-        <div class="meta">
-          <span>{{ alert.repo }} #{{ alert.pr_number }}</span>
-          <span class="file">{{ alert.file }}</span>
-          <span>{{ alert.taxonomy_id }}</span>
-          <span class="score">risk {{ alert.risk_score }}</span>
-          <span class="citation">{{ alert.citation }}</span>
+    {% if pull_requests %}
+      {% for pr in pull_requests %}
+      <div class="pr-group">
+        <div class="pr-header">
+          <span class="pr-label">{{ pr.repo }} #{{ pr.pr_number }}</span>
+          {% if pr.blocking %}<span class="pr-count blocking">{{ pr.blocking }} blocking</span>{% endif %}
+          {% if pr.review %}<span class="pr-count review">{{ pr.review }} review</span>{% endif %}
         </div>
-        <div class="summary">{{ alert.plain_english_summary }}</div>
-        {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
-        <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
-          <label for="reason-{{ alert.alert_id }}">Your reason
-            <span class="hint">Posted on the pull request as the record of this decision.</span></label>
-          <textarea id="reason-{{ alert.alert_id }}" name="reason" required
-                    placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
-          <div class="btn-row">
-            <button class="approve" type="submit">
-              {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
-            </button>
-            <button class="reject" type="submit"
-                    formaction="/dashboard/{{ alert.alert_id }}/reject">
-              {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
-            </button>
+        {% for alert in pr.findings %}
+        <div class="alert {{ alert.severity }}" id="{{ alert.alert_id }}">
+          <div class="alert-head">
+            <span class="position">{{ loop.index }}</span>
+            {% if alert.severity == "blocking" %}
+              <div class="tier blocking"><span class="dot"></span>Blocking &middot; merge stopped</div>
+            {% else %}
+              <div class="tier review"><span class="dot"></span>Flagged for review &middot; merge not stopped</div>
+            {% endif %}
+            <span class="theme-pill">{{ theme_for(alert.taxonomy_id) }}</span>
           </div>
-        </form>
+          <div class="meta">
+            <span class="file">{{ alert.file }}</span>
+            <span>{{ alert.taxonomy_id }}</span>
+            <span class="score">risk {{ alert.risk_score }}</span>
+            <span class="citation">{{ alert.citation }}</span>
+          </div>
+          <div class="summary">{{ alert.plain_english_summary }}</div>
+          {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
+          <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
+            <label for="reason-{{ alert.alert_id }}">Your reason
+              <span class="hint">Posted on the pull request as the record of this decision.</span></label>
+            <textarea id="reason-{{ alert.alert_id }}" name="reason" required
+                      placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
+            <div class="btn-row">
+              <button class="approve" type="submit">
+                {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
+              </button>
+              <button class="reject" type="submit"
+                      formaction="/dashboard/{{ alert.alert_id }}/reject">
+                {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
+              </button>
+            </div>
+          </form>
+        </div>
+        {% endfor %}
       </div>
       {% endfor %}
     {% else %}
