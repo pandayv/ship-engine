@@ -2,7 +2,7 @@
 
 Fast-moving teams shipping Gen AI features routinely introduce compliance hazards without meaning to: unmasked personal data (an SSN, a zip code) sitting in a prompt, race or gender quietly swaying a credit decision, an AI decision loop running with no one watching it.
 
-These hazards not only hurt the people affected, but also risk penalties under GDPR and the EU AI Act. 
+These hazards hurt the people affected, and risk penalties under GDPR and the EU AI Act.
 
 A small team can't afford a dedicated compliance hire, and reviewing every PR by hand would grind feature velocity to a crawl.
 
@@ -38,15 +38,11 @@ Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonapp
    and your nearest screen, so resolving a finding doesn't require
    opening a dashboard.
 
-SHIP watches for four kinds of risks: exposing sensitive personal data, decisions made with no
-human review, bias from a protected trait, and AI handed more
-authority than it should have. 
-
-Backed by six detectors tied to real law. For further details on detectors ceheck: 
+SHIP watches for four kinds of risk: exposing sensitive personal data,
+decisions made with no human review, bias from a protected trait, and
+AI handed more authority than it should have. Backed by six detectors
+tied to real law, full detail in
 [architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
-
-SHIP is scoped to what a single PR diff can prove. See the architecture
-doc for that boundary and what's next.
 
 ## How to see it in action
 
@@ -82,32 +78,25 @@ exact pattern SHIP is designed to flag in *other* people's code: an AI-mediated 
 
 Look at it first, then give a reason, and it goes through for real:
 
-> *"Approve it. this is a false positive."*
+> *"Approve it. This is a false positive."*
 > **"Done. Accepted, on the record: this is a false
 > positive."**
 
-That gate is enforced server-side, because `request_risk_acceptance`
-only acts once the finding has been shown on a screen in the
-last ten minutes, and a reason is required either way, not by a prompt
-asking the model to behave. Skip the review, and there is nothing voice
-can say to talk its way past that check.
+That gate is enforced server-side: voice only acts on a finding that's
+been shown on a screen in the last ten minutes, and a reason is
+required either way. That's a hard check, not a prompt asking the model
+to behave, so skip the review and there's nothing voice can say to talk
+its way past it.
 
-Note: Alexa+'s own MCP toolkit requires a live account relationship with an
-Amazon Solutions Architect before its CLI/device path will connect at
-all. That requirement isn't documented anywhere until you're already
-mid-setup (see [`FRICTION_LOG.md`](FRICTION_LOG.md) for exactly where and
-how it surfaced). The hackathon's own rules anticipate exactly this gap
-and name a first-class alternative: a simulated Alexa+ experience in a
-web app, source included.
+Connecting a live Alexa+ device needs an account relationship set up by
+Amazon, not available during the hackathon. This uses a simulated
+Alexa+ experience instead, a web app calling the same deployed Relay
+endpoint over Streamable HTTP, source included.
 **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
-Every response above comes from the deployed Relay endpoint, over
-Streamable HTTP.
 
+## How it's built
 
-
-## How it is built: 
-
-## Guiding principles
+### Guiding principles
 
 **1. Last line of defense.**
 Assume nothing was checked before this. It doesn't matter who wrote the
@@ -130,7 +119,7 @@ Free deterministic checks first, LLM only when needed. Only the right
 model for the job, measured.
 
 
-## Architecture
+### Architecture
 
 Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)).
 
@@ -145,7 +134,7 @@ anything else. A PR with several flagged issues takes about as long as
 its slowest single issue, not the sum of all of them, and nothing is
 silently dropped.
 
-## Tech stack
+### Tech stack
 
 - **Agent framework:** [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
 - **Models:** Amazon Nova Lite as the primary Bedrock backend, chosen on
@@ -273,31 +262,26 @@ to a human decision to the merge button itself.
 
 Relay (the MCP server), the Alexa+ simulated experience, and cross-device
 push are also live. See
-[The Alexa+ experience](#the-alexa-experience)
+[Integrated Alexa+ experience](#integrated-alexa-experience)
 above for the full walkthrough.
 
-Things known and deliberately not built yet, not overlooked:
-- **Approving an alert doesn't yet push the suggested patch back to the PR
-  automatically.** A human still applies it themselves once they've
-  reviewed it in Gate. A real GitHub-API integration away, not an
-  architecture change.
-- **Healing Loop** ([`scripts/healing_loop.py`](scripts/healing_loop.py))
-  runs periodically, separately from Detector's own fast path, and
-  re-fetches each sourced regulation page to check it still matches word
-  for word. A citation never quietly rests on text a regulator has since
-  amended. It isn't yet wired to a schedule or an alert channel; running
-  it is still a manual step.
-- **The Alexa+ CLI/device path itself isn't connected.** It requires an
-  AWS account already registered by an Amazon Solutions Architect, a live
-  account relationship rather than a self-service step (see
-  [`FRICTION_LOG.md`](FRICTION_LOG.md)). The simulated web experience
-  calls the identical Relay endpoint a live connection would, exercising
-  the same review logic. Only the transport Alexa+'s own infrastructure
-  would use to reach it is missing.
-- New detectors, beyond what's listed above, for risk patterns that need
-  more than a single PR diff to prove: infrastructure/deployment context,
-  or behavior observed across multiple files or over time. See the
-  architecture doc for where that boundary sits and why.
+What's not built yet:
+- **Auto-applying the suggested fix.** Approving an alert doesn't push
+  the patch to the PR yet; a human applies it after reviewing it in
+  Gate. A GitHub-API integration away, not an architecture change.
+- **Scheduling the Healing Loop.** [Healing Loop](scripts/healing_loop.py)
+  re-checks that sourced regulation text still matches the law, catching
+  anything a regulator has since amended. It runs today as a manual
+  script, not yet on a schedule or alert channel.
+- **Connecting a live Alexa+ device.** Needs an account relationship set
+  up by Amazon, not available during the hackathon (see
+  [Integrated Alexa+ experience](#integrated-alexa-experience) above).
+  The simulator already exercises the same Relay endpoint and review
+  logic; only the device transport is missing.
+- **Detectors that need more than a single PR diff.** Infrastructure or
+  deployment context, or behavior observed across multiple files or over
+  time. See [architecture.html](https://pandayv.github.io/ship-engine/architecture.html)
+  for where that boundary sits.
 
 ## License
 
