@@ -117,9 +117,9 @@ Three ways to see this working, not just read about it.
 
 ### 1. Two real PRs
 
-This isn't staged. SHIP is running against a fork of
+SHIP reviewed two pull requests on a fork of
 [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance),
-a real, open-source lending app it had no part in writing.
+an open-source Django lending app.
 
 - **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
   AI-assisted underwriting function sending an applicant's full raw
