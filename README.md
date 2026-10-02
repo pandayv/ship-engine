@@ -113,49 +113,14 @@ Streamable HTTP.
 
 ## Demo
 
-Three ways to see this working, not just read about it.
+Three ways to try this.
 
-### 1. Two real PRs
-
-SHIP connects to any repo you add through Gate. For this demo, that's a
-fork of [MicroPyramid/micro-finance](https://github.com/MicroPyramid/micro-finance),
-an open-source Django lending app.
-
-- **[PR #1](https://github.com/pandayv/micro-finance/pull/1)** plants an
-  AI-assisted underwriting function sending an applicant's full raw
-  profile to an external LLM. Open it and scroll to the bottom. SHIP's
-  own comment and a failing `ship/compliance` status check are already
-  there.
-- **[PR #2](https://github.com/pandayv/micro-finance/pull/2)** plants one
-  genuine violation per remaining detector across three new files,
-  interleaved with four deliberate false-positive look-alikes. Both PRs
-  together: **9 for 9**, run against real Bedrock, every genuine
-  violation caught with an accurate citation, every look-alike correctly
-  dismissed.
-
-The commit on PR #1, with a failing status check:
-
-![A commit on PR #1 with a red failing ship/compliance status check, and SHIP's own finding comment below it](docs/screenshots/pr-status-check.png)
-
-The same PR, with SHIP's full finding, citation, and suggested fix:
-
-![SHIP's comment on PR #1 showing a compliance finding with GDPR and EU AI Act citations and a suggested change](docs/screenshots/pr-finding.png)
-
-And Gate, the review console, showing those findings waiting on a human:
-
-![The Gate dashboard showing four real blocking findings for PR #1, each with risk score, citation, and an approve or reject action](docs/screenshots/gate-dashboard.png)
-
-### 2. The Alexa+ simulator
-
-No GitHub needed. The [Alexa+ simulator](#the-alexa-experience) above is
-live and public right now, and answers from these same real findings.
-
-### 3. Try it yourself
-
-Judges: instructions for opening your own test PR and watching SHIP
-review it live are included in the submission materials.
-
-*(Demo video: added here before final submission.)*
+1. **Experience it live.** Judges: instructions for adding a test PR and
+   trying it live are included in the submission materials.
+2. **Watch the demo.** *(Video: added here before final submission.)*
+   The [Alexa+ simulator](#the-alexa-experience) answers from the same
+   real findings shown in the demo.
+3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
 
 ## What it does
 
