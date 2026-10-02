@@ -131,6 +131,18 @@ submission. Nothing from it is incorporated here.
   genuine violation caught with an accurate citation, every look-alike
   correctly dismissed.
 
+A real commit on PR #1, with a real failing status check:
+
+![A commit on PR #1 with a red failing ship/compliance status check, and SHIP's own finding comment below it](docs/screenshots/pr-status-check.png)
+
+The same PR, with SHIP's full finding, citation, and suggested fix:
+
+![SHIP's comment on PR #1 showing a compliance finding with GDPR and EU AI Act citations and a suggested change](docs/screenshots/pr-finding.png)
+
+And Gate, the review console, showing those same findings waiting on a human:
+
+![The Gate dashboard showing four real blocking findings for PR #1, each with risk score, citation, and an approve or reject action](docs/screenshots/gate-dashboard.png)
+
 Prefer not to leave GitHub? The
 [Alexa+ simulator](#the-alexa-experience) above
 is live and public right now, and answers from these same real findings.
