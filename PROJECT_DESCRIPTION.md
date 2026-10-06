@@ -53,14 +53,13 @@ simulated-Alexa+-experience path (a real web app, source included,
 calling the identical deployed Relay endpoint) rather than the
 CLI/device path, because that path's account-registration requirement
 isn't self-service (see Product Feedback and `FRICTION_LOG.md` for
-exactly where and how that surfaced). The simulation isn't a mock. Every
-voice response and every pushed finding in the demo comes from the real,
-running system.
+exactly where and how that surfaced). Every voice response and pushed
+finding in the demo comes from the running system.
 
-**Mini-challenge: AWS Builder.** Amazon Bedrock (Nova Lite, chosen on a
-measured six-model benchmark rather than preference), Bedrock AgentCore
-Runtime, four purpose-scoped Lambda functions, SQS, four DynamoDB tables,
-and an API Gateway WebSocket API for real device push. See
+**Mini-challenge: AWS Builder.** SHIP runs on Amazon Bedrock (Nova Lite,
+picked after benchmarking six models), Bedrock AgentCore Runtime, Lambda,
+SQS, DynamoDB, and an API Gateway WebSocket API that pushes findings to
+screens. See
 [Product Feedback](PRODUCT_FEEDBACK.md) for which service did what and
 how each integration actually went.
 

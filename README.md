@@ -58,8 +58,11 @@ Three ways to try this.
 
 ### Integrated Alexa+ experience
 
-SHIP actively works in the background and alerts only when something needs your attention. Interact with it
-naturally, from your phone, an Echo, or anywhere else Alexa+ works.
+SHIP is built as an Alexa+ experience. It works in the background, speaks
+up only when something needs your attention, and you answer by voice.
+Amazon hasn't opened Alexa+ integration to hackathon participants, so the
+Alexa+ front end here is a simulator. Everything behind it runs live on
+AWS.
 
 **1. Meets you where you are**
 Findings aren't read aloud in a long monologue. Instead, anything that needs your review shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even a smart fridge.
@@ -84,16 +87,11 @@ Look at it first, then give a reason, and it goes through for real:
 > **"Done. Accepted, on the record: this is a false
 > positive."**
 
-That gate is enforced server-side: voice only acts on a finding that's
-been shown on a screen in the last ten minutes, and a reason is
-required either way. That's a hard check, not a prompt asking the model
-to behave, so skip the review and there's nothing voice can say to talk
-its way past it.
+The server enforces this rule, not the model. Voice can only act on a
+finding you've just seen on a screen, and a reason is always required.
 
-Connecting a live Alexa+ device needs an account relationship set up by
-Amazon, not available during the hackathon. This uses a simulated
-Alexa+ experience instead, a web app calling the same deployed Relay
-backend, source included.
+The simulator is a web app that calls the same deployed Relay server a
+live Alexa+ would, source included.
 **[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
 
 ## How it's built
@@ -163,7 +161,7 @@ silently dropped.
 - **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
   fail repeatedly and a concurrency cap on the processor so parallel
   reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB, six tables. `ship-alerts` (every write
+- **State:** Amazon DynamoDB, seven tables. `ship-alerts` (every write
   idempotent, so a webhook redelivery or a retried job can't create a
   duplicate and can't silently re-open a decision a human already made),
   `ship-repos` (which repositories SHIP watches, plus when each last sent
@@ -178,8 +176,9 @@ silently dropped.
   which name, for the push path below), `ship-recent-reviews` (which
   alert was shown on a screen and when, the ten-minute window
   `request_risk_acceptance` checks before acting on a spoken
-  confirmation), and `ship-learned-patterns` (the generalized patterns
-  above)
+  confirmation), `ship-pending-dispositions` (decisions staged by voice,
+  held until an explicit "proceed" writes them to `ship-alerts`), and
+  `ship-learned-patterns` (the generalized patterns above)
 - **Web:** FastAPI (the webhook route and the Gate console, one
   deployable app, wrapped for Lambda via Mangum)
 - **Voice/MCP:** [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
@@ -250,7 +249,7 @@ lambda_handler.py          # Webhook Lambda entrypoint
 fragment_lambda_handler.py # Fragment-processor Lambda entrypoint
 relay_lambda_handler.py    # Relay's Lambda entrypoint — builds a fresh app per invocation, see server.py
 device_gateway_handler.py  # WebSocket connect/disconnect/register Lambda entrypoint
-tests/                     # 200 tests, no AWS credentials required to run
+tests/                     # 250 tests, no AWS credentials required to run
 ```
 
 ## Status & what's next
