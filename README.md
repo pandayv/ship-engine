@@ -161,7 +161,7 @@ silently dropped.
 - **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
   fail repeatedly and a concurrency cap on the processor so parallel
   reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB, seven tables. `ship-alerts` (every write
+- **State:** Amazon DynamoDB, one table per access pattern. `ship-alerts` (every write
   idempotent, so a webhook redelivery or a retried job can't create a
   duplicate and can't silently re-open a decision a human already made),
   `ship-repos` (which repositories SHIP watches, plus when each last sent
@@ -249,7 +249,7 @@ lambda_handler.py          # Webhook Lambda entrypoint
 fragment_lambda_handler.py # Fragment-processor Lambda entrypoint
 relay_lambda_handler.py    # Relay's Lambda entrypoint — builds a fresh app per invocation, see server.py
 device_gateway_handler.py  # WebSocket connect/disconnect/register Lambda entrypoint
-tests/                     # 250 tests, no AWS credentials required to run
+tests/                     # Test suite, no AWS credentials required to run
 ```
 
 ## Status & what's next

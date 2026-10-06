@@ -40,8 +40,7 @@ architecture genuinely needed each piece.
   requirement, with a dead-letter queue for genuine failures and a
   concurrency cap that keeps parallel reviews within the account's real
   Bedrock rate limit.
-- **Amazon DynamoDB** holds seven tables, each with a distinct, narrow
-  access pattern: idempotent alert persistence, which repos are watched
+- **Amazon DynamoDB** holds one table per access pattern, each narrow: idempotent alert persistence, which repos are watched
   and their received-vs-reviewed health, a precomputed release summary,
   which device is reachable under which name for the push path, which
   alert was shown on a screen recently, decisions staged by voice until
