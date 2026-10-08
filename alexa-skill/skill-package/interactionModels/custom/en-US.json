@@ -1,0 +1,61 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "ship review",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.FallbackIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        {
+          "name": "StatusIntent",
+          "slots": [],
+          "samples": [
+            "what's up",
+            "what is up",
+            "what's going on",
+            "what is going on",
+            "what's the status",
+            "give me a status",
+            "status",
+            "any blockers",
+            "is anything blocked",
+            "can we ship today",
+            "can we ship",
+            "how are we doing"
+          ]
+        },
+        {
+          "name": "ShowIntent",
+          "slots": [
+            { "name": "screen", "type": "SCREEN" }
+          ],
+          "samples": [
+            "show it on the {screen}",
+            "show it on my {screen}",
+            "show me on the {screen}",
+            "show me on my {screen}",
+            "put it on the {screen}",
+            "put it on my {screen}",
+            "send it to the {screen}",
+            "send it to my {screen}",
+            "on the {screen}",
+            "the {screen}"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "SCREEN",
+          "values": [
+            { "id": "tv", "name": { "value": "tv", "synonyms": ["television", "fire tv", "fire stick", "living room tv"] } },
+            { "id": "ipad", "name": { "value": "ipad", "synonyms": ["i pad", "tablet"] } },
+            { "id": "laptop", "name": { "value": "laptop", "synonyms": ["computer", "mac", "macbook"] } },
+            { "id": "fridge", "name": { "value": "fridge", "synonyms": ["refrigerator", "smart fridge"] } }
+          ]
+        }
+      ]
+    }
+  }
+}

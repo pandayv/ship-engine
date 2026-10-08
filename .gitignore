@@ -9,3 +9,6 @@ build/
 build-*/
 *.zip
 .claude/settings.local.json
+
+# Alexa skill local deploy state (skill ID, Lambda ARN)
+alexa-skill/.ask/

@@ -1,0 +1,31 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "summary": "Ask SHIP what is blocked and see the detail on your screen.",
+          "examplePhrases": [
+            "Alexa, open ship review",
+            "Alexa, ask ship review what's up",
+            "Alexa, ask ship review to show it on the TV"
+          ],
+          "name": "SHIP Review",
+          "description": "SHIP reviews every pull request for AI compliance risk. This skill tells you by voice whether anything is blocked and sends the detail to the screen you choose. It stands in for an Alexa+ add-on."
+        }
+      },
+      "isAvailableWorldwide": false,
+      "testingInstructions": "Development only. Say: Alexa, open ship review.",
+      "distributionCountries": [
+        "US"
+      ]
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "arn:aws:lambda:us-west-2:680160265218:function:ship-alexa-skill"
+        }
+      }
+    },
+    "manifestVersion": "1.0"
+  }
+}
