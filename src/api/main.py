@@ -207,7 +207,17 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # alert is already durably stored, and raising here would send this
         # message back through SQS for a retry that re-runs the model call
         # purely to redeliver a comment.
-        post_pr_comment(repo_full_name, pr_number, comment_for_finding(alert))
+        # Comment only when this call created the finding. A later push to
+        # the same PR re-detects findings that are already stored, either still
+        # open (the comment is already there) or decided by a person (a new
+        # "merge blocked" comment would contradict their decision). The check
+        # below is recomputed every time, so the PR's state is always current.
+        # getattr(..., True): an alert object without the marker is treated as
+        # new, so an unfamiliar caller errs toward commenting, not silence.
+        if getattr(alert, "newly_written", True):
+            post_pr_comment(repo_full_name, pr_number, comment_for_finding(alert))
+        else:
+            log.info("finding already recorded, not commenting again: alert_id=%s", alert.alert_id)
         sync_pr_check(repo_full_name, pr_number, head_sha)
         # Rebuild the summary Relay reads. Done here, on the write side,
         # because this invocation has a 900s budget while Relay has 500ms

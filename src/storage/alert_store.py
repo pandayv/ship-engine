@@ -94,6 +94,12 @@ class Alert:
     # is gone. Empty for rows written before this field existed, and for
     # local-test runs that never had a real commit.
     head_sha: str = ""
+    # NOT stored. Set by put_alert() on the object it returns: True only when
+    # this call created a brand-new row. A re-detection of a finding that is
+    # already stored (still frozen, or already resolved by a person) leaves it
+    # False. The caller uses it to avoid posting the same finding to the pull
+    # request again on every push. See _encode_item(), which drops it.
+    newly_written: bool = False
 
 
 # finding #16/#50: this used to build a fresh boto3 DynamoDB resource +
@@ -180,6 +186,7 @@ _INT_FIELDS = {f.name for f in fields(Alert) if f.type is int}
 
 def _encode_item(alert: Alert) -> dict:
     item = asdict(alert)
+    item.pop("newly_written", None)  # a fact about this write, not about the finding
     for name in _FLOAT_FIELDS:
         item[name] = Decimal(str(item[name]))  # DynamoDB rejects native float
     return item
@@ -224,12 +231,17 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
         # violation a human already resolved must NOT silently re-freeze
         # it and erase their decision. Only write if the row doesn't exist
         # yet, or still is (unresolved).
-        _table().put_item(
+        # ReturnValues="ALL_OLD" is DynamoDB's own, atomic answer to "was a
+        # row already here?": the old item comes back if there was one.
+        # Reading first and writing second would race with a concurrent fragment.
+        response = _table().put_item(
             Item=item,
             ConditionExpression="attribute_not_exists(alert_id) OR #s = :frozen",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":frozen": "frozen"},
+            ReturnValues="ALL_OLD",
         )
+        alert.newly_written = not (response or {}).get("Attributes")
     except Exception as e:
         if type(e).__name__ == "ConditionalCheckFailedException":
             # Already resolved by a human — a retry re-detecting the same
