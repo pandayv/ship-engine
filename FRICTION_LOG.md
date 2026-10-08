@@ -96,3 +96,94 @@ back-and-forth.
 **Suggestion:** a single, consistent "what you need before you start, and
 where to get each thing" page per product, stated once, up front rather
 than discovered gate by gate, would meaningfully close this gap.
+
+---
+
+## Proactive Events: no generic alert schema
+
+**Task attempted:** let SHIP tell a person, without being asked, that a pull
+request needs their decision. The natural Alexa pattern is a notification
+(chime plus an indicator), after which the person asks what is waiting.
+
+**Steps taken:**
+1. Read the Proactive Events documentation and the schema catalog at
+   `developer.amazon.com/en-US/docs/alexa/smapi/schemas-for-proactive-events.html`.
+2. Looked for a schema that carries a generic "something needs your
+   attention" alert.
+
+**Expected:** a generic alert schema, or a way to supply custom text, since a
+skill can have any kind of event worth announcing.
+
+**Actual:** eight fixed schemas (weather, sports, message alert, order status,
+occasion, trash collection, media available, game invite) and nothing generic.
+The closest fit is `AMAZON.MessageAlert.Activated`, which Alexa reads in a fixed
+form: "You have N new unread messages from NAME."
+
+**Severity:** medium. It does not block the feature, but the wording is fixed by
+the schema, so a compliance alert has to be phrased as a message count.
+
+**Workaround used:** `AMAZON.MessageAlert.Activated`, with "SHIP" as the sender
+and the number of open findings as the count.
+
+**Suggestion:** add a generic alert schema with a short custom phrase, or say
+in the catalog which existing schema is the intended fallback for events that
+fit none of the eight.
+
+---
+
+## AWS credits: the hackathon code cannot be redeemed on a Free plan account
+
+**Task attempted:** redeem the $150 AWS credit code received through the
+hackathon's credit request form.
+
+**Steps taken:**
+1. Requested credits through the form linked from the hackathon FAQ and received
+   a code.
+2. Opened the Billing and Cost Management console to redeem it.
+
+**Expected:** a code issued by the hackathon to work on the account that
+requested it.
+
+**Actual:** the account was on the Free plan, which AWS documents as not
+eligible for other promotional credits (`docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html`).
+The same page says a Free plan account closes when its credits run out, which
+matters for a project that has to stay available through judging.
+
+**Severity:** medium. Neither the credit form nor the FAQ mentions the plan
+requirement, so it surfaces only at redemption.
+
+**Workaround used:** none yet. Upgrading to the Paid plan makes the account
+eligible; that is a billing decision, so it was left to the account owner.
+
+**Suggestion:** state on the credit request form and in the FAQ that the code
+needs a Paid plan account, and note the Free plan's six-month and
+credits-exhausted closure rules for projects that must stay up through judging.
+
+---
+
+## Simulated Alexa+ path: the exact requirement appeared only in the FAQ
+
+**Task attempted:** build the simulated Alexa+ experience the Alexa+ track
+allows.
+
+**Steps taken:**
+1. Built a web page that called Relay's tools with `tools/call`, following the
+   rules page ("a simulated Alexa+ experience in a web app") and the Resources
+   page.
+2. Later read the updated FAQ.
+
+**Expected:** the rules or the Resources page to define what the simulation
+must do.
+
+**Actual:** the FAQ defines it as "a web page that acts as an actual MCP client
+(sending initialize, tools-list, and tools-call requests over Streamable HTTP)."
+The first version sent only `tools/call`, which worked only because Relay is
+stateless.
+
+**Severity:** low. It was cheap to fix, but it was found by chance.
+
+**Workaround used:** the page now performs the full handshake before any tool
+call.
+
+**Suggestion:** put the same sentence on the rules and Resources pages, and
+announce FAQ changes on the updates feed.
