@@ -175,17 +175,20 @@ footer a { color: inherit; }
 <div class="page">
   <div class="eyebrow">SHIP &middot; Alexa+ simulation</div>
   <h1>Ask what's going on. See it on a screen.</h1>
-  <p class="dek">A web simulation of the Alexa+ interaction, calling SHIP's real, deployed MCP
-    server (Relay) over Streamable HTTP — not a mock. Voice states a count and a destination;
+  <p class="dek">A web simulation of the Alexa+ interaction. This page is an MCP client for SHIP's
+    deployed server (Relay), over Streamable HTTP. Voice states a count and a destination;
     the findings themselves only ever render on a screen.</p>
   <div class="provenance">
     Built per the Alexa+ track's own submission rules, which explicitly permit
     <em>"a simulated Alexa+ experience in a web app"</em> as an alternative to a live device
-    connection. Every response below comes from a real <code>tools/call</code> request to
-    Relay's production endpoint — open your browser's network tab if you'd like to see it.
+    connection. The page opens a session with <code>initialize</code>, lists Relay's tools with
+    <code>tools/list</code>, then answers every question with a <code>tools/call</code> request.
+    Open your browser's network tab to watch them.
     (Why a simulation and not the real CLI/device path: see
     <a href="https://github.com/pandayv/ship-engine/blob/main/FRICTION_LOG.md" target="_blank" rel="noopener">FRICTION_LOG.md</a>.)
   </div>
+
+  <div class="device-status" id="mcpState" style="margin-bottom:14px">Connecting to Relay…</div>
 
   <div class="device">
     <div class="device-head">
@@ -231,6 +234,7 @@ footer a { color: inherit; }
 </div>
 
 <script src="ship-render.js"></script>
+<script src="ship-mcp-client.js"></script>
 <script>
 "use strict";
 
@@ -253,31 +257,20 @@ const screenBody = document.getElementById("screenBody");
 const askInput = document.getElementById("askInput");
 const askBtn = document.getElementById("askBtn");
 
-let reqId = 0;
+const client = new ShipMcpClient(RELAY_URL, "ship-alexa-simulator");
+const mcpState = document.getElementById("mcpState");
 
-async function callTool(name, args) {
-  // Every tool's real, observed response shape (checked directly against
-  // the deployed endpoint, not assumed): a plain string return
-  // (release_status) lands as plain text in content[0].text. A dict
-  // return (every other tool) has NO structuredContent at all — FastMCP
-  // can't infer a JSON schema from a bare `-> dict` annotation, so it
-  // falls back to JSON-stringifying the dict INSIDE content[0].text
-  // instead. One parse attempt here covers both shapes correctly: it
-  // succeeds for every dict-returning tool and throws (falling back to
-  // the plain string) for release_status's sentence.
-  reqId += 1;
-  const res = await fetch(RELAY_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", "accept": "application/json, text/event-stream" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: reqId, method: "tools/call", params: { name, arguments: args || {} } }),
-  });
-  if (!res.ok) throw new Error("Relay returned HTTP " + res.status);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || "Relay returned an error");
-  const contentText = data.result && data.result.content && data.result.content[0] && data.result.content[0].text;
-  let payload;
-  try { payload = JSON.parse(contentText); } catch { payload = contentText; }
-  return { text: contentText, payload };
+// Open the MCP session as soon as the page loads, and show the result.
+client.connect().then(c => {
+  mcpState.textContent = "MCP session open · " + c.serverInfo.name + " " + c.serverInfo.version +
+    " · protocol " + c.protocolVersion + " · " + c.tools.length + " tools listed";
+}).catch(err => {
+  mcpState.textContent = "Couldn't open a session with Relay: " + err.message;
+});
+
+// Every tool call goes through the client, which finishes the handshake first.
+function callTool(name, args) {
+  return client.callTool(name, args);
 }
 
 function addBubble(kind, html) {
@@ -319,9 +312,12 @@ async function ask() {
       thinking.remove();
       const spoken = r.text;
       addBubble("assistant", "<b>Alexa</b> — " + esc(spoken));
-      const blocked = /blocking/i.test(spoken) && !/^nothing is blocked/i.test(spoken);
-      ring.classList.toggle("alert", blocked);
-      deviceStatus.textContent = blocked ? "Findings waiting — choose a screen to see them" : "All clear";
+      // Relay's all-clear sentence is "No blocking issues. Good to move ahead."
+      // Any other sentence ("N blockers found...", "N issues found...") means
+      // something is waiting for a person.
+      const waiting = !/^no blocking issues/i.test(spoken);
+      ring.classList.toggle("alert", waiting);
+      deviceStatus.textContent = waiting ? "Findings waiting — choose a screen to see them" : "All clear";
       if (/screen/i.test(spoken)) surfaceOffer.classList.add("show");
     }
   } catch (err) {
