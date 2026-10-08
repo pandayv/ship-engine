@@ -47,14 +47,12 @@ the third path.
 ## Track & mini-challenge
 
 **Primary track: Alexa+.** Relay, SHIP's MCP server, implements the MCP
-spec (`2025-11-25`, Streamable HTTP) and is deployed live on AWS Lambda.
-The submission uses the hackathon's own explicitly-sanctioned
-simulated-Alexa+-experience path (a real web app, source included,
-calling the identical deployed Relay endpoint) rather than the
-CLI/device path, because that path's account-registration requirement
-isn't self-service (see Product Feedback and `FRICTION_LOG.md` for
-exactly where and how that surfaced). Every voice response and pushed
-finding in the demo comes from the running system.
+spec (`2025-11-25`, Streamable HTTP) and runs live on AWS Lambda. Alexa+
+add-on tooling is limited to select partners, so an Alexa Skill stands in
+for the add-on. It turns what Alexa hears into calls to Relay, and an Echo
+drives the whole flow. A web simulator that acts as an MCP client is
+included for anyone without a device. Every voice response and pushed
+finding comes from the running system.
 
 **Mini-challenge: AWS Builder.** SHIP runs on Amazon Bedrock (Nova Lite,
 picked after benchmarking six models), Bedrock AgentCore Runtime, Lambda,

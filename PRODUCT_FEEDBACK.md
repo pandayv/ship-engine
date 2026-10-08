@@ -266,6 +266,31 @@ instructions, not mid-page after them.
 
 ---
 
+### Alexa Skills Kit CLI and skill simulator
+
+**Used for:** an Alexa Skill that stands in for an Alexa+ add-on. It turns
+what Alexa hears into calls to Relay over MCP.
+
+**What worked well:** `ask deploy` with the Lambda deployer created the
+skill, its language model, the Lambda function, the function's role and
+the Alexa invoke permission in one command, and the first run worked.
+`ask smapi simulate-skill` runs a spoken sentence through Alexa's own
+language understanding and our Lambda without a device, so the whole path
+was verified before any hardware was involved. Amazon's documentation
+states that a Lambda trigger carrying the skill ID already rejects any
+other caller, so the skill needs no signature-checking code.
+
+**What needs work:** the notification catalog has no generic alert type,
+so a compliance alert has to be phrased as a message count. Details in
+[`FRICTION_LOG.md`](FRICTION_LOG.md).
+
+**Onboarding:** `ask configure` was self-explanatory, and linking the AWS
+profile there meant no separate credential setup for the deploy.
+
+**Would we build with it again?** **Yes.**
+
+---
+
 ## Open Source mini-challenge
 
 Deploying Relay (our MCP server) to AWS Lambda surfaced a real gap in the

@@ -58,17 +58,18 @@ Three ways to try this.
 
 ### Integrated Alexa+ experience
 
-SHIP is built as an Alexa+ experience. It works in the background, speaks
-up only when something needs your attention, and you answer by voice.
-Amazon hasn't opened Alexa+ integration to hackathon participants, so the
-Alexa+ front end here is a simulator. Everything behind it runs live on
-AWS.
+SHIP is built as an Alexa+ experience. It works in the background and
+speaks up only when something needs you. Your Echo chimes, you ask what's
+up, and the detail appears on the screen you choose.
+
+Alexa+ add-ons aren't open to hackathon participants, so an Alexa Skill
+stands in for the add-on. It calls the same MCP server an add-on would.
 
 **1. Meets you where you are**
 Findings aren't read aloud in a long monologue. Instead, anything that needs your review shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even a smart fridge.
 
 > *"Alexa, what's up?"*
-> **"2 blockers found. Ready for your decision. Want to review now?"**
+> **"2 blockers found. Ready for your decision. Want it on a screen?"**
 > *"Show me on the TV."*
 
 The actual findings then appear, live, on whatever screen just answered
@@ -79,20 +80,18 @@ approve a finding you've never looked at, and SHIP refuses. That's the
 exact pattern SHIP is designed to flag in *other* people's code: an AI-mediated decision applied with no human checkpoint. Try it:
 
 > *"Approve it."*
-> **"Could you take a look on a screen first, then tell me why?"**
+> **"Take a look on a screen first, then tell me why. Opening it on your screen."**
 
 Look at it first, then give a reason, and it goes through for real:
 
-> *"Approve it. This is a false positive."*
-> **"Done. Accepted, on the record: this is a false
-> positive."**
+> *"Approve it because it's a false positive."*
+> **"Done. Accepted, on the record: it's a false positive."**
 
 The server enforces this rule, not the model. Voice can only act on a
 finding you've just seen on a screen, and a reason is always required.
 
-The simulator is a web app that calls the same deployed Relay server a
-live Alexa+ would, source included.
-**[Try it live](https://pandayv.github.io/ship-engine/alexa-simulator.html)**.
+No Echo? **[Try the simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**,
+a web page that talks to the same Relay server as the skill.
 
 ## How it's built
 
@@ -188,6 +187,10 @@ silently dropped.
   enabled. A fresh ASGI app is built per invocation, a genuine SDK/Lambda
   incompatibility rather than a style choice. The docstring at the
   top of [`src/relay/server.py`](src/relay/server.py) has the details.
+- **Voice:** an Alexa Skill ([`alexa-skill/`](alexa-skill/)) stands in for an
+  Alexa+ add-on. Alexa does the speech and the language understanding; the
+  skill is a thin translator that turns each intent into a call to Relay
+  over MCP.
 - **Push:** an Amazon API Gateway WebSocket API plus a small dedicated
   Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
   handling connect/disconnect/register, deliberately separate from Relay
@@ -228,16 +231,21 @@ src/
     repo_store.py         # DynamoDB — which repos SHIP watches
     status_store.py       # DynamoDB — precomputed release summary Relay's voice path reads
     device_store.py        # DynamoDB — which display device is reachable under which name
+    alexa_user_store.py    # DynamoDB — which Alexa users SHIP may notify
   taxonomy.py            # Single source of truth: detector <-> corpus <-> Screener trigger mapping
   relay/
     server.py             # Relay — the MCP server; the voice/screen modality split lives here
     modality.py            # Enforces the spoken-response character cap and forbids line breaks
     readmodel.py           # Voice path (reads the precomputed summary) vs. screen path (reads alerts)
     push.py                 # Delivers a payload to one named device over its open connection
+alexa-skill/
+  lambda/lambda_function.py  # The Alexa Skill: turns what Alexa hears into calls to Relay over MCP
+  skill-package/             # Skill manifest and language model
 rag_corpus/               # Sourced regulation/standard text, verbatim
 shipagentcore/             # AgentCore Runtime deployment of Detector
 docs/
-  alexa-simulator.html     # The web-simulated Alexa+ experience — calls real, deployed Relay
+  alexa-simulator.html     # Web simulator of the Alexa+ flow; an MCP client of the deployed Relay
+  ship-mcp-client.js        # The MCP client the simulator uses: initialize, tools/list, tools/call
   ship-display.html         # Any-device receiving surface — names itself, waits for a push
   ship-render.js            # Finding-rendering logic shared by both pages above
   architecture.html          # Full pipeline diagram
@@ -261,10 +269,10 @@ entry someone has to remember to check. Freezing an alert sets
 protection); resolving one recomputes it, closing the loop from detection
 to a human decision to the merge button itself.
 
-Relay (the MCP server), the Alexa+ simulated experience, and cross-device
-push are also live. See
+Relay (the MCP server), the Alexa Skill, the web simulator, and cross-device
+push are also live. The
 [Integrated Alexa+ experience](#integrated-alexa-experience)
-above for the full walkthrough.
+section above walks through it.
 
 What's not built yet:
 - **Auto-applying the suggested fix.** Approving an alert doesn't push
@@ -274,11 +282,9 @@ What's not built yet:
   re-checks that sourced regulation text still matches the law, catching
   anything a regulator has since amended. It runs today as a manual
   script, not yet on a schedule or alert channel.
-- **Connecting a live Alexa+ device.** Needs an account relationship set
-  up by Amazon, not available during the hackathon (see
-  [Integrated Alexa+ experience](#integrated-alexa-experience) above).
-  The simulator already exercises the same Relay endpoint and review
-  logic; only the device transport is missing.
+- **A real Alexa+ add-on.** Add-on tooling is limited to select partners
+  today. When it opens, the add-on points at the same Relay server and the
+  skill steps aside.
 - **Detectors that need more than a single PR diff.** Infrastructure or
   deployment context, or behavior observed across multiple files or over
   time. See [architecture.html](https://pandayv.github.io/ship-engine/architecture.html)

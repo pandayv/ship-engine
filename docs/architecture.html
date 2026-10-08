@@ -474,7 +474,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 </div>
 
 <div class="zone">
-  <div class="zone-label">Relay &middot; the Alexa+ / MCP server</div>
+  <div class="zone-label">Relay &middot; the MCP server behind the Alexa Skill</div>
   <div class="zone-note">A completely separate Lambda from the review pipeline above. Relay carries no judgment of its own &mdash; Detector already reasoned, Triage already routed, Gate already recorded whatever a human decided. Relay only reads that and routes it to a surface.</div>
   <div class="pipeline">
     <div class="step-row">
@@ -571,7 +571,8 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <div class="infra-grid">
     <div class="infra-item"><div class="name">Lambda &middot; ship-webhook</div><div class="role">Always-on, fast-ack only, no model calls</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; ship-fragment-processor</div><div class="role">Independently-scaling, one flagged fragment per invocation</div></div>
-    <div class="infra-item"><div class="name">Lambda &middot; ship-relay</div><div class="role">The MCP/Alexa+ server, SnapStart-enabled, a fresh ASGI app per invocation</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-relay</div><div class="role">The MCP server, SnapStart-enabled, a fresh ASGI app per invocation</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-alexa-skill</div><div class="role">The Alexa Skill: turns what Alexa hears into calls to Relay over MCP</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; device-gateway</div><div class="role">WebSocket connect/disconnect/register, kept separate from Relay's own IAM role</div></div>
     <div class="infra-item"><div class="name">SQS</div><div class="role">Fragment queue + dead-letter queue, concurrency-capped consumer</div></div>
     <div class="infra-item"><div class="name">API Gateway WebSocket API</div><div class="role">Real, server-initiated push to a named display device</div></div>
@@ -583,6 +584,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-status</div><div class="role">Precomputed release summary &mdash; Relay's voice path is one GetItem regardless of finding count</div></div>
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-device-connections</div><div class="role">Which device is reachable under which name, for the push path</div></div>
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-recent-reviews</div><div class="role">Which alert was shown on a screen and when, the voice-approval time window</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-alexa-users</div><div class="role">Which Alexa users SHIP may notify</div></div>
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-learned-patterns</div><div class="role">Generalized patterns mined from dismissed findings</div></div>
     <div class="infra-item"><div class="name">FastAPI + Mangum</div><div class="role">Webhook route and the Gate dashboard, one deployable app</div></div>
   </div>
