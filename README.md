@@ -63,7 +63,12 @@ speaks up only when something needs you. Your Echo chimes, you ask what's
 up, and the detail appears on the screen you choose.
 
 Alexa+ add-ons aren't open to hackathon participants, so an Alexa Skill
-stands in for the add-on. It calls the same MCP server an add-on would.
+stands in for the add-on. The hackathon
+[FAQ](https://amazonappdev2026.devpost.com/details/faqs) says the add-on
+tools are for select partners only, and the documented route to them stops
+at an AWS role that only accounts registered by an Amazon Alexa Solutions
+Architect can assume (see the [friction log](FRICTION_LOG.md)). The skill
+calls the same MCP server an add-on would.
 
 You don't need special phrases. Say it the way you'd say it to a colleague.
 
@@ -76,6 +81,12 @@ Findings aren't read aloud in a long monologue. Instead, anything that needs you
 
 The actual findings then appear, live, on whatever screen just answered
 to that screen/device name.
+
+To set a screen up, open the
+[display page](https://pandayv.github.io/ship-engine/ship-display.html) on the
+device and pick a name: TV, Tablet, Laptop or Fridge. SHIP only offers screens
+that are set up. With none, it says so and puts a link to the review console
+in your Alexa app.
 
 **2. Voice can confirm a decision. It can never make one blind.** Ask to
 approve a finding you've never looked at, and SHIP refuses. That's the
@@ -95,6 +106,20 @@ understood on your screen and waits for you to confirm:
 The server enforces this rule, not the model. Voice can only act on a
 finding you've just seen on a screen, a reason is always required, and
 nothing happens until you confirm.
+
+### What you can say
+
+Say it the way you'd say it to a colleague. A few examples:
+
+| You want to | You can say |
+|---|---|
+| Know where things stand | "What's up?" "Is anything blocking us from shipping today?" "How many blockers do we have?" |
+| See the detail | "Show it on the laptop." "Put the problems up on my tablet." "I want to see them on the TV." |
+| Decide | "Approve the first one on pull request 5 because it's only test data." "Reject the second one, it really does leak a phone number." "The first two on pull request 1 are false positives because they're test fixtures." |
+| Confirm or back out | "Yes, go ahead." "No, never mind." |
+
+SHIP asks when something is missing, such as "What's the reason?" or "Which
+screen?", and says no when a rule says no.
 
 No Echo? **[Try the simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**,
 a web page that talks to the same Relay server as the skill.

@@ -23,7 +23,8 @@
             "timeout": 8,
             "environmentVariables": {
               "SHIP_RELAY_URL": "https://4f5g7mxyhhhhctmbagr5syfloa0airkl.lambda-url.us-west-2.on.aws/mcp",
-              "SHIP_ALEXA_USERS_TABLE": "ship-alexa-users"
+              "SHIP_ALEXA_USERS_TABLE": "ship-alexa-users",
+              "SHIP_CONSOLE_URL": "https://4zhv74th2inxjfsgintyvclor40akgwf.lambda-url.us-west-2.on.aws/dashboard"
             }
           }
         }

@@ -19,7 +19,7 @@ has to remember to check.
 Then ask it out loud. *"Alexa, what's up?"* gets one honest sentence: how
 many findings, how serious, which pull request. Never the finding itself.
 Say "show me on the TV" and the actual detail appears, live, on whichever
-screen answered to that name: a TV, an iPad, a laptop, a smart fridge's
+screen answered to that name: a TV, a tablet, a laptop, a smart fridge's
 browser. Ask it to approve a blocking finding by voice and it refuses on
 purpose, enforced in the server rather than by asking a model to behave.
 There is no tool in its interface that can resolve a compliance decision
@@ -48,8 +48,8 @@ the third path.
 
 **Primary track: Alexa+.** Relay, SHIP's MCP server, implements the MCP
 spec (`2025-11-25`, Streamable HTTP) and runs live on AWS Lambda. Alexa+
-add-on tooling is limited to select partners, so an Alexa Skill stands in
-for the add-on. You say it in your own words, a language model turns that
+add-on tooling is limited to select partners (the hackathon FAQ says so), so
+an Alexa Skill stands in for the add-on. You say it in your own words, a language model turns that
 into calls to Relay, and plain code checks every call. An Echo drives the
 whole flow. A web simulator that acts as an MCP client is
 included for anyone without a device. Every voice response and pushed

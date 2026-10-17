@@ -178,12 +178,16 @@
               }
             },
             {
-              "id": "ipad",
+              "id": "tablet",
               "name": {
-                "value": "ipad",
+                "value": "tablet",
                 "synonyms": [
+                  "ipad",
                   "i pad",
-                  "tablet"
+                  "galaxy",
+                  "galaxy tab",
+                  "samsung tablet",
+                  "android tablet"
                 ]
               }
             },
@@ -194,7 +198,8 @@
                 "synonyms": [
                   "computer",
                   "mac",
-                  "macbook"
+                  "macbook",
+                  "macbook pro"
                 ]
               }
             },

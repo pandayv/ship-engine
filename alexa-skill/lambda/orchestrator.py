@@ -28,6 +28,10 @@ must give a reason) is enforced by Relay, not here and not by the model.
 
 import re
 import time
+from collections import namedtuple
+
+# What to say, and what to put on a card in the Alexa app, for one turn.
+Reply = namedtuple("Reply", ["speech", "card"], defaults=[None])
 
 MODEL_TOOLS = ("release_status", "display_on", "stage_decisions", "proceed")
 MAX_SPEECH_CHARS = 260
@@ -36,11 +40,39 @@ MIN_SECONDS_FOR_MODEL = 3.0     # the model call times out after 3 s, so never s
 
 SCREEN_WORDS = {
     "tv": ("tv", "television", "fire tv", "fire stick", "firestick", "living room"),
-    "ipad": ("ipad", "i pad", "tablet"),
+    "tablet": ("tablet", "ipad", "i pad", "galaxy", "galaxy tab", "samsung", "android"),
     "laptop": ("laptop", "computer", "macbook", "mac"),
     "fridge": ("fridge", "refrigerator"),
 }
-ASK_WHICH_SCREEN = "Which screen? The TV, the iPad, the laptop, or the fridge?"
+NO_SCREENS = ("No screen is set up right now. Open the SHIP display page on any device, "
+              "or review it in the console. I've put the link in your Alexa app.")
+
+
+def which_screen(connected):
+    """The question to ask when the person has not said which screen. Only screens that
+    are really connected are offered. connected is None when that could not be checked."""
+    if connected is None:
+        return "Which screen? The TV, the tablet, the laptop, or the fridge?"
+    if not connected:
+        return NO_SCREENS
+    return "Which screen? I can see " + _join(connected) + "."
+
+
+def not_connected(screen, connected):
+    if not connected:
+        return NO_SCREENS
+    return f"I don't see a {screen} connected. I can see {_join(connected)}."
+
+
+def _join(names):
+    names = [f"the {n}" for n in names]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def console_card(url):
+    """A card in the Alexa app with the review console link, for when no screen is set up."""
+    return {"type": "Simple", "title": "SHIP review console",
+            "content": f"Open this on any device and sign in to review the findings: {url}"}
 LOOK_FIRST = "Take a look at them on a screen first, then tell me why."
 ASK_REASON = "What's the reason for each one?"
 # Words that are the command itself, not a reason for it. "approve everything" is not a reason.
@@ -90,6 +122,9 @@ def is_confirmation(text):
 def is_cancellation(text):
     words = _words(text)
     return bool(words) and set(words) <= CANCEL_WORDS | CONFIRM_WORDS and bool(set(words) & {"no", "nope", "cancel", "stop", "never", "wait", "hold", "don't", "dont", "not"})
+
+
+WANTS_TO_SEE = re.compile(r"\b(show|see|view|display|put|send|pull up|look at|review|open)\b", re.I)
 
 
 class OrchestratorUnavailable(Exception):
@@ -142,6 +177,20 @@ def clean_decisions(decisions):
     return cleaned
 
 
+def match_connected(screen, connected):
+    """The name a connected screen registered under that the person's word refers to, or
+    None. "tablet" matches a screen registered as "ipad" or "galaxy tab" through the same
+    synonym list that understands speech, so the page's name and the person's word need
+    not be spelled alike."""
+    if not connected:
+        return None
+    wanted = screens_named(screen) | {screen}
+    for name in connected:
+        if name in wanted or (screens_named(name) & wanted):
+            return name
+    return None
+
+
 def clean_speech(text):
     """What the model wrote, made safe to speak: no reasoning tags, no markdown,
     no line breaks, a sensible length."""
@@ -156,9 +205,10 @@ def clean_speech(text):
     return text
 
 
-def tool_config(tool_defs):
+def tool_config(tool_defs, connected=None):
     """Bedrock tool definitions, built from what Relay itself advertises, limited
-    to the four tools the model may use, with the screen names pinned."""
+    to the four tools the model may use, with the screen names pinned to the
+    screens that are really connected (or the usual names if that is unknown)."""
     specs = []
     for tool in tool_defs:
         if tool["name"] not in MODEL_TOOLS:
@@ -170,7 +220,7 @@ def tool_config(tool_defs):
         }
         if tool["name"] == "display_on":
             schema["properties"]["surface"] = {
-                "type": "string", "enum": list(SCREEN_WORDS),
+                "type": "string", "enum": list(connected) if connected else list(SCREEN_WORDS),
                 "description": "Which screen to put the findings on.",
             }
         specs.append({"toolSpec": {
@@ -181,7 +231,15 @@ def tool_config(tool_defs):
     return {"tools": specs}
 
 
-def context_note(session):
+def screens_note(connected):
+    if connected is None:
+        return ""
+    if not connected:
+        return " No screen is connected right now."
+    return " Screens connected right now: " + ", ".join(connected) + "."
+
+
+def context_note(session, connected=None):
     """What the person has already seen, stated plainly and placed right after their
     words. The model gives far more weight to its latest message than to its
     instructions, so this is where it must go to be heeded."""
@@ -191,7 +249,7 @@ def context_note(session):
     if pending:
         return (f"[Note: a decision is already staged for repo {pending['repo']} pull request {pending['pr_number']} and "
                 "is waiting for the person to confirm it. If they confirm, call proceed for that pull request. "
-                "Do not stage it again unless they change the decision.]")
+                "Do not stage it again unless they change the decision." + screens_note(connected) + "]")
     if routing:
         parts = []
         for pr in routing:
@@ -199,10 +257,10 @@ def context_note(session):
             parts.append(f"repo {pr['repo']} pull request {pr['pr_number']} ({count} finding{'s' if count != 1 else ''}, "
                          f"numbered 1 to {count})")
         return (f"[Note: the person HAS ALREADY SEEN these findings on the {screen or 'screen'}: "
-                + "; ".join(parts) + ". Do not ask them to look again.]")
+                + "; ".join(parts) + ". Do not ask them to look again." + screens_note(connected) + "]")
     if screen:
-        return f"[Note: nothing is on a screen right now. Last screen used: {screen}.]"
-    return "[Note: nothing has been shown on a screen yet, and no screen has been used.]"
+        return f"[Note: nothing is on a screen right now. Last screen used: {screen}." + screens_note(connected) + "]"
+    return "[Note: nothing has been shown on a screen yet, and no screen has been used." + screens_note(connected) + "]"
 
 
 def system_prompt(session):
@@ -225,8 +283,9 @@ def remember(session, user_said, assistant_said):
 
 # ------------------------------------------------------------- one turn
 
-def run_turn(utterance, session, tool_defs, call_tool, converse, deadline):
-    """Handles one spoken request. Returns the sentence to speak.
+def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, connected=None, console_url=""):
+    """Handles one spoken request. Returns a Reply: the sentence to speak and, when no
+    screen is set up, a card with the review console link.
 
     `session` is mutated: it carries the last screen used, where the findings
     sit (for pointing at them), and a short history. `converse(system, messages,
@@ -241,19 +300,27 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline):
             session["routing"] = []     # the numbers on screen have moved on
         speech = clean_speech((result or {}).get("spoken_response") if isinstance(result, dict) else str(result)) or "Done."
         remember(session, utterance, speech)
-        return speech
+        return Reply(speech)
     if pending and is_cancellation(utterance):
         session.pop("pending", None)
         speech = "Okay, I won't apply it."
         remember(session, utterance, speech)
-        return speech
+        return Reply(speech)
+
+    # Asked to see something when no screen exists at all: say so plainly and point to the
+    # console, without asking the model to improvise an answer.
+    if connected == [] and WANTS_TO_SEE.search(utterance) and not screens_named(utterance):
+        speech = NO_SCREENS
+        remember(session, utterance, speech)
+        return Reply(speech, console_card(console_url) if console_url else None)
 
     if deadline - time.time() < MIN_SECONDS_FOR_MODEL:
         raise OrchestratorUnavailable("not enough time left for the model")
 
     try:
         response = converse(system_prompt(session), history_messages(session) + [
-            {"role": "user", "content": [{"text": f"{utterance}\n\n{context_note(session)}"}]}], tool_config(tool_defs))
+            {"role": "user", "content": [{"text": f"{utterance}\n\n{context_note(session, connected)}"}]}],
+            tool_config(tool_defs, connected))
     except Exception as exc:  # noqa: BLE001 - any model failure means "use the simple rules"
         raise OrchestratorUnavailable(str(exc)) from exc
 
@@ -264,11 +331,14 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline):
     if not uses:
         speech = model_words or "I didn't catch that. You can ask what's up, or say show it on the TV."
         remember(session, utterance, speech)
-        return speech
+        return Reply(speech)
 
     allowed_screens = screens_named(utterance) | ({session["screen"]} if session.get("screen") else set())
+    if connected and len(connected) == 1:
+        allowed_screens |= set(connected)      # only one to choose from, so no need to ask
     staged_now = any(u["name"] == "stage_decisions" for u in uses)
     speech = None
+    card = None
 
     for use in uses:
         name, args = use["name"], dict(use.get("input") or {})
@@ -280,9 +350,18 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline):
 
         if name == "display_on":
             surface = str(args.get("surface", "")).strip().lower()
-            if surface not in allowed_screens:
-                speech = ASK_WHICH_SCREEN
+            wanted = screens_named(surface) | {surface}
+            if not (wanted & allowed_screens):
+                speech = which_screen(connected)
+                card = console_card(console_url) if connected == [] and console_url else None
                 continue
+            if connected is not None:
+                registered = match_connected(surface, connected)
+                if registered is None:
+                    speech = not_connected(surface, connected)
+                    card = console_card(console_url) if not connected and console_url else None
+                    continue
+                surface = registered       # use the name the screen actually registered under
             args = {"surface": surface}
 
         if name == "stage_decisions":
@@ -324,25 +403,32 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline):
 
     speech = clean_speech(speech or model_words) or "Done."
     remember(session, utterance, speech)
-    return speech
+    return Reply(speech, card)
 
 
 # ----------------------------------------------------- simple-rules fallback
 
-def fallback_turn(utterance, session, call_tool):
+def fallback_turn(utterance, session, call_tool, connected=None, console_url=""):
     """Used when the model is unavailable or out of time. Understands the two
-    things people most often ask, and says so honestly for anything else."""
+    things people most often ask, and says so honestly for anything else.
+    Returns a Reply."""
     text = (utterance or "").lower()
     screens = screens_named(text)
     if re.search(r"\b(show|put|send|display|throw|pull up)\b", text):
         screen = next(iter(screens), None) or session.get("screen")
+        none = connected == [] and console_url
         if not screen:
-            return ASK_WHICH_SCREEN
+            return Reply(which_screen(connected), console_card(console_url) if none else None)
+        if connected is not None:
+            registered = match_connected(screen, connected)
+            if registered is None:
+                return Reply(not_connected(screen, connected), console_card(console_url) if none else None)
+            screen = registered
         result = call_tool("display_on", {"surface": screen})
         if isinstance(result, dict) and result.get("delivered"):
             session["screen"] = screen
             session["routing"] = result.get("routing") or []
-        return (result or {}).get("spoken_response", "Okay.") if isinstance(result, dict) else str(result)
+        return Reply((result or {}).get("spoken_response", "Okay.") if isinstance(result, dict) else str(result))
     if re.search(r"\b(status|blocked|blocking|blockers?|ship|going on|what'?s up|anything)\b", text):
-        return str(call_tool("release_status"))
-    return "I can tell you what's blocked and put it on a screen. Try, what's up, or show it on the TV."
+        return Reply(str(call_tool("release_status")))
+    return Reply("I can tell you what's blocked and put it on a screen. Try, what's up, or show it on the TV.")

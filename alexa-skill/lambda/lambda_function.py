@@ -44,6 +44,7 @@ RELAY_URL = os.environ.get(
 )
 USERS_TABLE = os.environ.get("SHIP_ALEXA_USERS_TABLE", "ship-alexa-users")
 MODEL_ID = os.environ.get("SHIP_ALEXA_MODEL_ID", "amazon.nova-lite-v1:0")
+CONSOLE_URL = os.environ.get("SHIP_CONSOLE_URL", "")
 PROTOCOL_VERSION = "2025-11-25"
 RELAY_TIMEOUT_SECONDS = 5
 # Alexa abandons the skill at 8 seconds. Stop waiting a little before that so
@@ -186,8 +187,10 @@ def remember_user(user_id, source):
 
 # --------------------------------------------------------------- Alexa output
 
-def speak(text, end=False, reprompt=None, session=None):
+def speak(text, end=False, reprompt=None, session=None, card=None):
     response = {"outputSpeech": {"type": "PlainText", "text": text}, "shouldEndSession": end}
+    if card:
+        response["card"] = card
     if reprompt and not end:
         response["reprompt"] = {"outputSpeech": {"type": "PlainText", "text": reprompt}}
     return {"version": "1.0", "sessionAttributes": session or {}, "response": response}
@@ -246,10 +249,28 @@ def status_reply(session):
     return speak(sentence, reprompt=REPROMPT, session=session)
 
 
+def connected_screens():
+    """The names of the screens that are set up right now, or None if that could not be checked."""
+    try:
+        return list(call_tool("connected_screens").get("screens", []))
+    except Exception:  # noqa: BLE001 - not knowing must not stop the answer
+        log.exception("could not list the connected screens")
+        return None
+
+
 def show_reply(slots, session):
     screen = _slot_value(slots, "screen")
+    connected = connected_screens()
+    card = orchestrator.console_card(CONSOLE_URL) if connected == [] and CONSOLE_URL else None
+    if not screen and connected and len(connected) == 1:
+        screen = connected[0]       # only one to choose from, so no need to ask
     if not screen:
-        return speak(orchestrator.ASK_WHICH_SCREEN, reprompt="Which screen?", session=session)
+        return speak(orchestrator.which_screen(connected), reprompt="Which screen?", session=session, card=card)
+    if connected is not None:
+        registered = orchestrator.match_connected(screen, connected)
+        if registered is None:
+            return speak(orchestrator.not_connected(screen, connected), reprompt=REPROMPT, session=session, card=card)
+        screen = registered     # the name the screen actually registered under
     result = call_tool("display_on", {"surface": screen})
     if result.get("delivered"):
         session["screen"] = screen
@@ -263,15 +284,17 @@ def free_text_reply(text, session):
     """Anything said in the person's own words. A language model picks the tools;
     if it can't be used in time, plain rules cover the common requests."""
     _connect()
+    connected = connected_screens()
     try:
-        sentence = orchestrator.run_turn(
+        reply = orchestrator.run_turn(
             text, session, _mcp["tool_defs"], call_tool, _converse, _deadline,
+            connected=connected, console_url=CONSOLE_URL,
         )
     except orchestrator.OrchestratorUnavailable:
         log.exception("model unavailable, using the simple rules")
-        sentence = orchestrator.fallback_turn(text, session, call_tool)
-        orchestrator.remember(session, text, sentence)
-    return speak(sentence, reprompt=REPROMPT, session=session)
+        reply = orchestrator.fallback_turn(text, session, call_tool, connected=connected, console_url=CONSOLE_URL)
+        orchestrator.remember(session, text, reply.speech)
+    return speak(reply.speech, reprompt=REPROMPT, session=session, card=reply.card)
 
 
 def on_intent(request, session):

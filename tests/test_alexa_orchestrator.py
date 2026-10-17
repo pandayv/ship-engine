@@ -47,11 +47,12 @@ class Relay:
         return [n for n, _ in self.calls]
 
 
-def turn(text, model, relay=None, session=None, seconds_left=6.0):
+def turn(text, model, relay=None, session=None, seconds_left=6.0, connected=None, console_url=""):
     relay = relay or Relay()
     session = session if session is not None else {}
-    speech = o.run_turn(text, session, DEFS, relay, model, time.time() + seconds_left)
-    return speech, relay, session
+    reply = o.run_turn(text, session, DEFS, relay, model, time.time() + seconds_left,
+                       connected=connected, console_url=console_url)
+    return reply.speech, relay, session
 
 
 # ---------------------------------------------------------------- tool surface
@@ -64,7 +65,7 @@ def test_the_model_is_only_offered_four_tools_and_never_the_one_step_accept_tool
 
 def test_screen_names_are_pinned_in_the_tool_definition():
     display = next(t for t in o.tool_config(DEFS)["tools"] if t["toolSpec"]["name"] == "display_on")
-    assert display["toolSpec"]["inputSchema"]["json"]["properties"]["surface"]["enum"] == ["tv", "ipad", "laptop", "fridge"]
+    assert display["toolSpec"]["inputSchema"]["json"]["properties"]["surface"]["enum"] == ["tv", "tablet", "laptop", "fridge"]
 
 
 def test_a_tool_the_model_was_never_offered_is_not_executed_even_if_it_asks():
@@ -105,7 +106,7 @@ def test_long_model_text_is_cut_at_a_sentence():
 
 def test_a_guessed_screen_is_refused_and_the_person_is_asked():
     speech, relay, _ = turn("yes", model_says(use("display_on", surface="laptop")))
-    assert speech == o.ASK_WHICH_SCREEN
+    assert speech == o.which_screen(None)
     assert relay.calls == []
 
 
@@ -177,11 +178,11 @@ def test_the_model_is_not_started_when_there_is_too_little_time():
 
 def test_the_simple_rules_still_answer_status_and_show():
     relay = Relay({"release_status": "2 blockers found.", "display_on": {"delivered": True, "spoken_response": "Putting it on your tv.", "routing": ROUTING}})
-    assert o.fallback_turn("what's going on", {}, relay) == "2 blockers found."
+    assert o.fallback_turn("what's going on", {}, relay).speech == "2 blockers found."
     session = {}
-    assert o.fallback_turn("put it on the tv", session, relay) == "Putting it on your tv." and session["screen"] == "tv"
-    assert o.fallback_turn("put it somewhere", {}, relay) == o.ASK_WHICH_SCREEN
-    assert "what's up" in o.fallback_turn("sing a song", {}, relay)
+    assert o.fallback_turn("put it on the tv", session, relay).speech == "Putting it on your tv." and session["screen"] == "tv"
+    assert o.fallback_turn("put it somewhere", {}, relay).speech == o.which_screen(None)
+    assert "what's up" in o.fallback_turn("sing a song", {}, relay).speech
 
 
 # ---------------------------------------------------------------- memory
@@ -322,3 +323,83 @@ def test_staging_a_decision_remembers_it_so_the_next_yes_can_confirm_it():
 
 def test_the_model_is_told_when_a_decision_is_waiting():
     assert "already staged" in o.context_note({"pending": PENDING, "screen": "tv"})
+
+
+# ---------------------------------------------------------------- only screens that are really set up
+
+URL = "https://example.test/dashboard"
+
+
+def test_with_no_screen_set_up_the_person_is_told_and_given_a_card_with_the_console_link():
+    speech, relay, _ = turn("show it on the tv", model_says(use("display_on", surface="tv")),
+                            connected=[], console_url=URL)
+    assert speech == o.NO_SCREENS and relay.calls == []
+    reply = o.run_turn("show it on the tv", {}, DEFS, Relay(), model_says(use("display_on", surface="tv")),
+                       time.time() + 6, connected=[], console_url=URL)
+    assert reply.card["type"] == "Simple" and URL in reply.card["content"]
+
+
+def test_asking_for_a_screen_that_is_not_connected_lists_the_ones_that_are():
+    speech, relay, _ = turn("show it on the tv", model_says(use("display_on", surface="tv")), connected=["laptop", "tablet"])
+    assert speech == "I don't see a tv connected. I can see the laptop and the tablet." and relay.calls == []
+
+
+def test_a_connected_screen_works_as_before():
+    relay = Relay({"display_on": {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": ROUTING}})
+    speech, _, session = turn("show it on the laptop", model_says(use("display_on", surface="laptop")), relay, connected=["laptop"])
+    assert relay.names == ["display_on"] and session["screen"] == "laptop"
+
+
+def test_which_screen_offers_only_what_is_connected():
+    assert o.which_screen(["laptop"]) == "Which screen? I can see the laptop."
+    assert o.which_screen(["tv", "laptop", "tablet"]) == "Which screen? I can see the tv, the laptop and the tablet."
+    assert o.which_screen([]) == o.NO_SCREENS
+
+
+def test_the_model_is_only_offered_connected_screens():
+    display = next(t for t in o.tool_config(DEFS, ["laptop"])["tools"] if t["toolSpec"]["name"] == "display_on")
+    assert display["toolSpec"]["inputSchema"]["json"]["properties"]["surface"]["enum"] == ["laptop"]
+
+
+def test_the_model_is_told_which_screens_exist():
+    assert "Screens connected right now: laptop, tablet." in o.context_note({}, ["laptop", "tablet"])
+    assert "No screen is connected right now." in o.context_note({}, [])
+    assert "connected" not in o.context_note({}, None)
+
+
+def test_asking_to_see_something_with_no_screen_set_up_gets_the_plain_message_without_the_model():
+    def must_not_be_called(*a):
+        raise AssertionError("no model needed to say there is no screen")
+    reply = o.run_turn("show me", {}, DEFS, Relay(), must_not_be_called, time.time() + 6, connected=[], console_url=URL)
+    assert reply.speech == o.NO_SCREENS and URL in reply.card["content"]
+
+
+def test_a_question_that_is_not_about_seeing_still_goes_to_the_model_when_no_screen_is_set_up():
+    speech, relay, _ = turn("is anything blocked", model_says(use("release_status")), Relay({"release_status": "8 blockers found."}), connected=[])
+    assert speech == "8 blockers found."
+
+
+def test_with_exactly_one_screen_connected_nobody_is_asked_which():
+    relay = Relay({"display_on": {"delivered": True, "spoken_response": "Putting it on your tablet.", "routing": ROUTING}})
+    speech, _, session = turn("show me", model_says(use("display_on", surface="tablet")), relay, connected=["tablet"])
+    assert relay.names == ["display_on"] and session["screen"] == "tablet"
+
+
+# ---------------------------------------------------------------- names that differ in spelling only
+
+def test_a_screen_registered_as_ipad_answers_to_tablet_and_is_addressed_by_its_own_name():
+    relay = Relay({"display_on": {"delivered": True, "spoken_response": "Putting it on your ipad.", "routing": ROUTING}})
+    speech, _, session = turn("put it on the galaxy tab", model_says(use("display_on", surface="tablet")), relay, connected=["ipad"])
+    assert relay.calls == [("display_on", {"surface": "ipad"})] and session["screen"] == "ipad"
+
+
+def test_the_model_choosing_the_registered_spelling_is_accepted_when_the_person_said_a_synonym():
+    relay = Relay({"display_on": {"delivered": True, "spoken_response": "ok", "routing": ROUTING}})
+    turn("show it on my tablet", model_says(use("display_on", surface="ipad")), relay, connected=["ipad"])
+    assert relay.names == ["display_on"]
+
+
+def test_unrelated_names_still_do_not_match():
+    assert o.match_connected("tv", ["laptop", "tablet"]) is None
+    assert o.match_connected("laptop", ["macbook"]) == "macbook"
+    assert o.match_connected("tablet", []) is None

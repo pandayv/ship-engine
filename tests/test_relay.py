@@ -704,3 +704,25 @@ def test_a_delivered_push_returns_routing_with_positions_and_ids_only(one_blocki
     assert finding["position"] == 1 and finding["alert_id"] == "a1"
     flat = str(result["routing"])
     assert "citation" not in flat and "file" not in flat and "what_is_wrong" not in flat
+
+
+# --- which screens are set up ---
+
+
+class _Conn:
+    def __init__(self, name):
+        self.device_name = name
+
+
+def test_connected_screens_lists_each_name_once_sorted(monkeypatch):
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [_Conn("tv"), _Conn("laptop"), _Conn("tv")])
+    assert relay.connected_screens()["screens"] == ["laptop", "tv"]
+
+
+def test_connected_screens_is_empty_when_no_display_page_is_open(monkeypatch):
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [])
+    assert relay.connected_screens()["screens"] == []
+
+
+def test_connected_screens_is_one_of_relays_tools():
+    assert "connected_screens" in {t.__name__ for t in relay.TOOLS}

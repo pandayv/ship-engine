@@ -18,7 +18,7 @@ sys.path.insert(0, str(SKILL_PATH.parent))   # the skill imports orchestrator.py
 STATUS_SENTENCE = "2 blockers found. Ready for your decision. Want it on a screen?"
 TOOLS = [
     "release_status", "blocked_pull_requests", "finding_detail",
-    "request_risk_acceptance", "stage_decisions", "proceed", "display_on",
+    "request_risk_acceptance", "stage_decisions", "proceed", "display_on", "connected_screens",
 ]
 
 
@@ -33,6 +33,7 @@ def skill(monkeypatch):
     module.saved = []         # every (user_id, source) the skill tried to remember
     module.fail_relay = False
     module.display_reply = {"spoken_response": "Putting it on your tv."}
+    module.connected = ["tv", "laptop"]
 
     def fake_post(body, protocol=None):
         if module.fail_relay:
@@ -47,7 +48,10 @@ def skill(monkeypatch):
             return {"jsonrpc": "2.0", "id": body["id"], "result": {"tools": [{"name": n} for n in TOOLS]}}
         if method == "tools/call":
             name = body["params"]["name"]
-            text = STATUS_SENTENCE if name == "release_status" else json.dumps(module.display_reply)
+            if name == "connected_screens":
+                text = json.dumps({"screens": module.connected})
+            else:
+                text = STATUS_SENTENCE if name == "release_status" else json.dumps(module.display_reply)
             return {"jsonrpc": "2.0", "id": body["id"], "result": {"content": [{"type": "text", "text": text}]}}
         raise AssertionError(f"unexpected method {method}")
 
@@ -175,7 +179,7 @@ def test_the_interaction_model_and_the_screen_names_relay_understands_line_up():
     language = model["interactionModel"]["languageModel"]
     assert language["invocationName"] == "ship review"
     screens = {v["id"] for t in language["types"] if t["name"] == "SCREEN" for v in t["values"]}
-    assert screens == {"tv", "ipad", "laptop", "fridge"}       # "here" is excluded: nothing renders on an Echo yet
+    assert screens == {"tv", "tablet", "laptop", "fridge"}       # "here" is excluded: nothing renders on an Echo yet
     assert {"StatusIntent", "ShowIntent"} <= {i["name"] for i in language["intents"]}
 
 
@@ -238,3 +242,46 @@ def test_no_verb_is_used_as_a_carrier_in_the_general_intent():
     for sample in ask["samples"]:
         carrier = sample.replace("{request}", "").split()
         assert not (verbs & set(carrier)), sample
+
+
+# --- only screens that are really set up are offered ---
+
+
+def test_show_it_on_a_screen_that_is_not_connected_says_which_ones_are(skill):
+    skill.connected = ["laptop"]
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("tv"))), None)
+    assert spoken(reply) == "I don't see a tv connected. I can see the laptop."
+    assert not any(name == "display_on" for _, name, _ in skill.sent)
+
+
+def test_with_no_screen_at_all_the_person_hears_so_and_gets_a_card(skill, monkeypatch):
+    skill.connected = []
+    monkeypatch.setattr(skill, "CONSOLE_URL", "https://example.test/dashboard")
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("tv"))), None)
+    assert "No screen is set up" in spoken(reply)
+    assert "https://example.test/dashboard" in reply["response"]["card"]["content"]
+
+
+def test_asking_which_screen_offers_only_connected_ones(skill):
+    skill.connected = ["laptop", "tablet"]
+    reply = skill.handler(request_event(intent("ShowIntent", {})), None)
+    assert spoken(reply) == "Which screen? I can see the laptop and the tablet."
+
+
+def test_if_the_screen_list_cannot_be_read_the_answer_still_works(skill, monkeypatch):
+    original = skill.call_tool
+    def flaky(name, arguments=None):
+        if name == "connected_screens":
+            raise skill.RelayError("down")
+        return original(name, arguments)
+    monkeypatch.setattr(skill, "call_tool", flaky)
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("tv"))), None)
+    assert spoken(reply) == "Putting it on your tv."
+
+
+def test_asking_to_show_it_with_exactly_one_screen_connected_just_uses_it(skill):
+    skill.connected = ["laptop"]
+    skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
+    reply = skill.handler(request_event(intent("ShowIntent", {})), None)
+    assert spoken(reply) == "Putting it on your laptop."
+    assert ("tools/call", "display_on", "2025-11-25") in skill.sent

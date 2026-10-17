@@ -81,6 +81,7 @@ from starlette.middleware.cors import CORSMiddleware
 from src.api.github_writeback import comment_for_decision, post_pr_comment, sync_pr_check
 from src.relay.modality import Modality, Spoken
 from src.relay.push import push_to_device
+from src.storage.device_store import list_all_connections
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
 from src.storage import pending_store, session_store
@@ -523,8 +524,22 @@ def display_on(surface: str) -> dict:
     }
 
 
+def connected_screens() -> dict:
+    """Which screens are set up right now, by the name each one gave itself
+    ("tv", "laptop", "tablet"). SAFE TO SPEAK: names only. Use before offering
+    a choice of screens, so the person is never offered one that is not there.
+    An empty list means no display page is open anywhere: say so, and offer
+    another way to review (the review console)."""
+    names = sorted({c.device_name for c in list_all_connections()})
+    return {
+        "modality": Modality.ACTION.value,
+        "screens": names,
+        "console_url": _console("/dashboard"),
+    }
+
+
 TOOLS = (release_status, blocked_pull_requests, finding_detail, request_risk_acceptance,
-         stage_decisions, proceed, display_on)
+         stage_decisions, proceed, display_on, connected_screens)
 
 
 def create_app() -> Starlette:
