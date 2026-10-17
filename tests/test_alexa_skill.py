@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 SKILL_PATH = Path(__file__).resolve().parent.parent / "alexa-skill" / "lambda" / "lambda_function.py"
+import sys
+sys.path.insert(0, str(SKILL_PATH.parent))   # the skill imports orchestrator.py from its own folder
 STATUS_SENTENCE = "2 blockers found. Ready for your decision. Want it on a screen?"
 TOOLS = [
     "release_status", "blocked_pull_requests", "finding_detail",
@@ -195,3 +197,44 @@ def test_relay_calls_stop_before_alexas_eight_second_limit(skill, monkeypatch):
 def test_the_deadline_leaves_room_before_alexas_limit(skill):
     assert skill.ANSWER_BY_SECONDS < 8
     assert skill.RELAY_TIMEOUT_SECONDS < skill.ANSWER_BY_SECONDS
+
+
+# --- free text: the verb that was the carrier phrase is put back ---
+
+
+def spoken_to_model(skill, monkeypatch, intent_name, said):
+    """Runs one free-text intent and returns the exact sentence handed to the model layer."""
+    captured = {}
+    monkeypatch.setattr(skill, "free_text_reply", lambda text, session: captured.update(text=text) or skill.speak("ok", session=session))
+    skill.handler(request_event(intent(intent_name, {"request": {"name": "request", "value": said}})), None)
+    return captured["text"]
+
+
+def test_the_general_intent_passes_the_persons_words_unchanged(skill, monkeypatch):
+    assert spoken_to_model(skill, monkeypatch, "AskIntent", "tell me how many blockers there are") == "tell me how many blockers there are"
+
+
+@pytest.mark.parametrize("intent_name,verb", [("ApproveIntent", "approve "), ("RejectIntent", "reject "), ("ShowFreeIntent", "show ")])
+def test_the_verb_a_carrier_phrase_swallowed_is_restored(skill, monkeypatch, intent_name, verb):
+    said = "the first one because it is test data"
+    assert spoken_to_model(skill, monkeypatch, intent_name, said) == verb + said
+
+
+def test_the_free_text_intents_are_all_in_the_language_model():
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
+    intents = {i["name"]: i for i in model["interactionModel"]["languageModel"]["intents"]}
+    module_spec = importlib.util.spec_from_file_location("ship_alexa_skill_names", SKILL_PATH)
+    mod = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(mod)
+    for name in mod.FREE_TEXT_INTENTS:
+        assert name in intents and intents[name]["slots"][0]["type"] == "AMAZON.SearchQuery"
+
+
+def test_no_verb_is_used_as_a_carrier_in_the_general_intent():
+    # If it were, Alexa would drop the verb and the model could not tell approve from reject.
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
+    ask = next(i for i in model["interactionModel"]["languageModel"]["intents"] if i["name"] == "AskIntent")
+    verbs = {"approve", "accept", "reject", "dismiss", "confirm", "clear", "ignore", "block", "keep", "show", "put", "send", "mark", "yes", "no"}
+    for sample in ask["samples"]:
+        carrier = sample.replace("{request}", "").split()
+        assert not (verbs & set(carrier)), sample

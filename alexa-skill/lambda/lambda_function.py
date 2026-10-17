@@ -2,11 +2,16 @@
 SHIP Review: the Alexa skill that stands in for an Alexa+ add-on.
 
 Alexa+ add-ons are not open to hackathon participants, so a custom skill
-carries the same conversation: Alexa hears the person and works out which
-intent they meant, and this function turns that intent into a call to
-Relay, SHIP's MCP server. Relay decides everything that matters (what to
-say, what a voice may do, where a finding is shown). This file only
-translates, so voice still goes through the MCP server.
+carries the same conversation: Alexa hears the person, and this function
+turns what they said into calls to Relay, SHIP's MCP server. Relay decides
+everything that matters (what to say, what a voice may do, where a finding
+is shown). This file only translates, so voice still goes through the MCP
+server.
+
+Two ways in. The common requests have their own Alexa intents and are
+answered by plain code, fast. Anything else the person says in their own
+words arrives as free text and goes to orchestrator.py, where a language
+model chooses the Relay tools (and plain code checks its choice).
 
 NO DEPENDENCIES ON PURPOSE. The ASK CLI zips this folder as-is, so it uses
 only the standard library and boto3, which the Lambda runtime provides.
@@ -28,6 +33,8 @@ import time
 import urllib.error
 import urllib.request
 
+import orchestrator
+
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
@@ -36,6 +43,7 @@ RELAY_URL = os.environ.get(
     "https://4f5g7mxyhhhhctmbagr5syfloa0airkl.lambda-url.us-west-2.on.aws/mcp",
 )
 USERS_TABLE = os.environ.get("SHIP_ALEXA_USERS_TABLE", "ship-alexa-users")
+MODEL_ID = os.environ.get("SHIP_ALEXA_MODEL_ID", "amazon.nova-lite-v1:0")
 PROTOCOL_VERSION = "2025-11-25"
 RELAY_TIMEOUT_SECONDS = 5
 # Alexa abandons the skill at 8 seconds. Stop waiting a little before that so
@@ -44,10 +52,21 @@ ANSWER_BY_SECONDS = 7.0
 
 REPROMPT = "You can ask what's up, or say show it on the TV."
 
+# Intents that carry free text, and the verb to restore in front of it. The
+# general intent has only neutral carriers ("can you ...", "please ..."), so
+# nothing is lost there.
+FREE_TEXT_INTENTS = {
+    "AskIntent": "",
+    "ShowFreeIntent": "show ",
+    "ApproveIntent": "approve ",
+    "RejectIntent": "reject ",
+}
+
 # One MCP session per warm container. Relay is stateless, so this is the
 # handshake a client is expected to perform, done once instead of per request.
-_mcp = {"ready": False, "protocol": None, "tools": [], "next_id": 0}
+_mcp = {"ready": False, "protocol": None, "tools": [], "tool_defs": [], "next_id": 0}
 _table_handle = None
+_bedrock_handle = None
 _deadline = float("inf")   # set at the start of every request by handler()
 
 
@@ -118,7 +137,8 @@ def _connect():
     _post({"jsonrpc": "2.0", "method": "notifications/initialized"}, protocol)
     listed = _rpc("tools/list", protocol=protocol)
     _mcp["protocol"] = protocol
-    _mcp["tools"] = [tool["name"] for tool in listed.get("tools", [])]
+    _mcp["tool_defs"] = listed.get("tools", [])
+    _mcp["tools"] = [tool["name"] for tool in _mcp["tool_defs"]]
     _mcp["ready"] = True
 
 
@@ -166,11 +186,11 @@ def remember_user(user_id, source):
 
 # --------------------------------------------------------------- Alexa output
 
-def speak(text, end=False, reprompt=None):
+def speak(text, end=False, reprompt=None, session=None):
     response = {"outputSpeech": {"type": "PlainText", "text": text}, "shouldEndSession": end}
     if reprompt and not end:
         response["reprompt"] = {"outputSpeech": {"type": "PlainText", "text": reprompt}}
-    return {"version": "1.0", "sessionAttributes": {}, "response": response}
+    return {"version": "1.0", "sessionAttributes": session or {}, "response": response}
 
 
 def _slot_value(slots, name):
@@ -185,37 +205,103 @@ def _slot_value(slots, name):
     return None
 
 
+# ----------------------------------------------------------------- the model
+
+def _converse(system, messages, tools):
+    """One call to the model. Short timeouts: Alexa gives the whole skill 8 seconds."""
+    global _bedrock_handle
+    if _bedrock_handle is None:
+        import boto3
+        from botocore.config import Config
+
+        _bedrock_handle = boto3.client(
+            "bedrock-runtime",
+            config=Config(connect_timeout=1.5, read_timeout=3, retries={"max_attempts": 1}),
+        )
+    return _bedrock_handle.converse(
+        modelId=MODEL_ID,
+        system=[{"text": system}],
+        messages=messages,
+        toolConfig=tools,
+        inferenceConfig={"maxTokens": 300, "temperature": 0},
+    )
+
+
 # ------------------------------------------------------------------- intents
 
-def status_reply():
-    sentence = call_tool("release_status")
-    return speak(str(sentence), reprompt=REPROMPT)
+def _session(event):
+    """The conversation state Alexa hands back to us on every turn."""
+    attributes = (event.get("session") or {}).get("attributes") or {}
+    return {
+        "history": list(attributes.get("history", [])),
+        "routing": list(attributes.get("routing", [])),
+        "screen": attributes.get("screen"),
+        "pending": attributes.get("pending"),
+    }
 
 
-def show_reply(slots):
+def status_reply(session):
+    sentence = str(call_tool("release_status"))
+    orchestrator.remember(session, "what's the status", sentence)
+    return speak(sentence, reprompt=REPROMPT, session=session)
+
+
+def show_reply(slots, session):
     screen = _slot_value(slots, "screen")
     if not screen:
-        return speak("Which screen? The TV, the iPad, or the laptop?", reprompt="Which screen?")
+        return speak(orchestrator.ASK_WHICH_SCREEN, reprompt="Which screen?", session=session)
     result = call_tool("display_on", {"surface": screen})
-    return speak(result.get("spoken_response", "Okay."), reprompt=REPROMPT)
+    if result.get("delivered"):
+        session["screen"] = screen
+        session["routing"] = result.get("routing") or []
+    sentence = result.get("spoken_response", "Okay.")
+    orchestrator.remember(session, f"show it on the {screen}", sentence)
+    return speak(sentence, reprompt=REPROMPT, session=session)
 
 
-def on_intent(request):
+def free_text_reply(text, session):
+    """Anything said in the person's own words. A language model picks the tools;
+    if it can't be used in time, plain rules cover the common requests."""
+    _connect()
+    try:
+        sentence = orchestrator.run_turn(
+            text, session, _mcp["tool_defs"], call_tool, _converse, _deadline,
+        )
+    except orchestrator.OrchestratorUnavailable:
+        log.exception("model unavailable, using the simple rules")
+        sentence = orchestrator.fallback_turn(text, session, call_tool)
+        orchestrator.remember(session, text, sentence)
+    return speak(sentence, reprompt=REPROMPT, session=session)
+
+
+def on_intent(request, session):
     name = request["intent"]["name"]
     slots = request["intent"].get("slots")
     if name == "StatusIntent":
-        return status_reply()
+        return status_reply(session)
     if name == "ShowIntent":
-        return show_reply(slots)
+        return show_reply(slots, session)
+    if name in FREE_TEXT_INTENTS:
+        spoken = ((slots or {}).get("request") or {}).get("value")
+        if spoken:
+            # Alexa gives us only the slot. For the verb intents the verb was the
+            # carrier phrase, so put it back or "reject the first one" would
+            # reach the model as "the first one".
+            return free_text_reply(f"{FREE_TEXT_INTENTS[name]}{spoken}", session)
+        return speak("What would you like to do?", reprompt=REPROMPT, session=session)
+    if name == "AMAZON.YesIntent":
+        return free_text_reply("yes", session)
+    if name == "AMAZON.NoIntent":
+        return free_text_reply("no", session)
     if name == "AMAZON.HelpIntent":
         return speak(
-            "I tell you whether anything is blocked, and I send the detail to a screen. "
-            "Ask what's up, or say show it on the TV.",
-            reprompt=REPROMPT,
+            "I tell you whether anything is blocked, and I put the detail on a screen. "
+            "You can also say what you want in your own words, like approve the first one because it's a false positive.",
+            reprompt=REPROMPT, session=session,
         )
     if name in ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"):
         return speak("Okay.", end=True)
-    return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT)
+    return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT, session=session)
 
 
 # --------------------------------------------------------------------- entry
@@ -237,15 +323,16 @@ def handler(event, context):
 
     log.info("request %s for user %s", kind, _short(user_id))
     remember_user(user_id, "request")
+    session = _session(event)
 
     try:
         if kind == "LaunchRequest":
-            return status_reply()
+            return status_reply(session)
         if kind == "IntentRequest":
-            return on_intent(request)
+            return on_intent(request, session)
         if kind == "SessionEndedRequest":
             return {"version": "1.0", "response": {}}
-        return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT)
+        return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT, session=session)
     except RelayError:
         log.exception("Relay call failed")
         return speak("I couldn't reach SHIP just now. Please try again in a moment.", end=True)

@@ -209,6 +209,33 @@ def _findings_payload(status) -> dict:
     }
 
 
+def _mark_shown(status) -> None:
+    """Records every finding in `status` as recently shown. Call this only once
+    a screen has actually received them: the voice gate treats "shown" as
+    "a person could have read it"."""
+    for pr in status.pull_requests:
+        for f in pr.findings:
+            session_store.mark_shown(f.alert_id)
+
+
+def _routing(status) -> list[dict]:
+    """Where each open finding sits, so a later spoken decision can point at it
+    ("approve the first one on PR 2"). Positions and ids only: no file names,
+    citations or code, so it carries nothing that must stay off the speaker.
+    The position matches the number the screen shows."""
+    return [
+        {
+            "repo": pr.repo,
+            "pr_number": pr.pr_number,
+            "findings": [
+                {"position": i, "alert_id": f.alert_id, "blocks_merge": f.severity == SEVERITY_BLOCKING}
+                for i, f in enumerate(pr.findings, start=1)
+            ],
+        }
+        for pr in status.pull_requests
+    ]
+
+
 def blocked_pull_requests() -> dict:
     """Every pull request with unresolved findings, with counts and the
     findings themselves. SCREEN ONLY — this is a list and must be displayed,
@@ -219,9 +246,7 @@ def blocked_pull_requests() -> dict:
     side effect of what this tool already does (surfacing the findings on
     a screen), not a new responsibility."""
     status = _findings_detail()
-    for pr in status.pull_requests:
-        for f in pr.findings:
-            session_store.mark_shown(f.alert_id)
+    _mark_shown(status)
     return _findings_payload(status)
 
 
@@ -456,33 +481,40 @@ def display_on(surface: str) -> dict:
     "show me on the TV" or after release_status offers a screen.
 
     "here" means the device asking — no push happens, the caller renders
-    its own copy via blocked_pull_requests, same as before this existed.
-    Any other name is a REAL push over that device's open WebSocket
-    connection (see src/relay/push.py) to whatever display page most
-    recently registered under that name — not a description of what
-    would happen, an actual delivery, reported honestly if the named
-    device isn't currently connected rather than pretending it worked.
+    its own copy of the findings. Any other name is a REAL push over that
+    device's open WebSocket connection (see src/relay/push.py) to whatever
+    display page most recently registered under that name — not a
+    description of what would happen, an actual delivery, reported
+    honestly if the named device isn't currently connected rather than
+    pretending it worked.
 
-    Either way this records every pushed alert as recently shown — see
-    request_risk_acceptance."""
+    The findings count as shown, and so open to a spoken decision, only
+    when a screen actually received them. A push to a screen that is not
+    connected shows nothing, so it records nothing. On success the reply
+    carries `routing`: the position and id of each open finding, which is
+    how a later spoken decision points at one."""
     normalised = (surface or "").strip().lower() or "here"
+    status = _findings_detail()
 
     if normalised == "here":
-        blocked_pull_requests()  # records the review; same payload the caller already has
+        _mark_shown(status)   # the caller renders its own copy of the same payload
         return {
             "modality": Modality.ACTION.value, "surface": normalised, "delivered": True,
+            "routing": _routing(status),
             "console_url": _console("/dashboard"),
             "spoken_response": Spoken("Showing it here.").to_text(),
         }
 
-    payload = blocked_pull_requests()
-    result = push_to_device(normalised, payload)
+    result = push_to_device(normalised, _findings_payload(status))
     delivered = bool(result["delivered_to"])
+    if delivered:
+        _mark_shown(status)
 
     return {
         "modality": Modality.ACTION.value,
         "surface": normalised,
         "delivered": delivered,
+        "routing": _routing(status) if delivered else [],
         "console_url": _console("/dashboard"),
         "spoken_response": Spoken(
             f"Putting it on your {normalised}." if delivered

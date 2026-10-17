@@ -3,11 +3,26 @@
     "languageModel": {
       "invocationName": "ship review",
       "intents": [
-        { "name": "AMAZON.CancelIntent", "samples": [] },
-        { "name": "AMAZON.HelpIntent", "samples": [] },
-        { "name": "AMAZON.StopIntent", "samples": [] },
-        { "name": "AMAZON.FallbackIntent", "samples": [] },
-        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
         {
           "name": "StatusIntent",
           "slots": [],
@@ -29,7 +44,10 @@
         {
           "name": "ShowIntent",
           "slots": [
-            { "name": "screen", "type": "SCREEN" }
+            {
+              "name": "screen",
+              "type": "SCREEN"
+            }
           ],
           "samples": [
             "show it on the {screen}",
@@ -43,16 +61,153 @@
             "on the {screen}",
             "the {screen}"
           ]
+        },
+        {
+          "name": "AskIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "{request} please",
+            "please {request}",
+            "can you {request}",
+            "could you {request}",
+            "would you {request}",
+            "will you {request}",
+            "i want to {request}",
+            "i would like to {request}",
+            "i need to {request}",
+            "i need you to {request}",
+            "let us {request}",
+            "lets {request}",
+            "go ahead and {request}",
+            "tell me {request}",
+            "tell it to {request}",
+            "what about {request}",
+            "how about {request}",
+            "what is {request}",
+            "what are {request}",
+            "is there {request}",
+            "are there {request}",
+            "do {request}",
+            "does {request}",
+            "the {request}",
+            "that {request}",
+            "this {request}",
+            "it {request}",
+            "{request} for me",
+            "{request} on the screen",
+            "{request} right now"
+          ]
+        },
+        {
+          "name": "AMAZON.YesIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NoIntent",
+          "samples": []
+        },
+        {
+          "name": "ShowFreeIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "show me {request}",
+            "show {request}",
+            "put {request}",
+            "send {request}",
+            "pull up {request}",
+            "throw {request}",
+            "display {request}"
+          ]
+        },
+        {
+          "name": "ApproveIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "approve {request}",
+            "accept {request}",
+            "dismiss {request}",
+            "clear {request}",
+            "ignore {request}",
+            "allow {request}"
+          ]
+        },
+        {
+          "name": "RejectIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "reject {request}",
+            "confirm {request}",
+            "block {request}"
+          ]
         }
       ],
       "types": [
         {
           "name": "SCREEN",
           "values": [
-            { "id": "tv", "name": { "value": "tv", "synonyms": ["television", "fire tv", "fire stick", "living room tv"] } },
-            { "id": "ipad", "name": { "value": "ipad", "synonyms": ["i pad", "tablet"] } },
-            { "id": "laptop", "name": { "value": "laptop", "synonyms": ["computer", "mac", "macbook"] } },
-            { "id": "fridge", "name": { "value": "fridge", "synonyms": ["refrigerator", "smart fridge"] } }
+            {
+              "id": "tv",
+              "name": {
+                "value": "tv",
+                "synonyms": [
+                  "television",
+                  "fire tv",
+                  "fire stick",
+                  "living room tv"
+                ]
+              }
+            },
+            {
+              "id": "ipad",
+              "name": {
+                "value": "ipad",
+                "synonyms": [
+                  "i pad",
+                  "tablet"
+                ]
+              }
+            },
+            {
+              "id": "laptop",
+              "name": {
+                "value": "laptop",
+                "synonyms": [
+                  "computer",
+                  "mac",
+                  "macbook"
+                ]
+              }
+            },
+            {
+              "id": "fridge",
+              "name": {
+                "value": "fridge",
+                "synonyms": [
+                  "refrigerator",
+                  "smart fridge"
+                ]
+              }
+            }
           ]
         }
       ]

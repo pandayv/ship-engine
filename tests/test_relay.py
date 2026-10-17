@@ -674,3 +674,33 @@ def test_preflight_options_request_succeeds(monkeypatch):
     assert r["statusCode"] == 200
     assert r["headers"].get("access-control-allow-origin") == "https://pandayv.github.io"
     assert "POST" in r["headers"].get("access-control-allow-methods", "")
+
+
+# --- the voice gate and what counts as "shown" ---
+
+
+def test_a_screen_that_is_not_connected_does_not_count_as_having_shown_anything(one_blocking, session_table, monkeypatch):
+    # The failure this guards: "show it on the fridge" (not connected) used to
+    # record the findings as seen, so "approve it because..." then went through
+    # although no screen had displayed a thing.
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": [], "not_connected": True})
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
+
+    shown = relay.display_on("fridge")
+    result = relay.request_risk_acceptance("a1", reason="looks fine to me")
+
+    assert shown["delivered"] is False
+    assert shown["routing"] == []
+    assert result["performed"] is False
+
+
+def test_a_delivered_push_returns_routing_with_positions_and_ids_only(one_blocking, session_table, monkeypatch):
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": ["c1"], "not_connected": False})
+
+    result = relay.display_on("tv")
+
+    finding = result["routing"][0]["findings"][0]
+    assert result["routing"][0]["repo"] == "pandayv/micro-finance"
+    assert finding["position"] == 1 and finding["alert_id"] == "a1"
+    flat = str(result["routing"])
+    assert "citation" not in flat and "file" not in flat and "what_is_wrong" not in flat

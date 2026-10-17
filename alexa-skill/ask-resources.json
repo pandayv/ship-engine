@@ -19,7 +19,7 @@
           "lambda": {
             "functionName": "ship-alexa-skill",
             "description": "SHIP Review: Alexa skill that stands in for an Alexa+ add-on and calls Relay over MCP",
-            "memorySize": 256,
+            "memorySize": 512,
             "timeout": 8,
             "environmentVariables": {
               "SHIP_RELAY_URL": "https://4f5g7mxyhhhhctmbagr5syfloa0airkl.lambda-url.us-west-2.on.aws/mcp",
