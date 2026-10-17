@@ -94,6 +94,7 @@ from src.agents.triage import route
 from src.api.dashboard import router as dashboard_router
 from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_diff, is_pr_event
 from src.api.github_writeback import comment_for_finding, post_pr_comment, sync_pr_check
+from src.api.alexa_notify import notify_new_finding
 from src.storage.alert_store import SEVERITY_BLOCKING, SEVERITY_REVIEW, put_alert
 from src.storage.repo_store import is_watched, mark_event_seen, mark_reviewed
 from src.storage.status_store import refresh_summary
@@ -223,7 +224,13 @@ def process_fragment(repo_full_name: str, pr_number: int, file: str, isolated_fr
         # because this invocation has a 900s budget while Relay has 500ms
         # (see src/storage/status_store.py). Best-effort: the alert is
         # already stored, and the next finding or decision re-refreshes.
-        refresh_summary()
+        summary = refresh_summary()
+
+        # Tell the person on their Echo, but only for a finding just recorded, so a
+        # later push to the same PR does not chime again. Best effort, like the
+        # comment and the check: see src/api/alexa_notify.py.
+        if getattr(alert, "newly_written", True):
+            notify_new_finding(alert.alert_id, getattr(summary, "total", 0) or 1)
 
     mark_reviewed(repo_full_name)
     log.info("fragment result: file=%s action=%s blocks_build=%s alert_id=%s",
