@@ -159,6 +159,27 @@
             "confirm {request}",
             "block {request}"
           ]
+        },
+        {
+          "name": "AlertsIntent",
+          "slots": [],
+          "samples": [
+            "turn on alerts",
+            "turn on notifications",
+            "enable alerts",
+            "enable notifications",
+            "set up alerts",
+            "set up notifications",
+            "alert me",
+            "notify me",
+            "send me alerts",
+            "send me notifications",
+            "i want alerts",
+            "i want notifications",
+            "i want to be notified",
+            "let me know when something is found",
+            "tell me when something is found"
+          ]
         }
       ],
       "types": [

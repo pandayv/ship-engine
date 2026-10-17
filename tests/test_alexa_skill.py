@@ -285,3 +285,19 @@ def test_asking_to_show_it_with_exactly_one_screen_connected_just_uses_it(skill)
     reply = skill.handler(request_event(intent("ShowIntent", {})), None)
     assert spoken(reply) == "Putting it on your laptop."
     assert ("tools/call", "display_on", "2025-11-25") in skill.sent
+
+
+def test_turning_on_alerts_sends_the_permission_request_card_to_the_app(skill):
+    reply = skill.handler(request_event(intent("AlertsIntent")), None)
+    card = reply["response"]["card"]
+    assert card == {"type": "AskForPermissionsConsent", "permissions": ["alexa::devices:all:notifications:write"]}
+    assert "Alexa app" in spoken(reply)
+
+
+def test_the_permission_asked_for_is_the_one_the_manifest_declares():
+    manifest = json.loads((SKILL_PATH.parent.parent / "skill-package" / "skill.json").read_text())["manifest"]
+    declared = {p["name"] for p in manifest["permissions"]}
+    module_spec = importlib.util.spec_from_file_location("ship_alexa_skill_scope", SKILL_PATH)
+    mod = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(mod)
+    assert mod.NOTIFICATIONS_SCOPE in declared

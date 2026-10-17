@@ -297,6 +297,20 @@ def free_text_reply(text, session):
     return speak(reply.speech, reprompt=REPROMPT, session=session, card=reply.card)
 
 
+NOTIFICATIONS_SCOPE = "alexa::devices:all:notifications:write"
+
+
+def alerts_reply(session):
+    """Asks for the notification permission. Alexa shows the request as a card in the Alexa
+    app, where the person grants it; nothing can grant it by voice."""
+    return speak(
+        "To tell you when something is found, I need your permission. "
+        "I've put a request in your Alexa app. Open the app and allow notifications.",
+        reprompt=REPROMPT, session=session,
+        card={"type": "AskForPermissionsConsent", "permissions": [NOTIFICATIONS_SCOPE]},
+    )
+
+
 def on_intent(request, session):
     name = request["intent"]["name"]
     slots = request["intent"].get("slots")
@@ -312,6 +326,8 @@ def on_intent(request, session):
             # reach the model as "the first one".
             return free_text_reply(f"{FREE_TEXT_INTENTS[name]}{spoken}", session)
         return speak("What would you like to do?", reprompt=REPROMPT, session=session)
+    if name == "AlertsIntent":
+        return alerts_reply(session)
     if name == "AMAZON.YesIntent":
         return free_text_reply("yes", session)
     if name == "AMAZON.NoIntent":
@@ -319,7 +335,8 @@ def on_intent(request, session):
     if name == "AMAZON.HelpIntent":
         return speak(
             "I tell you whether anything is blocked, and I put the detail on a screen. "
-            "You can also say what you want in your own words, like approve the first one because it's a false positive.",
+            "You can also say what you want in your own words, like approve the first one because it's a false positive. "
+            "Say turn on alerts to be told when something is found.",
             reprompt=REPROMPT, session=session,
         )
     if name in ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"):

@@ -117,6 +117,7 @@ Say it the way you'd say it to a colleague. A few examples:
 | See the detail | "Show it on the laptop." "Put the problems up on my tablet." "I want to see them on the TV." |
 | Decide | "Approve the first one on pull request 5 because it's only test data." "Reject the second one, it really does leak a phone number." "The first two on pull request 1 are false positives because they're test fixtures." |
 | Confirm or back out | "Yes, go ahead." "No, never mind." |
+| Get alerted | "Turn on alerts." (Alexa then sends a permission request to your Alexa app.) |
 
 SHIP asks when something is missing, such as "What's the reason?" or "Which
 screen?", and says no when a rule says no.
