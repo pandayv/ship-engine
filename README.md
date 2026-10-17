@@ -65,6 +65,8 @@ up, and the detail appears on the screen you choose.
 Alexa+ add-ons aren't open to hackathon participants, so an Alexa Skill
 stands in for the add-on. It calls the same MCP server an add-on would.
 
+You don't need special phrases. Say it the way you'd say it to a colleague.
+
 **1. Meets you where you are**
 Findings aren't read aloud in a long monologue. Instead, anything that needs your review shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even a smart fridge.
 
@@ -82,13 +84,17 @@ exact pattern SHIP is designed to flag in *other* people's code: an AI-mediated 
 > *"Approve it."*
 > **"Take a look on a screen first, then tell me why. Opening it on your screen."**
 
-Look at it first, then give a reason, and it goes through for real:
+Look at it first, then say what you decide and why. SHIP puts what it
+understood on your screen and waits for you to confirm:
 
-> *"Approve it because it's a false positive."*
-> **"Done. Accepted, on the record: it's a false positive."**
+> *"Approve the first one because it's a false positive."*
+> **"Got it, take a look and say proceed when you're ready."**
+> *"Yes, go ahead."*
+> **"Done."**
 
 The server enforces this rule, not the model. Voice can only act on a
-finding you've just seen on a screen, and a reason is always required.
+finding you've just seen on a screen, a reason is always required, and
+nothing happens until you confirm.
 
 No Echo? **[Try the simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**,
 a web page that talks to the same Relay server as the skill.
@@ -188,9 +194,12 @@ silently dropped.
   incompatibility rather than a style choice. The docstring at the
   top of [`src/relay/server.py`](src/relay/server.py) has the details.
 - **Voice:** an Alexa Skill ([`alexa-skill/`](alexa-skill/)) stands in for an
-  Alexa+ add-on. Alexa does the speech and the language understanding; the
-  skill is a thin translator that turns each intent into a call to Relay
-  over MCP.
+  Alexa+ add-on. Alexa does the speech. Common requests are answered by plain
+  code; anything said in the person's own words goes to Amazon Nova Lite on
+  Bedrock, which picks the Relay tools to call. The model proposes and plain
+  code decides: it can only reach four tools, a screen must have been named,
+  a decision needs a reason in the person's own words, and what is spoken back
+  is Relay's own sentence.
 - **Push:** an Amazon API Gateway WebSocket API plus a small dedicated
   Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
   handling connect/disconnect/register, deliberately separate from Relay
@@ -219,6 +228,7 @@ src/
   api/
     main.py             # Webhook route, fast-ack + fragment dispatch
     dashboard.py         # Gate — the human review console
+    alexa_notify.py      # Sends the Echo notification when a finding is recorded
     github_client.py    # Real PR-diff fetching via the GitHub API
     github_writeback.py # Posts findings/decisions back to the PR (comment + commit status)
   aws/

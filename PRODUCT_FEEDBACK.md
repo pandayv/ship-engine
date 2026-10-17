@@ -281,7 +281,10 @@ states that a Lambda trigger carrying the skill ID already rejects any
 other caller, so the skill needs no signature-checking code.
 
 **What needs work:** the notification catalog has no generic alert type,
-so a compliance alert has to be phrased as a message count. Details in
+so a compliance alert has to be phrased as a message count. And when a free
+text slot (`AMAZON.SearchQuery`) sits behind a carrier phrase, Alexa hands
+the skill only the slot, so a verb used as the carrier ("approve ...",
+"reject ...") disappears from what the skill receives. Details in
 [`FRICTION_LOG.md`](FRICTION_LOG.md).
 
 **Onboarding:** `ask configure` was self-explanatory, and linking the AWS

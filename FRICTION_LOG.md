@@ -187,3 +187,33 @@ call.
 
 **Suggestion:** put the same sentence on the rules and Resources pages, and
 announce FAQ changes on the updates feed.
+
+---
+
+## Free text: a verb used as the carrier phrase is dropped from what the skill receives
+
+**Task attempted:** let a person approve or reject a finding in their own
+words, using one `AMAZON.SearchQuery` intent with many sample sentences such as
+"approve {request}" and "reject {request}".
+
+**Steps taken:**
+1. Built the intent with verb-led samples, then spoke "approve the first one on
+   pull request 5 because it is only test data" through the skill simulator.
+2. Read the request the skill received.
+
+**Expected:** the free-text slot to carry the full sentence, or the matched
+sample to be available to the skill.
+
+**Actual:** the slot carried only the part after the carrier phrase. "Approve"
+was gone, so "approve ..." and "reject ..." both reached the skill as "the first
+one ...", with no way to tell the opposite decisions apart. Alexa's speech
+recognition also wrote "the first one" as "the 1st 1".
+
+**Severity:** high for any skill where the verb changes the meaning.
+
+**Workaround used:** one intent per verb, so the skill restores the verb itself;
+the general free-text intent keeps only neutral carriers such as "can you" and
+"please".
+
+**Suggestion:** document that the carrier phrase is not part of the slot value,
+or expose the matched sample or the full utterance text to the skill.

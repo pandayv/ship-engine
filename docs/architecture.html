@@ -572,7 +572,8 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
     <div class="infra-item"><div class="name">Lambda &middot; ship-webhook</div><div class="role">Always-on, fast-ack only, no model calls</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; ship-fragment-processor</div><div class="role">Independently-scaling, one flagged fragment per invocation</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; ship-relay</div><div class="role">The MCP server, SnapStart-enabled, a fresh ASGI app per invocation</div></div>
-    <div class="infra-item"><div class="name">Lambda &middot; ship-alexa-skill</div><div class="role">The Alexa Skill: turns what Alexa hears into calls to Relay over MCP</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-alexa-skill</div><div class="role">The Alexa Skill: turns what you say into calls to Relay over MCP, using a language model for open-ended requests</div></div>
+    <div class="infra-item"><div class="name">Alexa notification</div><div class="role">Chimes the Echo when a finding is recorded; the skill's credentials sit in Parameter Store</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; device-gateway</div><div class="role">WebSocket connect/disconnect/register, kept separate from Relay's own IAM role</div></div>
     <div class="infra-item"><div class="name">SQS</div><div class="role">Fragment queue + dead-letter queue, concurrency-capped consumer</div></div>
     <div class="infra-item"><div class="name">API Gateway WebSocket API</div><div class="role">Real, server-initiated push to a named display device</div></div>
