@@ -38,6 +38,7 @@ def skill(monkeypatch):
     module.routing_reply = []
     module.tool_error = None      # name of a tool whose call comes back as an MCP tool error
     module.calls = []             # (tool name, arguments) in order
+    module.display_by_surface = {}   # per-screen answers for display_on, when a test needs them
 
     def fake_post(body, protocol=None):
         if module.fail_relay:
@@ -60,6 +61,12 @@ def skill(monkeypatch):
                 text = json.dumps({"screens": module.connected})
             elif name == "findings_routing":
                 text = json.dumps({"pull_requests": module.routing_reply})
+            elif name == "stage_decisions":
+                text = json.dumps({"staged": len((body["params"].get("arguments") or {}).get("decisions") or []), "spoken_response": "Got it."})
+            elif name in ("proceed", "cancel_pending"):
+                text = json.dumps({"performed": 1, "spoken_response": "Done."})
+            elif name == "display_on" and (body["params"].get("arguments") or {}).get("surface") in module.display_by_surface:
+                text = json.dumps(module.display_by_surface[body["params"]["arguments"]["surface"]])
             else:
                 text = STATUS_SENTENCE if name == "release_status" else json.dumps(module.display_reply)
             return {"jsonrpc": "2.0", "id": body["id"], "result": {"content": [{"type": "text", "text": text}]}}
@@ -120,9 +127,18 @@ def test_show_intent_sends_the_resolved_screen_to_display_on(skill):
     assert spoken(reply) == "Putting it on your tv."
 
 
-def test_show_intent_without_a_matched_screen_asks_and_does_not_push(skill):
-    reply = skill.handler(request_event(intent("ShowIntent", {"screen": {"name": "screen", "value": "banana"}})), None)
+def test_show_intent_with_no_screen_at_all_asks_which_and_does_not_push(skill):
+    reply = skill.handler(request_event(intent("ShowIntent", {})), None)
     assert "Which screen" in spoken(reply)
+    assert not any(name == "display_on" for _, name, _ in skill.sent)
+
+
+def test_words_that_are_not_a_screen_are_read_by_the_model_not_asked_about_again(skill, monkeypatch):
+    # "the first one", caught by the show intent: it is an answer to something else.
+    heard = []
+    monkeypatch.setattr(skill, "free_text_reply", lambda text, session: heard.append(text) or skill.speak("ok", session=session))
+    skill.handler(request_event(intent("ShowIntent", {"screen": {"name": "screen", "value": "first one"}})), None)
+    assert heard == ["first one"]
     assert not any(name == "display_on" for _, name, _ in skill.sent)
 
 
@@ -191,7 +207,8 @@ def test_the_interaction_model_and_the_screen_names_relay_understands_line_up():
     language = model["interactionModel"]["languageModel"]
     assert language["invocationName"] == "ship review"
     screens = {v["id"] for t in language["types"] if t["name"] == "SCREEN" for v in t["values"]}
-    assert screens == {"tv", "tablet", "laptop", "fridge"}       # "here" is excluded: nothing renders on an Echo yet
+    # "here" is excluded: nothing renders on an Echo yet. "all" is not a screen: it means every one that is set up.
+    assert screens == {"tv", "tablet", "laptop", "fridge", "all"}
     assert {"StatusIntent", "ShowIntent"} <= {i["name"] for i in language["intents"]}
 
 
@@ -280,7 +297,7 @@ def test_the_old_intent_names_are_gone_from_the_model_and_the_skill(skill):
 
 def test_help_gives_an_allow_example_and_the_reprompt_asks_for_allow_or_block(skill):
     reply = skill.handler(request_event(intent("AMAZON.HelpIntent"), ), None)
-    assert "allow the first one because it's a false positive" in spoken(reply)
+    assert "go through the findings with you" in spoken(reply)
     assert "approve" not in spoken(reply) and "reject" not in spoken(reply)
 
 
@@ -306,7 +323,10 @@ def test_no_verb_is_used_as_a_carrier_in_the_general_intent():
     # the other words that mean a decision or a screen.
     verbs = {"allow", "approve", "accept", "dismiss", "clear", "ignore", "block", "reject", "confirm",
              "keep", "show", "put", "send", "mark", "yes", "no"}
-    verbs |= {word for name in ("AllowIntent", "BlockIntent") for verb in _intent_verbs(name) for word in verb.split()}
+    decision_words = {"allow", "allowed", "approve", "approved", "accept", "dismiss", "clear", "ignore", "block", "blocked",
+                      "reject", "rejected", "confirm"}
+    verbs |= {word for name in ("AllowIntent", "BlockIntent") for verb in _intent_verbs(name)
+              for word in verb.split() if word in decision_words}
     assert {"allow", "approve", "accept", "dismiss", "clear", "ignore", "block", "reject", "confirm"} <= verbs
     ask = next(i for i in _language_model()["intents"] if i["name"] == "AskIntent")
     for sample in ask["samples"]:
@@ -353,7 +373,7 @@ def test_asking_to_show_it_with_exactly_one_screen_connected_just_uses_it(skill)
     skill.connected = ["laptop"]
     skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
     reply = skill.handler(request_event(intent("ShowIntent", {})), None)
-    assert spoken(reply) == "Putting it on your laptop. Say allow or block, with the number and a reason."
+    assert spoken(reply) == "Putting it on your laptop. Want to go through them?"
     assert ("tools/call", "display_on", "2025-11-25") in skill.sent
 
 
@@ -440,14 +460,14 @@ def test_the_suggestion_never_names_a_screen_that_is_not_set_up(skill):
     skill.connected = ["laptop", "tablet"]
     reply = skill.handler(request_event(intent("StatusIntent")), None)
     prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
-    assert "laptop or tablet" in prompt and "TV" not in prompt and "tv" not in prompt
+    assert prompt == "Want it on the laptop or the tablet?"      # the short form, said again if there is no answer
 
 
 def test_the_suggestion_names_at_most_two_screens(skill):
     skill.connected = ["laptop", "tablet", "tv"]
     reply = skill.handler(request_event(intent("StatusIntent")), None)
     prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
-    assert prompt == "You can ask what's up, or say show it on the laptop or tablet."
+    assert prompt == "Want it on a screen?"           # more than two: no list
 
 
 def test_with_no_screen_the_suggestion_does_not_offer_one(skill):
@@ -536,3 +556,184 @@ def test_the_word_relay_tells_people_to_say_is_understood_as_a_yes():
     model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
     yes = next(i for i in model["interactionModel"]["languageModel"]["intents"] if i["name"] == "AMAZON.YesIntent")
     assert "proceed" in yes["samples"]
+
+
+# --- short answers to "laptop or tablet?" ---
+
+
+def test_every_short_way_of_naming_a_screen_is_a_sample_of_the_show_intent():
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
+    show = next(i for i in model["interactionModel"]["languageModel"]["intents"] if i["name"] == "ShowIntent")
+    for sample in ("{screen}", "{screen} please", "{screen} is fine", "i'll take the {screen}", "use {screen}"):
+        assert sample in show["samples"], sample
+
+
+def test_both_and_all_of_them_are_a_value_of_the_screen_list_not_an_intent_of_their_own():
+    # An intent made only of short phrases becomes Alexa's catch-all for stray single words
+    # ("banana" showed the findings on every screen). A value of the screen list cannot.
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())["interactionModel"]["languageModel"]
+    assert "ShowAllIntent" not in {i["name"] for i in model["intents"]}
+    screens = next(t for t in model["types"] if t["name"] == "SCREEN")
+    everything = next(v for v in screens["values"] if v["id"] == "all")
+    for word in ("both", "both of them", "all of them", "everywhere"):
+        assert word in everything["name"]["synonyms"], word
+
+
+def test_two_phrases_that_swallow_a_decision_are_not_screen_samples():
+    # "yes approve the first one" was caught as a screen named "1st" by "{screen} one".
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())["interactionModel"]["languageModel"]
+    show = next(i for i in model["intents"] if i["name"] == "ShowIntent")
+    assert "{screen} one" not in show["samples"] and "the {screen} one" not in show["samples"]
+
+
+def test_both_shows_it_on_every_screen_that_is_set_up(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your x.", "routing": []}
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("all"))), None)
+    pushed = sorted(args["surface"] for name, args in skill.calls if name == "display_on")
+    assert pushed == ["laptop", "tablet"]
+    assert spoken(reply) == "Putting it on the laptop and the tablet. Want to go through them?"
+
+
+def test_both_says_which_screens_could_not_be_reached(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_by_surface = {"laptop": {"delivered": True, "routing": []}, "tablet": {"delivered": False, "notified": False}}
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("all"))), None)
+    assert spoken(reply) == "Putting it on the laptop. I couldn't reach the tablet. Want to go through them?"
+
+
+def test_both_says_which_screens_were_only_notified(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_by_surface = {"laptop": {"delivered": True, "routing": []}, "tablet": {"delivered": False, "notified": True}}
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("all"))), None)
+    assert "I've sent a notification to the tablet. Open it to review." in spoken(reply)
+    assert spoken(reply).startswith("Putting it on the laptop.")
+
+
+def test_both_with_no_screen_set_up_says_so_and_pushes_nothing(skill):
+    skill.connected = []
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("all"))), None)
+    assert "No screen is set up" in spoken(reply)
+    assert not any(name == "display_on" for name, _ in skill.calls)
+
+
+def test_both_remembers_the_routing_so_the_next_decision_can_name_a_finding(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_reply = {"delivered": True, "routing": [{"repo": "r", "pr_number": 1, "findings": []}]}
+    reply = skill.handler(request_event(intent("ShowIntent", matched_screen("all"))), None)
+    assert reply["sessionAttributes"]["routing"] == [{"repo": "r", "pr_number": 1, "findings": []}]
+
+
+# --- the guided review through the skill ---
+
+SEEN = [{"repo": "r", "pr_number": 1, "findings": [
+    {"position": 1, "alert_id": "a1", "seen": True, "shown_position": 1, "blocks_merge": True},
+    {"position": 2, "alert_id": "a2", "seen": True, "shown_position": 2, "blocks_merge": True}]}]
+
+
+def directive_of(reply):
+    return (reply["response"].get("directives") or [None])[0]
+
+
+def answer_event(text):
+    return request_event(intent("AnswerIntent", {"answer": {"name": "answer", "value": text}}))
+
+
+def test_a_question_is_asked_so_that_alexa_hands_back_the_answer_as_plain_words(skill):
+    skill.connected = ["laptop", "tablet"]
+    reply = skill.handler(request_event(intent("StatusIntent")), None)
+    assert directive_of(reply)["type"] == "Dialog.ElicitSlot" and directive_of(reply)["slotToElicit"] == "answer"
+    assert directive_of(reply)["updatedIntent"]["name"] == "AnswerIntent"
+    assert reply["sessionAttributes"]["flow"]["stage"] == "pick_screen"
+
+
+def test_a_status_with_no_screen_to_offer_asks_nothing_it_cannot_take_an_answer_to(skill):
+    skill.connected = []
+    reply = skill.handler(request_event(intent("StatusIntent")), None)
+    assert directive_of(reply) is None and "flow" not in {k for k, v in reply["sessionAttributes"].items() if v}
+
+
+def test_naming_a_screen_in_answer_to_the_status_question_shows_it_there_and_offers_the_review(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
+    first = skill.handler(request_event(intent("StatusIntent")), None)
+    session = first["sessionAttributes"]
+    reply = skill.handler({**answer_event("laptop"), "session": {"attributes": session}}, None)
+    assert [args for name, args in skill.calls if name == "display_on"] == [{"surface": "laptop"}]
+    assert spoken(reply) == "Putting it on your laptop. Want to go through them?" and directive_of(reply)
+
+
+def test_an_answer_in_a_review_is_read_by_the_review_whatever_intent_alexa_chose(skill):
+    skill.routing_reply = SEEN
+    started = skill.handler(request_event(intent("StartReviewIntent")), None)
+    assert spoken(started).endswith("Number 1 on pull request 1. Allow, block, or skip?") and directive_of(started)
+    session = started["sessionAttributes"]
+
+    def say(event):
+        nonlocal session
+        reply = skill.handler({**event, "session": {"attributes": session}}, None)
+        session = reply["sessionAttributes"]
+        return reply
+
+    assert spoken(say(request_event(intent("AMAZON.YesIntent")))).startswith("Sorry") is False
+    reply = say(request_event(intent("AllowIntent", {"request": {"name": "request", "value": "it because it is test data"}})))
+    assert [a for n, a in skill.calls if n == "stage_decisions"][0]["decisions"][0]["decision"] == "allow"
+    assert spoken(reply).startswith("Got it. Number 2")
+
+
+def test_an_answer_alexa_could_not_place_repeats_the_question_instead_of_giving_up(skill):
+    skill.routing_reply = SEEN
+    started = skill.handler(request_event(intent("StartReviewIntent")), None)
+    reply = skill.handler({**request_event(intent("AMAZON.FallbackIntent")), "session": {"attributes": started["sessionAttributes"]}}, None)
+    assert spoken(reply).startswith("Sorry, I missed that. Number 1 on pull request 1.") and directive_of(reply)
+
+
+def test_stop_during_a_review_is_a_stop_of_the_review(skill):
+    skill.routing_reply = SEEN
+    started = skill.handler(request_event(intent("StartReviewIntent")), None)
+    reply = skill.handler({**request_event(intent("AMAZON.StopIntent")), "session": {"attributes": started["sessionAttributes"]}}, None)
+    assert spoken(reply) == "Okay, we'll stop there." and not reply["response"]["shouldEndSession"]
+
+
+def test_allow_it_with_nothing_said_about_which_goes_through_the_findings(skill):
+    skill.routing_reply = SEEN
+    reply = skill.handler(request_event(intent("AllowIntent")), None)
+    assert spoken(reply).endswith("Allow, block, or skip?")
+
+
+def test_starting_a_review_before_anything_has_been_seen_says_to_show_it_first(skill):
+    skill.routing_reply = []
+    reply = skill.handler(request_event(intent("StartReviewIntent")), None)
+    assert "show it on a screen first" in spoken(reply) and directive_of(reply) is None
+
+
+def test_lets_go_through_them_in_the_persons_words_starts_the_review(skill):
+    skill.routing_reply = SEEN
+    reply = skill.handler(request_event(intent("AskIntent", {"request": {"name": "request", "value": "go through them"}})), None)
+    assert spoken(reply).endswith("Allow, block, or skip?")
+
+
+def test_an_answer_with_no_review_going_is_read_as_ordinary_speech(skill, monkeypatch):
+    heard = []
+    monkeypatch.setattr(skill, "free_text_reply", lambda text, session: heard.append(text) or skill.speak("ok", session=session))
+    skill.handler(answer_event("show it on the tablet"), None)
+    assert heard == ["show it on the tablet"]
+
+
+def test_the_model_has_a_catch_all_free_answer_with_a_dialog_so_questions_capture_any_reply():
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())["interactionModel"]
+    answer = next(i for i in model["languageModel"]["intents"] if i["name"] == "AnswerIntent")
+    assert answer["slots"][0]["type"] == "AMAZON.SearchQuery" and "{answer}" in answer["slots"][0]["samples"]
+    dialog = next(i for i in model["dialog"]["intents"] if i["name"] == "AnswerIntent")
+    assert dialog["slots"][0]["elicitationRequired"] and dialog["delegationStrategy"] == "SKILL_RESPONSE"
+
+
+def test_no_intent_is_made_only_of_one_word_phrases_because_those_become_alexas_catch_all():
+    # Seen live: an intent made of "both", "everywhere" and similar took "banana" and "approve".
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())["interactionModel"]["languageModel"]
+    for intent_ in model["intents"]:
+        if intent_["name"].startswith("AMAZON.") or not intent_["samples"] or intent_["name"] in ("StatusIntent",):
+            continue
+        slotless = [s for s in intent_["samples"] if "{" not in s]
+        if slotless and len(slotless) == len(intent_["samples"]):
+            assert all(len(s.split()) >= 2 for s in slotless), intent_["name"]

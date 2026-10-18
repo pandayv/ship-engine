@@ -58,7 +58,24 @@
             "put it on my {screen}",
             "send it to the {screen}",
             "send it to my {screen}",
-            "on the {screen}"
+            "on the {screen}",
+            "{screen}",
+            "{screen} please",
+            "{screen} is fine",
+            "{screen} is good",
+            "{screen} works",
+            "{screen} screen",
+            "the {screen} screen",
+            "on {screen}",
+            "i'll take the {screen}",
+            "i will take the {screen}",
+            "i'd like the {screen}",
+            "i would like the {screen}",
+            "i want the {screen}",
+            "go with the {screen}",
+            "let's use the {screen}",
+            "lets use the {screen}",
+            "use {screen}"
           ]
         },
         {
@@ -157,7 +174,16 @@
             "accept {request}",
             "dismiss {request}",
             "clear {request}",
-            "ignore {request}"
+            "ignore {request}",
+            "{request} allow",
+            "{request} allow it",
+            "{request} is fine",
+            "{request} approved",
+            "allow it",
+            "allow this one",
+            "allow that one",
+            "approve it",
+            "approve this one"
           ]
         },
         {
@@ -171,7 +197,16 @@
           "samples": [
             "block {request}",
             "reject {request}",
-            "confirm {request}"
+            "confirm {request}",
+            "{request} block",
+            "{request} block it",
+            "{request} is real",
+            "{request} rejected",
+            "block it",
+            "block this one",
+            "block that one",
+            "reject it",
+            "reject this one"
           ]
         },
         {
@@ -219,6 +254,45 @@
             "what's {request}",
             "what is {request}",
             "whats {request}"
+          ]
+        },
+        {
+          "name": "AnswerIntent",
+          "slots": [
+            {
+              "name": "answer",
+              "type": "AMAZON.SearchQuery",
+              "samples": [
+                "{answer}"
+              ]
+            }
+          ],
+          "samples": [
+            "my answer is {answer}",
+            "answer {answer}",
+            "i say {answer}"
+          ]
+        },
+        {
+          "name": "StartReviewIntent",
+          "slots": [],
+          "samples": [
+            "let's start",
+            "let's begin",
+            "let's go through them",
+            "go through them",
+            "go through them with me",
+            "walk me through them",
+            "walk me through it",
+            "start the review",
+            "start reviewing",
+            "begin the review",
+            "review them with me",
+            "go over them with me",
+            "take me through them",
+            "one by one",
+            "start going through them",
+            "let's review them"
           ]
         }
       ],
@@ -273,10 +347,60 @@
                   "smart fridge"
                 ]
               }
+            },
+            {
+              "id": "all",
+              "name": {
+                "value": "all",
+                "synonyms": [
+                  "both",
+                  "both of them",
+                  "both screens",
+                  "both of the screens",
+                  "all of them",
+                  "all screens",
+                  "all of the screens",
+                  "everywhere",
+                  "every screen"
+                ]
+              }
             }
           ]
         }
       ]
-    }
+    },
+    "dialog": {
+      "delegationStrategy": "SKILL_RESPONSE",
+      "intents": [
+        {
+          "name": "AnswerIntent",
+          "delegationStrategy": "SKILL_RESPONSE",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "answer",
+              "type": "AMAZON.SearchQuery",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.Answer"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "Elicit.Slot.Answer",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "Go ahead."
+          }
+        ]
+      }
+    ]
   }
 }

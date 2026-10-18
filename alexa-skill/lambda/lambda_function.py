@@ -29,6 +29,7 @@ never an exception.
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -36,6 +37,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import orchestrator
+import review_flow
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -207,6 +209,22 @@ def remember_user(user_id, source):
 
 # --------------------------------------------------------------- Alexa output
 
+ELICIT_ANSWER = {
+    "type": "Dialog.ElicitSlot", "slotToElicit": "answer",
+    "updatedIntent": {"name": "AnswerIntent", "confirmationStatus": "NONE",
+                      "slots": {"answer": {"name": "answer", "confirmationStatus": "NONE"}}},
+}
+
+
+def speak_turn(turn, session):
+    """Speaks what the review flow says next. A question is asked so that Alexa hands over
+    whatever the person says in reply as plain words, instead of matching it against the
+    skill's sample phrases and giving up on anything that doesn't fit."""
+    if turn.elicit:
+        return speak(turn.speech, reprompt=turn.reprompt, session=session, card=turn.card, directives=[ELICIT_ANSWER])
+    return speak(turn.speech, reprompt=REPROMPT, session=session, card=turn.card)
+
+
 def next_step(session):
     """The one useful thing to suggest right now, from where the conversation is. Never
     names a screen that is not set up."""
@@ -219,10 +237,12 @@ def next_step(session):
     return "You can ask what's up."
 
 
-def speak(text, end=False, reprompt=None, session=None, card=None):
+def speak(text, end=False, reprompt=None, session=None, card=None, directives=None):
     if reprompt is REPROMPT:
         reprompt = next_step(session)
     response = {"outputSpeech": {"type": "PlainText", "text": text}, "shouldEndSession": end}
+    if directives:
+        response["directives"] = directives
     if card:
         response["card"] = card
     if reprompt and not end:
@@ -274,6 +294,7 @@ def _session(event):
         "routing": list(attributes.get("routing", [])),
         "screen": attributes.get("screen"),
         "screens": attributes.get("screens"),
+        "flow": attributes.get("flow"),
         "pending": attributes.get("pending"),
     }
 
@@ -290,6 +311,9 @@ def status_reply(session):
     _, sentence = _both(lambda: connected_screens(session), lambda: call_tool("release_status"))
     sentence = str(sentence)
     orchestrator.remember(session, "what's the status", sentence)
+    screens = session.get("screens") or []
+    if screens and sentence.rstrip().endswith("?"):
+        return speak_turn(review_flow.offer_screens(session, screens, sentence), session)
     return speak(sentence, reprompt=REPROMPT, session=session)
 
 
@@ -342,34 +366,118 @@ def seen_routing():
     return routing
 
 
+def _show_on(session, screen):
+    """Puts the findings on one screen and asks what comes next. Returns a review_flow.Turn."""
+    result = call_tool("display_on", {"surface": screen})
+    delivered, notified = bool(result.get("delivered")), bool(result.get("notified"))
+    if delivered or notified:
+        session["screen"] = screen
+    if delivered:
+        session["routing"] = result.get("routing") or []
+    sentence = result.get("spoken_response", "Okay.")
+    orchestrator.remember(session, f"show it on the {screen}", sentence)
+    return review_flow.offer_after_show(session, sentence, delivered, notified)
+
+
 def show_reply(slots, session):
     screen = _slot_value(slots, "screen")
+    if screen == "all":
+        return show_all_reply(session)    # "both", "all of them", "everywhere"
     connected = connected_screens(session)
     card = orchestrator.console_card(CONSOLE_URL) if connected == [] and CONSOLE_URL else None
     if not screen and connected and len(connected) == 1:
         screen = connected[0]       # only one to choose from, so no need to ask
     if not screen:
+        # Alexa caught the answer with the show intent but the words are not a screen name
+        # ("the first one"). Let the model read them in the light of the conversation
+        # instead of asking the same question again.
+        spoken = ((slots or {}).get("screen") or {}).get("value")
+        if spoken:
+            return free_text_reply(str(spoken), session)
         return speak(orchestrator.which_screen(connected), reprompt="Which screen?", session=session, card=card)
     if connected is not None:
         registered = orchestrator.match_connected(screen, connected)
         if registered is None:
             return speak(orchestrator.not_connected(screen, connected), reprompt=REPROMPT, session=session, card=card)
         screen = registered     # the name the screen actually registered under
-    result = call_tool("display_on", {"surface": screen})
-    if result.get("delivered") or result.get("notified"):
-        session["screen"] = screen
-    if result.get("delivered"):
-        session["routing"] = result.get("routing") or []
-    sentence = result.get("spoken_response", "Okay.")
-    orchestrator.remember(session, f"show it on the {screen}", sentence)
-    if result.get("delivered"):
-        sentence += " Say allow or block, with the number and a reason."
-    return speak(sentence, reprompt=REPROMPT, session=session)
+    return speak_turn(_show_on(session, screen), session)
+
+
+def _show_all(session):
+    """The findings on every screen that is set up. Returns a review_flow.Turn."""
+    _connect()
+    connected = connected_screens(session)
+    if not connected:
+        return review_flow.Turn(orchestrator.which_screen(connected))
+    with ThreadPoolExecutor(max_workers=len(connected)) as pool:
+        results = list(pool.map(lambda name: _safe_display_on(name), connected))
+    shown = [n for n, r in zip(connected, results) if r.get("delivered")]
+    notified = [n for n, r in zip(connected, results) if not r.get("delivered") and r.get("notified")]
+    missed = [n for n, r in zip(connected, results) if not r.get("delivered") and not r.get("notified")]
+    if shown or notified:
+        session["screen"] = (shown or notified)[0]
+    delivered = next((r for r in results if r.get("delivered")), None)
+    if delivered:
+        session["routing"] = delivered.get("routing") or []
+    parts = []
+    if shown:
+        parts.append(f"Putting it on {orchestrator._join(shown)}.")
+    if notified:
+        parts.append(f"I've sent a notification to {orchestrator._join(notified)}. Open it to review.")
+    if missed:
+        parts.append(f"I couldn't reach {orchestrator._join(missed)}.")
+    sentence = " ".join(parts)
+    orchestrator.remember(session, "show it on all of them", sentence)
+    return review_flow.offer_after_show(session, sentence, bool(shown), bool(notified))
+
+
+def show_all_reply(session):
+    """"Both" or "all of them" in answer to a choice of screens: every screen that is set up."""
+    connected = connected_screens(session)
+    if connected == [] and CONSOLE_URL:
+        card = orchestrator.console_card(CONSOLE_URL)
+        return speak(orchestrator.which_screen(connected), reprompt="Which screen?", session=session, card=card)
+    return speak_turn(_show_all(session), session)
+
+
+def _safe_display_on(name):
+    try:
+        return call_tool("display_on", {"surface": name})
+    except Exception:  # noqa: BLE001 - one screen failing must not cancel the others
+        log.exception("could not show on %s", name)
+        return {}
+
+
+def _flow_context(session):
+    """What the review flow needs from the skill, so it can stay free of Alexa and AWS."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        call_tool=call_tool,
+        seen_routing=lambda: seen_routing() or [],
+        show=lambda name: _show_on(session, name),
+        show_all=lambda: _show_all(session),
+    )
+
+
+def start_review(session):
+    """Begins walking through what the person has seen on a screen."""
+    _connect()
+    routing = seen_routing()
+    if routing is None:
+        return speak("I couldn't check what you've looked at. Please try again.", reprompt=REPROMPT, session=session)
+    session["routing"] = routing
+    return speak_turn(review_flow.begin(session, routing), session)
+
+
+START_REVIEW = re.compile(r"\b(start|begin|go through|walk me through|review them|run through|step through|one by one|go over)\b", re.I)
 
 
 def free_text_reply(text, session):
     """Anything said in the person's own words. A language model picks the tools;
     if it can't be used in time, plain rules cover the common requests."""
+    if START_REVIEW.search(text or "") and len((text or "").split()) <= 6:
+        return start_review(session)      # "let's go through them"
     _connect()
     connected, seen = _both(lambda: connected_screens(session), seen_routing)
     if seen is not None:
@@ -421,8 +529,37 @@ def on_intent(request, session):
     slots = request["intent"].get("slots")
     log.info("intent %s heard %s", name,
              {k: v.get("value") for k, v in (slots or {}).items() if isinstance(v, dict)})
+
+    def flow_answer(text):
+        return speak_turn(review_flow.answer(session, text, _flow_context(session)), session)
+
+    # An answer to a question the skill asked arrives as plain words, whatever was said.
+    if name == "AnswerIntent":
+        heard = ((slots or {}).get("answer") or {}).get("value") or ""
+        return flow_answer(heard) if review_flow.active(session) else free_text_reply(heard, session)
+
+    # While a review is under way every answer belongs to it, whichever intent Alexa chose.
+    if review_flow.active(session):
+        if name == "AMAZON.YesIntent":
+            return flow_answer("yes")
+        if name == "AMAZON.NoIntent":
+            return flow_answer("no")
+        if name in ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"):
+            return flow_answer("stop")
+        if name == "AMAZON.HelpIntent":
+            return flow_answer("help")
+        if name in FREE_TEXT_INTENTS:
+            spoken = ((slots or {}).get("request") or {}).get("value")
+            return flow_answer(f"{FREE_TEXT_INTENTS[name]}{spoken}" if spoken else FREE_TEXT_INTENTS[name].strip())
+        if name == "AMAZON.FallbackIntent":
+            again = review_flow.repeat(session)
+            if again is not None:
+                return speak_turn(again, session)
+
     if name == "StatusIntent":
         return status_reply(session)
+    if name == "StartReviewIntent":
+        return start_review(session)
     if name == "ShowIntent":
         return show_reply(slots, session)
     if name in FREE_TEXT_INTENTS:
@@ -433,6 +570,8 @@ def on_intent(request, session):
             # reach the model as "the first one". The canonical verb is restored, so
             # "approve" and "dismiss" reach the model as "allow", and "reject" as "block".
             return free_text_reply(f"{FREE_TEXT_INTENTS[name]}{spoken}", session)
+        if name in ("AllowIntent", "BlockIntent"):
+            return start_review(session)      # "allow it" with nothing said about which: go through them
         return speak("What would you like to do?", reprompt=REPROMPT, session=session)
     if name == "AlertsIntent":
         return alerts_reply(session)
@@ -443,7 +582,7 @@ def on_intent(request, session):
     if name == "AMAZON.HelpIntent":
         return speak(
             "I tell you whether anything is blocked, and I put the detail on a screen. "
-            "You can also say what you want in your own words, like allow the first one because it's a false positive. "
+            "Then I can go through the findings with you, one at a time. "
             "Say turn on alerts to be told when something is found.",
             reprompt=REPROMPT, session=session,
         )
@@ -483,6 +622,7 @@ def handler(event, context):
         if kind == "IntentRequest":
             return on_intent(request, session)
         if kind == "SessionEndedRequest":
+            log.info("session ended: reason=%s error=%s", request.get("reason"), json.dumps(request.get("error")))
             return {"version": "1.0", "response": {}}
         return speak("Sorry, I missed that. " + next_step(session), reprompt=REPROMPT, session=session)
     except RelayToolError:
