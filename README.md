@@ -10,7 +10,7 @@ SHIP closes that gap: it catches AI compliance risk before it ships, without slo
 
 **SHIP is a multi-agentic gatekeeper that reads every pull request the moment it opens, catches the ones that quietly cross a legal line, and interacts with you only when it's found something.**
 
-Ask it anytime through Alexa+. It answers in one sentence, and shows the full detail on your nearest screen.
+Ask it by voice anytime. It answers in one sentence and shows the full detail on the screen you choose.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/) (Alexa+ track, AWS Builder mini-challenge).
 
@@ -18,230 +18,316 @@ Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonapp
 
 ---
 
-## What it does
+## Guiding principles
+
+**A person decides.**
+SHIP finds, explains and proposes. Only a person who has looked at the evidence decides, and the reason goes on the record.
+
+**Last line of defense.**
+Assume nothing was checked before this. It doesn't matter who wrote the code, a person or an AI.
+
+**Grounded, not guessed.**
+Rely on facts, not memory or guesswork. Every citation traces to sourced regulation text.
+
+**Meet you where you are.**
+The answer finds you, on whatever device is nearest. Voice gives the headline. A screen gives the detail.
+
+**Honest when unsure.**
+A status SHIP can't read is never called all clear. A review that hasn't finished never shows a green check.
+
+**Scalability and resilience.**
+Survive retries, failures and heavy load without breaking.
+
+**Cost efficiency.**
+Free deterministic checks first, a model only when needed.
+
+## The pipeline
 
 SHIP is five pieces working as one pipeline, each named for its job:
 Screener, Detector, Triage, Gate, Relay.
 
 1. **A PR opens, and Screener checks it first.** A free regex/AST scan
-   runs on every commit. Nothing matches, the PR passes in
-   milliseconds, no model call spent.
+   runs on every commit. If nothing matches, the PR passes in
+   milliseconds and no model call is spent.
 2. **If something matches, Detector takes a closer look.** It reviews
-   just that fragment, grounded against sourced regulation text, not
-   memory, and returns a verdict: risk score, plain-English explanation,
-   citation, and a draft fix. It also learns from Gate's own past
-   decisions over time.
-3. **If Detector confirms a real violation, Triage blocks the merge.**
-   The PR's own commit status turns red, which is what actually stops
-   the merge button, not just a dashboard entry.
-4. **A human resolves it in Gate**, the review console: file, risk,
-   explanation, citation, suggested fix, one click to approve or
-   reject. The decision posts back to the PR and clears the block.
-5. **Relay carries that same review to voice and screen**, so it comes
-   to you wherever you are, instead of you having to go find it in Gate.
+   just that fragment, grounded against sourced regulation text, and
+   returns a verdict: risk score, plain-English explanation, citation,
+   and a draft fix.
+3. **Triage routes the verdict.** A finding above the line blocks the
+   merge: the PR's own commit status turns red, and as a required check
+   in branch protection that stops the merge button. A finding below the
+   line is flagged for a human without blocking.
+4. **A person decides in Gate**, the review console, or by voice. They
+   see file, risk, explanation, citation and suggested fix, then
+   approve or reject.
+5. **Relay carries the same review to voice and screen**, so it comes
+   to you wherever you are.
+
+Approve and reject mean different things. **Approve** means you accept
+the risk, and the finding stops blocking. **Reject** means the finding is
+real and the pull request isn't ready. It stays blocked until a later
+commit changes the flagged code. Either way the decision, with your
+reason, is posted to the PR.
 
 SHIP watches for four kinds of risk: exposing sensitive personal data,
 decisions made with no human review, bias from a protected trait, and
-AI handed more authority than it should have. Backed by six detectors
-tied to real law, full detail in
+AI handed more authority than it should have. The detectors are grounded
+in GDPR, the EU AI Act and OWASP, and are listed in
 [architecture.html](https://pandayv.github.io/ship-engine/architecture.html).
 
-## How to see it in action
+## What it feels like
 
-Three ways to try this.
+### By voice
 
-1. **Experience it live.** Judges: instructions for adding a test PR
-   and trying it live are included in the submission materials.
-2. **Watch the demo video.** *(Video link goes here before final
-   submission.)*
-3. **Set it up yourself.** Full steps in [SETUP.md](SETUP.md).
+When SHIP records a new finding, your Echo gets a notification from SHIP
+("You have 2 new unread messages from SHIP"). Nothing is read out until
+you ask.
 
-### Integrated Alexa+ experience
+> *"Alexa, ask ship review what's up."*
+> **"2 blockers found. Ready for your decision. Want it on the laptop or the tablet?"**
+> *"Show it on the laptop."*
+> **"Putting it on your laptop. Say approve or reject, with the number and a reason."**
 
-SHIP is built as an Alexa+ experience. It works in the background and
-speaks up only when something needs you. Your Echo chimes, you ask what's
-up, and the detail appears on the screen you choose.
+The findings appear on the laptop. SHIP offers only the screens that
+exist. With one screen it asks "Want it on the laptop?". With none it
+says so and puts a link to the review console in your Alexa app.
 
-Alexa+ add-ons aren't open to hackathon participants, so an Alexa Skill
-stands in for the add-on. The hackathon
-[FAQ](https://amazonappdev2026.devpost.com/details/faqs) says the add-on
-tools are for select partners only, and the documented route to them stops
-at an AWS role that only accounts registered by an Amazon Alexa Solutions
-Architect can assume (see the [friction log](FRICTION_LOG.md)). The skill
-calls the same MCP server an add-on would.
+You decide in your own words, using the numbers on the screen:
 
-You don't need special phrases. Say it the way you'd say it to a colleague.
-
-**1. Meets you where you are**
-Findings aren't read aloud in a long monologue. Instead, anything that needs your review shows up on your nearest screen: a phone, a tablet, a laptop, a TV, even a smart fridge.
-
-> *"Alexa, what's up?"*
-> **"2 blockers found. Ready for your decision. Want it on a screen?"**
-> *"Show me on the TV."*
-
-The actual findings then appear, live, on whatever screen just answered
-to that screen/device name.
-
-To set a screen up, open the
-[display page](https://pandayv.github.io/ship-engine/ship-display.html) on the
-device and pick a name: TV, Tablet, Laptop or Fridge. SHIP only offers screens
-that are set up. With none, it says so and puts a link to the review console
-in your Alexa app.
-
-**2. Voice can confirm a decision. It can never make one blind.** Ask to
-approve a finding you've never looked at, and SHIP refuses. That's the
-exact pattern SHIP is designed to flag in *other* people's code: an AI-mediated decision applied with no human checkpoint. Try it:
-
-> *"Approve it."*
-> **"Take a look on a screen first, then tell me why. Opening it on your screen."**
-
-Look at it first, then say what you decide and why. SHIP puts what it
-understood on your screen and waits for you to confirm:
-
-> *"Approve the first one because it's a false positive."*
+> *"Approve the first one on pull request 2 because it's only test data."*
 > **"Got it, take a look and say proceed when you're ready."**
-> *"Yes, go ahead."*
+> *"Yes."*
 > **"Done."**
 
-The server enforces this rule, not the model. Voice can only act on a
-finding you've just seen on a screen, a reason is always required, and
-nothing happens until you confirm.
+The decision is staged first and shown on the screen as pending. Nothing
+is applied until you confirm. Say no, cancel or stop, and it is dropped.
+When some decisions can't be applied, SHIP says so plainly, for example
+"Applied 2 of 3. 1 already decided in the console."
 
-### What you can say
+A rejected finding still blocks the merge, and voice says so: "Nothing
+needs a decision, but 1 rejected finding still blocks the merge until
+fixed."
 
-Say it the way you'd say it to a colleague. A few examples:
+### On a screen
+
+The findings screen shows one table per pull request, blockers first.
+Each row has a number, the way you speak it ("first one on pull request
+2"), the file, what's wrong and the rule it breaks. A decision you have
+staged shows on its row as pending. A note appears when a rejected
+finding still holds a pull request.
+
+### Voice can confirm a decision. It can never make one blind.
+
+Asking SHIP to approve a finding you haven't looked at gets a refusal.
+That is the pattern SHIP flags in *other* people's code, an AI-mediated
+decision applied with no human checkpoint. A decision goes through only
+when three things are true.
+
+- You looked at the finding on a screen.
+- You gave a reason in your own words.
+- You confirmed what SHIP understood.
+
+The model that understands your speech never sees a finding. It turns
+what you said into a proposal, and plain code checks every part of it.
+Relay, the server, also refuses a decision on a finding you haven't seen
+or one without a reason, so the model can't talk its way past the rules.
+
+## Why not Alexa+
+
+SHIP is designed as an Alexa+ experience, but Alexa+ add-ons aren't open
+to hackathon participants. The hackathon
+[FAQ](https://amazonappdev2026.devpost.com/details/faqs) says the add-on
+tools are for select partners only, and the documented route to them
+stops at an AWS role that only accounts registered by an Amazon Alexa
+Solutions Architect can assume (see the [friction log](FRICTION_LOG.md)).
+So a custom Alexa Skill called "ship review" stands in for the add-on.
+It does the same job. It hears you and calls the same MCP server an
+add-on would. A Bedrock model, Amazon Nova Lite, turns free speech into
+tool calls. When the add-on opens, it can point at the same server and
+the skill steps aside.
+
+## Set up a screen
+
+A screen is any browser: a laptop, a tablet, a TV, a smart fridge.
+
+1. Open the [display page](https://pandayv.github.io/ship-engine/ship-display.html)
+   on the device and pick a name (TV, Tablet, Laptop, Fridge, or your own).
+2. Press "Get alerts on this screen" and allow notifications once.
+
+That's all. There is no pairing code. After that, SHIP can reach the
+screen even when the page is closed. It sends a notification, you tap
+it, and the findings open on the page. On an iPhone or iPad, add the page
+to the Home Screen first.
+
+A notification doesn't count as a look. Findings count as seen only when
+a page displays them and reports back, and only while the page is
+visible. A screen's held findings expire after ten minutes.
+
+To get the Echo alert, say "Alexa, ask ship review to turn on alerts".
+Alexa sends a permission request to your Alexa app. Allow it there.
+
+## What you can say
+
+Open the skill with "Alexa, open ship review", or put a request after
+"Alexa, ask ship review". Say it the way you'd say it to a colleague.
+A few examples:
 
 | You want to | You can say |
 |---|---|
-| Know where things stand | "What's up?" "Is anything blocking us from shipping today?" "How many blockers do we have?" |
-| See the detail | "Show it on the laptop." "Put the problems up on my tablet." "I want to see them on the TV." |
-| Decide | "Approve the first one on pull request 5 because it's only test data." "Reject the second one, it really does leak a phone number." "The first two on pull request 1 are false positives because they're test fixtures." |
-| Confirm or back out | "Yes, go ahead." "No, never mind." |
-| Get alerted | "Turn on alerts." (Alexa then sends a permission request to your Alexa app.) |
+| Know where things stand | "What's up?" "Can we ship today?" "Any blockers?" "Is anything blocked?" |
+| See the detail | "Show it on the laptop." "Put it on my tablet." "Send it to the TV." |
+| Decide | "Approve the first one on pull request 2 because it's only test data." "Reject the second one because it leaks a phone number." "Approve the first two on pull request 1 because they are test fixtures." |
+| Confirm or back out | "Yes." "No." "Cancel." |
+| Get alerted | "Turn on alerts." |
 
-SHIP asks when something is missing, such as "What's the reason?" or "Which
-screen?", and says no when a rule says no.
+SHIP asks when something is missing, such as "What's the reason?" or
+"Which screen?", and says no when a rule says no.
 
-No Echo? **[Try the simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**,
-a web page that talks to the same Relay server as the skill.
+## Try it
+
+- **[The simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
+  is a web page that acts as an MCP client of Relay. It opens a session,
+  lists the tools, asks for the status and shows the findings on a
+  screen. Decisions are made by voice on the Echo or in the review
+  console, not on this page.
+- **[The display page](https://pandayv.github.io/ship-engine/ship-display.html)**
+  registers a screen. Open it in one tab, then pick that screen in the
+  simulator and, when something is waiting, the findings arrive there.
+- **[The architecture page](https://pandayv.github.io/ship-engine/architecture.html)**
+  walks through every component.
 
 ## How it's built
 
-### Guiding principles
-
-**1. Last line of defense.**
-Assume nothing was checked before this. It doesn't matter who wrote the
-code, a person or an AI. It doesn't matter if the feature uses AI or not.
-
-**2. Grounded, not guessed.**
-Rely on facts, not memory or guesswork. Keep improving to make that
-grounding sharper.
-
-**3. Meet you where you are.**
-The answer finds you, on whatever device is nearest, not the other way
-around. Ask by voice from anywhere. See the detail on whatever screen is
-closest, a laptop, a TV, even a fridge.
-
-**4. Scalability and resilience.**
-Survive retries, failures, and heavy load without breaking.
-
-**5. Cost efficiency.**
-Free deterministic checks first, LLM only when needed. Only the right
-model for the job, measured.
-
-
 ### Architecture
 
-Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)).
+Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)). How a spoken decision is checked is in [docs/voice-resolution-workflow.md](docs/voice-resolution-workflow.md).
 
-The one piece worth calling out here: **each flagged issue in a PR is
-reviewed as its own independent, retryable job**, queued and picked up by
-an independently-scaling reviewer function, rather than one sequential
-pass through the whole PR. A fragment that fails outright retries
-automatically and lands in a dead-letter queue after repeated failure
-instead of vanishing. A fragment that's just slow, or that hits AWS's own
-request-rate limit, backs off and retries on its own without blocking
-anything else. A PR with several flagged issues takes about as long as
-its slowest single issue, not the sum of all of them, and nothing is
-silently dropped.
+**Each flagged issue in a PR is reviewed as its own independent,
+retryable job**, queued and picked up by an independently scaling
+reviewer function, rather than one sequential pass through the whole PR.
+A fragment that fails outright retries automatically and lands in a
+dead-letter queue after repeated failure. A fragment that is slow, or
+that hits the model provider's request-rate limit, backs off and retries
+without blocking anything else. A PR with several flagged issues takes
+about as long as its slowest single issue, not the sum of all of them.
+
+**The pull request check follows the whole lifecycle.** The webhook
+posts `ship/compliance` as `pending` the moment it accepts a commit.
+The result is `success`, `failure` or `error` afterwards, always posted
+to the PR's current head commit. A review ledger records which
+fragments the webhook queued, and a green result waits until every one
+has reported. If SHIP can't read its state, the check stays pending.
+
+| State of the findings | Check |
+|---|---|
+| A blocking finding waits for a decision | failure |
+| A rejected finding's code is still in the PR | failure |
+| Only flagged (non-blocking) findings wait | success, "flagged for review" |
+| Approved, or nothing found | success |
+| Review couldn't run (unreadable diff, repo check failed, fragment too large to queue) | error |
 
 ### Tech stack
 
 - **Agent framework:** [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
 - **Models:** Amazon Nova Lite as the primary Bedrock backend, chosen on
-  measured evidence rather than preference. Benchmarked against Claude
-  Haiku 4.5, Nova Pro, Qwen3-235B, GLM-5, and DeepSeek-V3.2 on the real
-  adversarial fixtures below: all six caught every genuine violation and
-  dismissed every look-alike, but per-model request-per-minute quota is
-  what actually bounds review throughput on this account (10/min for
-  Claude models vs. 200/min for Nova Lite). See the benchmark table in
-  [`src/agents/detector.py`](src/agents/detector.py). Google Gemini serves
-  as a credit-exhaustion fallback and a local Ollama model as a fully
-  offline reliability fallback. Both are switchable via one env var.
-- **Agent runtime:** Amazon Bedrock AgentCore Runtime, the same Detector
-  logic deployed to a real managed runtime ([`shipagentcore/`](shipagentcore/)),
-  callable in-process for local development or remotely for the deployed
-  path, toggled the same way
-- **Retrieval:** Amazon Bedrock Titan Embeddings, a small local
-  numpy cosine-similarity store (the sourced regulation corpus is a
-  few dozen chunks, so a hosted vector database would be pure overhead
-  at this scale)
-- **Compute:** two AWS Lambda functions, the webhook (fast-ack: verify,
-  screen, dispatch) and an independently-scaling fragment processor
-  (the actual model call, one fragment per invocation)
-- **Queueing:** Amazon SQS, with a dead-letter queue for fragments that
-  fail repeatedly and a concurrency cap on the processor so parallel
-  reviews stay within the account's real request-rate limit
-- **State:** Amazon DynamoDB, one table per access pattern. `ship-alerts` (every write
-  idempotent, so a webhook redelivery or a retried job can't create a
-  duplicate and can't silently re-open a decision a human already made),
-  `ship-repos` (which repositories SHIP watches, plus when each last sent
-  an event and when one last finished review. The gap between the two,
-  surfaced on Gate's connected-repos view, is what a silently broken
-  pipeline looks like before anyone needs to notice by accident, see
-  `src/storage/repo_store.py`), `ship-status` (a precomputed release
-  summary, so Relay's voice path is one `GetItem` regardless of how many
-  findings exist, since Alexa+ allows Relay half a second to answer and
-  aggregating on read would have blown that budget as findings
-  accumulate), `ship-device-connections` (which device is reachable under
-  which name, for the push path below), `ship-recent-reviews` (which
-  alert was shown on a screen and when, the ten-minute window
-  `request_risk_acceptance` checks before acting on a spoken
-  confirmation), `ship-pending-dispositions` (decisions staged by voice,
-  held until an explicit "proceed" writes them to `ship-alerts`), and
-  `ship-learned-patterns` (the generalized patterns above)
-- **Web:** FastAPI (the webhook route and the Gate console, one
-  deployable app, wrapped for Lambda via Mangum)
+  measured evidence. Benchmarked against Claude Haiku 4.5, Nova Pro,
+  Qwen3-235B, GLM-5 and DeepSeek-V3.2 on the planted violations and
+  look-alikes in the demo repository's PRs: all caught every violation
+  and dismissed every look-alike, so per-model request-per-minute quota
+  decided it (10/min for Claude models, 200/min for Nova Lite on this
+  account). See the benchmark table in
+  [`src/agents/detector.py`](src/agents/detector.py). Google Gemini
+  serves as a credit-exhaustion fallback and a local Ollama model as an
+  offline fallback, both switchable with one environment variable.
+- **Agent runtime:** Amazon Bedrock AgentCore Runtime hosts the same
+  Detector logic ([`shipagentcore/`](shipagentcore/)). It is callable
+  in-process for local development or remotely for the deployed path.
+- **Retrieval:** Amazon Bedrock Titan Embeddings and a small local numpy
+  cosine-similarity store. The sourced regulation corpus is small, so a
+  hosted vector database would be overhead.
+- **Compute:** AWS Lambda functions for the webhook (verify, screen,
+  dispatch), the fragment processor (the model call, one fragment per
+  invocation), Relay, the WebSocket device gateway and the Alexa Skill.
+- **Queueing:** Amazon SQS with a dead-letter queue, and a concurrency
+  cap on the processor so parallel reviews stay within the account's
+  request-rate limit.
+- **State:** Amazon DynamoDB, one table per access pattern.
+  `ship-alerts` holds findings (every write is idempotent, and a retry
+  can't reopen a decision). `ship-repos` holds watched repositories and
+  when each last sent an event and last finished a review.
+  `ship-status` holds the precomputed release summary, so Relay's voice
+  path is one `GetItem`, and the per-pull-request review ledger.
+  `ship-recent-reviews` holds which finding was shown on a screen, when,
+  and under what number. `ship-pending-dispositions` holds decisions
+  staged by voice. `ship-device-connections` holds open screens.
+  `ship-push-subscriptions` and `ship-pending-display` hold the browsers
+  registered for alerts and the findings held for them.
+  `ship-alexa-users` holds who SHIP may notify. `ship-learned-patterns`
+  holds patterns for Detector.
+- **Web:** FastAPI (the webhook route and the Gate console in one
+  deployable app, wrapped for Lambda with Mangum).
 - **Voice/MCP:** [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
   (Streamable HTTP, spec `2025-11-25`) powers Relay
   ([`src/relay/`](src/relay/)), deployed as its own Lambda with
-  [SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html)
-  enabled. A fresh ASGI app is built per invocation, a genuine SDK/Lambda
-  incompatibility rather than a style choice. The docstring at the
-  top of [`src/relay/server.py`](src/relay/server.py) has the details.
-- **Voice:** an Alexa Skill ([`alexa-skill/`](alexa-skill/)) stands in for an
-  Alexa+ add-on. Alexa does the speech. Common requests are answered by plain
-  code; anything said in the person's own words goes to Amazon Nova Lite on
-  Bedrock, which picks the Relay tools to call. The model proposes and plain
-  code decides: it can only reach four tools, a screen must have been named,
-  a decision needs a reason in the person's own words, and what is spoken back
-  is Relay's own sentence.
-- **Push:** an Amazon API Gateway WebSocket API plus a small dedicated
-  Lambda ([`device_gateway_handler.py`](device_gateway_handler.py))
-  handling connect/disconnect/register, deliberately separate from Relay
-  so Relay's own IAM role stays scoped to exactly what answering a
-  question requires. A display sits idle with no polling until Relay
-  pushes a finding to it; a real compliance event happens on the order
-  of weeks, not seconds, so a poll-every-few-seconds design would spend
-  nearly all its traffic finding nothing changed
+  [SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html).
+  A fresh ASGI app is built per invocation because the SDK's session
+  manager can run its lifespan only once per instance. The docstring at
+  the top of [`src/relay/server.py`](src/relay/server.py) has the details.
+- **Alexa Skill:** [`alexa-skill/`](alexa-skill/) stands in for an Alexa+
+  add-on. Common requests have their own intents and are answered by
+  plain code. Anything else goes to Amazon Nova Lite on Bedrock, which
+  chooses among `release_status`, `display_on`, `stage_decisions` and
+  `proceed`. Plain code then checks the choice. The model never sees
+  finding text. It must name a screen the person used, give numbers the
+  person saw, and give a reason built from the person's own words. Only
+  the person's plain yes can apply a staged decision. What is spoken back
+  is Relay's sentence, not the model's. If the model is slow, simple
+  rules answer instead.
+- **Screens:** an API Gateway WebSocket API with a small dedicated Lambda
+  ([`device_gateway_handler.py`](device_gateway_handler.py)) for connect,
+  disconnect, register, subscribe and acknowledge. It is separate from
+  Relay so Relay's IAM role stays narrow. An open page sits idle with no
+  polling until Relay pushes to it. A closed page that was registered for
+  alerts gets a Web Push notification signed with a VAPID key held in
+  Parameter Store, and Relay holds the findings for it. A page
+  re-registers every five minutes. A registration older than two hours,
+  or silent for fifteen minutes, is treated as gone. Every push has a
+  time cap so a dead connection can't use up the skill's few seconds.
+- **Echo alerts:** the Alexa Proactive Events API, with the skill's
+  credentials in Parameter Store. SHIP sends one notification per new
+  finding.
+- **Observability:** Relay writes one audit line per decision and per
+  refusal to CloudWatch. It carries the tool, outcome, pull request,
+  finding ids and a reason code, never the reason or finding text.
+- **IAM:** reference policies for each Lambda role are in
+  [`infra/iam/`](infra/iam/). They are not applied by the repo.
+
+### Relay's tools
+
+Relay is the MCP server. Each tool declares the surface its output is for,
+and the server enforces it. A spoken sentence is capped at 180 characters
+with no line breaks, so a list of findings can't be spoken.
+
+| Tool | Surface | What it does |
+|---|---|---|
+| `release_status` | Voice | One sentence from the precomputed summary: counts, where to look, and which screens exist. |
+| `blocked_pull_requests` | Screen | Every pull request with open findings, numbered. Records them as shown. |
+| `finding_detail` | Screen | One finding in full. Records it as shown. |
+| `display_on` | Action | Pushes the findings to a named screen, or sends a notification if the page is closed. Reports plainly when neither is possible. |
+| `connected_screens` | Action | Screens that are open now or registered for alerts. |
+| `findings_routing` | Action | Which findings were shown, and under what number. Records nothing. |
+| `stage_decisions` | Action | Validates a batch of decisions for one pull request and stages it. Applies nothing. |
+| `proceed` | Action | Applies the staged batch after re-checking each finding. Reports each outcome. |
+| `cancel_pending` | Action | Drops the staged batch. |
+| `request_risk_acceptance` | Action | Approves one finding in a single step under the same two server rules. The skill's model can't reach it. |
 
 ## Setup
 
-Deploying this yourself needs a real AWS account (Bedrock, Lambda,
-DynamoDB, SQS, API Gateway) and about 30–45 minutes, less with
-[`deploy.sh`](deploy.sh), which scripts most of it. Full step-by-step
+Deploying this yourself needs an AWS account (Bedrock, Lambda, DynamoDB,
+SQS, API Gateway) and a GitHub repository to protect. Step-by-step
 walkthrough, including troubleshooting for a brand-new AWS account:
-[SETUP.md](SETUP.md).
+[SETUP.md](SETUP.md). [`deploy.sh`](deploy.sh) scripts part of it.
+Reference IAM policies: [`infra/iam/`](infra/iam/).
 
 ## Project structure
 
@@ -249,76 +335,84 @@ walkthrough, including troubleshooting for a brand-new AWS account:
 src/
   agents/
     screener.py        # Fast regex/AST pre-filter + per-fragment isolation
-    detector.py         # Strands Agent — RAG-grounded semantic judgment
-    triage.py           # Risk-based routing, per-category thresholds
+    detector.py        # Strands Agent, RAG-grounded semantic judgment
+    triage.py          # Risk-based routing, per-category thresholds
   api/
-    main.py             # Webhook route, fast-ack + fragment dispatch
-    dashboard.py         # Gate — the human review console
-    alexa_notify.py      # Sends the Echo notification when a finding is recorded
-    github_client.py    # Real PR-diff fetching via the GitHub API
-    github_writeback.py # Posts findings/decisions back to the PR (comment + commit status)
+    main.py             # Webhook route, fast-ack, fragment dispatch, status lifecycle
+    dashboard.py        # Gate, the human review console
+    alexa_notify.py     # Sends the Echo notification when a finding is recorded
+    github_client.py    # PR-diff fetching via the GitHub API
+    github_writeback.py # Comments and the ship/compliance commit status
   aws/
     bedrock_session.py  # Shared Bedrock session + adaptive-retry config
   rag/
-    chunker.py           # Regulation text -> citable paragraph chunks
-    vector_store.py      # Local embedding store + retrieval
+    chunker.py          # Regulation text -> citable paragraph chunks
+    vector_store.py     # Local embedding store + retrieval
+    embedding_cache.py  # Cached corpus embeddings
+    pattern_store.py    # Learned patterns for Detector
   storage/
-    alert_store.py       # DynamoDB — idempotent alert persistence
-    repo_store.py         # DynamoDB — which repos SHIP watches
-    status_store.py       # DynamoDB — precomputed release summary Relay's voice path reads
-    device_store.py        # DynamoDB — which display device is reachable under which name
-    alexa_user_store.py    # DynamoDB — which Alexa users SHIP may notify
-  taxonomy.py            # Single source of truth: detector <-> corpus <-> Screener trigger mapping
+    alert_store.py      # DynamoDB: idempotent alerts, decisions, held rejections
+    repo_store.py       # DynamoDB: which repos SHIP watches
+    status_store.py     # DynamoDB: precomputed release summary
+    review_ledger.py    # Which fragments of a commit's review have reported
+    session_store.py    # Which finding was shown, when, under what number
+    pending_store.py    # Decisions staged by voice
+    device_store.py     # Open screens by name
+    push_store.py       # Browsers registered for alerts, findings held for them
+    alexa_user_store.py # Which Alexa users SHIP may notify
+  taxonomy.py           # Single source of truth: detector <-> corpus <-> Screener trigger mapping
   relay/
-    server.py             # Relay — the MCP server; the voice/screen modality split lives here
-    modality.py            # Enforces the spoken-response character cap and forbids line breaks
-    readmodel.py           # Voice path (reads the precomputed summary) vs. screen path (reads alerts)
-    push.py                 # Delivers a payload to one named device over its open connection
+    server.py           # Relay, the MCP server and its tools
+    modality.py         # Enforces the spoken-response cap
+    readmodel.py        # Voice path (summary) vs. screen path (alerts)
+    push.py             # Delivers a payload to a named screen over its open connection
+    webpush.py          # Notifies a screen whose page is closed
+    audit.py            # One audit line per decision and refusal
+  dashboard_ui/templates/  # Gate pages
 alexa-skill/
-  lambda/lambda_function.py  # The Alexa Skill: turns what Alexa hears into calls to Relay over MCP
+  lambda/lambda_function.py  # The Alexa Skill: Alexa intents -> Relay over MCP
+  lambda/orchestrator.py     # Free speech: the model proposes, plain code checks
   skill-package/             # Skill manifest and language model
-rag_corpus/               # Sourced regulation/standard text, verbatim
+infra/iam/                 # Reference IAM policies, one per Lambda role
+rag_corpus/                # Sourced regulation/standard text, verbatim
 shipagentcore/             # AgentCore Runtime deployment of Detector
 docs/
-  alexa-simulator.html     # Web simulator of the Alexa+ flow; an MCP client of the deployed Relay
-  ship-mcp-client.js        # The MCP client the simulator uses: initialize, tools/list, tools/call
-  ship-display.html         # Any-device receiving surface — names itself, waits for a push
-  ship-render.js            # Finding-rendering logic shared by both pages above
-  architecture.html          # Full pipeline diagram
+  alexa-simulator.html     # Web simulator; an MCP client of Relay
+  ship-mcp-client.js       # The MCP client the simulator uses: initialize, tools/list, tools/call
+  ship-display.html        # Screen page: names itself, receives findings, turns on alerts
+  ship-render.js           # Findings table shared by both pages above
+  ship-sw.js               # Service worker that shows the alert notification
+  architecture.html        # Full pipeline diagram
+  voice-resolution-workflow.md  # How a spoken decision is checked
 scripts/
-  healing_loop.py          # Periodic corpus-grounding check, decoupled from the hot path
-  benchmark_models.py      # The adversarial benchmark behind the Nova Lite model choice
+  healing_loop.py          # Periodic corpus-grounding check
+  pattern_miner.py         # Extracts patterns from resolved findings
+  benchmark_models.py      # The benchmark behind the Nova Lite choice
   precompute_embeddings.py # Regenerates rag_corpus/'s cached embeddings
 lambda_handler.py          # Webhook Lambda entrypoint
 fragment_lambda_handler.py # Fragment-processor Lambda entrypoint
-relay_lambda_handler.py    # Relay's Lambda entrypoint — builds a fresh app per invocation, see server.py
-device_gateway_handler.py  # WebSocket connect/disconnect/register Lambda entrypoint
-tests/                     # Test suite, no AWS credentials required to run
+relay_lambda_handler.py    # Relay entrypoint: builds a fresh app per invocation
+device_gateway_handler.py  # WebSocket connect/disconnect/register/subscribe/ack entrypoint
+tests/                     # Test suite, runs without AWS credentials
 ```
 
 ## Status & what's next
 
-The full review pipeline, Screener through Gate, is live and deployed.
-The PR's own merge button is gated by a commit status, not a dashboard
-entry someone has to remember to check. Freezing an alert sets
-`ship/compliance` to failing (promotable to a required check in branch
-protection); resolving one recomputes it, closing the loop from detection
-to a human decision to the merge button itself.
-
-Relay (the MCP server), the Alexa Skill, the web simulator, and cross-device
-push are also live. The
-[Integrated Alexa+ experience](#integrated-alexa-experience)
-section above walks through it.
+The review pipeline, Gate, Relay, the Alexa Skill, the web simulator and
+screen delivery (open pages and Web Push) are built.
 
 What's not built yet:
-- **Auto-applying the suggested fix.** Approving an alert doesn't push
-  the patch to the PR yet; a human applies it after reviewing it in
-  Gate. A GitHub-API integration away, not an architecture change.
-- **Scheduling the Healing Loop.** [Healing Loop](scripts/healing_loop.py)
-  re-checks that sourced regulation text still matches the law, catching
-  anything a regulator has since amended. It runs today as a manual
-  script, not yet on a schedule or alert channel.
-- **A real Alexa+ add-on.** Add-on tooling is limited to select partners
+- **Auto-applying the suggested fix.** Approving a finding doesn't push
+  the patch to the PR; a person applies it after reviewing it in Gate.
+  A GitHub-API integration away, not an architecture change.
+- **Scheduling the Healing Loop and the pattern miner.**
+  [Healing Loop](scripts/healing_loop.py) re-checks that sourced
+  regulation text still matches the law. Both run as manual scripts, not
+  on a schedule or alert channel.
+- **A dead-letter consumer.** A review whose queue message exhausts its
+  retries leaves the check pending, which is the safe direction. A
+  consumer would turn that into an explicit error status.
+- **The Alexa+ add-on itself.** Add-on tooling is limited to select partners
   today. When it opens, the add-on points at the same Relay server and the
   skill steps aside.
 - **Detectors that need more than a single PR diff.** Infrastructure or

@@ -24,27 +24,31 @@ architecture genuinely needed each piece.
   accuracy, so per-model request-per-minute quota (10/min for Claude
   models, 200/min for Nova Lite on this account) turned out to be the
   actual bound on review throughput. Nova Lite is the production model on
-  evidence, not brand familiarity.
+  evidence, not brand familiarity. The Alexa Skill also calls Nova Lite to
+  choose Relay tools from free speech.
 - **Amazon Bedrock AgentCore Runtime** is Detector's deployed runtime, a
   real managed agent runtime rather than a Lambda-hosted approximation.
 - **Amazon Bedrock Titan Embeddings** handles RAG retrieval over the
   sourced regulation corpus (GDPR, EU AI Act, OWASP text).
-- **AWS Lambda** runs four functions, each scoped to one job: the webhook
-  (fast-ack only), the fragment processor (the actual model call, one
-  fragment per invocation, SQS-triggered), Relay (the MCP server, with
-  SnapStart enabled), and the device gateway (WebSocket
-  connect/disconnect/register). Deliberately not one do-everything
-  function. A Lambda's blast radius and IAM scope should match what it
+- **AWS Lambda** runs one function per job: the webhook (fast-ack only),
+  the fragment processor (the actual model call, one fragment per
+  invocation, SQS-triggered), Relay (the MCP server, with SnapStart
+  enabled), the device gateway (WebSocket connect, disconnect, register,
+  subscribe and acknowledge), and the Alexa Skill (speech to Relay calls).
+  Deliberately not one do-everything function. A Lambda's blast radius and IAM scope should match what it
   actually needs, not the union of everything the project does.
 - **Amazon SQS** decouples fragment review from the webhook's fast-ack
   requirement, with a dead-letter queue for genuine failures and a
   concurrency cap that keeps parallel reviews within the account's real
   Bedrock rate limit.
 - **Amazon DynamoDB** holds one table per access pattern, each narrow: idempotent alert persistence, which repos are watched
-  and their received-vs-reviewed health, a precomputed release summary,
-  which device is reachable under which name for the push path, which
-  alert was shown on a screen recently, decisions staged by voice until
-  an explicit "proceed", and patterns learned from dismissed findings. The summary table exists because Relay's voice
+  and their received-vs-reviewed health, a precomputed release summary
+  (which also holds the per-pull-request review ledger), which device is
+  reachable under which name for the push path, which browsers registered
+  for alerts and the findings held for them, which alert was shown on a
+  screen recently and under what number, decisions staged by voice until
+  the person confirms, which Alexa users SHIP may notify, and patterns
+  learned from resolved findings. The summary table exists because Relay's voice
   path needs to be one `GetItem` regardless of how many findings exist.
   The half-second Alexa+ budget would not survive aggregating on
   read.
@@ -53,10 +57,17 @@ architecture genuinely needed each piece.
   A genuine compliance event happens on the order of weeks, and a display
   polling every few seconds to catch that would spend nearly all its
   traffic finding nothing changed. An idle WebSocket connection costs
-  nothing until there's something to say.
-- **AWS IAM** gives every Lambda its own role, scoped to exactly what
-  that function does. Relay's role, for instance, can push to a WebSocket
-  connection and read two specific tables. Nothing else.
+  nothing until there's something to say. A screen whose page is closed
+  gets a Web Push notification instead, and Relay holds the findings for it.
+- **AWS Systems Manager Parameter Store** holds the Web Push signing key
+  and the skill's Login with Amazon credentials as SecureString
+  parameters, so neither sits in a function's environment.
+- **AWS IAM** gives every Lambda its own role. Reference policies in
+  [`infra/iam/`](infra/iam/) list what each function's code calls and
+  nothing else. Relay's, for instance, covers alert reads and decision
+  writes, the summary, what was shown, staged decisions, the screen
+  registries, a push to a WebSocket connection and one Parameter Store key.
+  The repo does not apply them.
 
 ### Strands Agents SDK
 
@@ -87,8 +98,8 @@ look-alikes, not just the happy path.
 
 ### Amazon Bedrock
 
-**Used for:** all model inference (Detector's classification calls) and
-embeddings (RAG retrieval).
+**Used for:** all model inference (Detector's classification calls and the
+Alexa Skill's free-speech tool selection) and embeddings (RAG retrieval).
 
 **What worked well:** the adaptive retry mode
 (`Config(retries={"mode": "adaptive"})`) genuinely solved the
@@ -144,7 +155,7 @@ budget real time for the CLI-migration surprise if starting fresh today.
 
 ### AWS Lambda (including SnapStart)
 
-**Used for:** all four of SHIP's compute functions.
+**Used for:** all of SHIP's compute functions.
 
 **What worked well:** SnapStart genuinely works as advertised once
 configured correctly. A restored invocation measured at 440ms against a
@@ -178,7 +189,8 @@ server on Lambda would hit the same wall.
 ### Amazon DynamoDB
 
 **Used for:** all persistent state: alerts, watched repos, the
-precomputed release summary, device connections.
+precomputed release summary and review ledger, device connections, alert
+registrations, staged decisions.
 
 **What worked well:** on-demand billing meant zero capacity-planning
 decisions during a time-constrained build. Conditional writes made
@@ -258,7 +270,7 @@ requirement was undiscoverable from the documentation until we were
 already deep into unrelated AWS configuration work.
 
 **Would we build with it again?** **Yes, via the simulated-experience
-path**, which worked exactly as documented and cost none of the above. We
+path and a custom skill**, which cost none of the above. We
 would not attempt the CLI/device path again without first confirming an
 Amazon Solutions Architect relationship exists. That's the actionable
 suggestion we'd make: state that requirement first, before any AWS setup

@@ -470,3 +470,11 @@ def test_leaving_still_works_when_relay_is_down(skill):
     event = request_event(intent("AMAZON.StopIntent"))
     event["session"] = {"attributes": {"pending": {"repo": "r", "pr_number": 2}}}
     assert skill.handler(event, None)["response"]["shouldEndSession"] is True
+
+
+def test_the_word_relay_tells_people_to_say_is_understood_as_a_yes():
+    # Relay asks the person to "say proceed". If the language model did not map that word to the
+    # yes intent, Alexa would answer "sorry, I missed that" at the last step of a decision.
+    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
+    yes = next(i for i in model["interactionModel"]["languageModel"]["intents"] if i["name"] == "AMAZON.YesIntent")
+    assert "proceed" in yes["samples"]

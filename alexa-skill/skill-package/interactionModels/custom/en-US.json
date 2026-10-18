@@ -108,7 +108,18 @@
         },
         {
           "name": "AMAZON.YesIntent",
-          "samples": []
+          "samples": [
+            "proceed",
+            "yes proceed",
+            "go ahead and proceed",
+            "please proceed",
+            "apply it",
+            "apply them",
+            "yes apply it",
+            "do it",
+            "yes do it",
+            "yes go ahead"
+          ]
         },
         {
           "name": "AMAZON.NoIntent",

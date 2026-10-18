@@ -182,7 +182,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <figure>
 <div class="diagram-frame">
-<svg viewBox="0 0 1260 720" role="img" aria-label="Two deployables. ship-webhook, the always-on Lambda behind the GitHub webhook, does only fast work: verify the HMAC signature, check the repo against the connected-repositories table, run Screener's whole-diff precheck, and if anything matches, split the diff into fragments, screen each one individually, and send one SQS message per flagged fragment. If nothing matches, it replies pass immediately at no further cost. ship-fragment-processor, a second Lambda triggered by that queue and scaled independently with a concurrency cap, does the real work one fragment at a time: Detector reasons over the fragment grounded in retrieved regulation text, Triage routes the verdict against a per-category risk threshold, and anything at or above it is stored as a frozen alert in DynamoDB and surfaced on the Gate dashboard, where a human approves or rejects it as a one-way, guarded decision. A fragment that fails outright is retried automatically by SQS and moved to a dead-letter queue after repeated failure; a fragment that is merely slow, or that trips AWS's own request-rate limit, backs off and retries on its own without blocking any other fragment." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
+<svg viewBox="0 0 1260 720" role="img" aria-label="Two deployables. ship-webhook, the always-on Lambda behind the GitHub webhook, does only fast work: verify the HMAC signature, check the repo against the connected-repositories table, post a pending ship/compliance status, run Screener's whole-diff precheck, and if anything matches, split the diff into fragments, screen each one individually, record the expected fragments in a review ledger and send one SQS message per flagged fragment. If nothing matches, it posts a passing status immediately at no further cost. ship-fragment-processor, a second Lambda triggered by that queue and scaled independently with a concurrency cap, does the model work one fragment at a time: Detector reasons over the fragment grounded in retrieved regulation text, Triage routes the verdict against a per-category risk threshold, and anything at or above it is stored as an alert in DynamoDB and surfaced in Gate or by voice, where a person approves (accepts the risk, the finding stops blocking) or rejects (the finding is real, the pull request stays blocked until the code changes). Every fragment, whatever its outcome, reports to the review ledger, and the ship/compliance status is recomputed from stored alerts and posted to the pull request's current head: it turns green only after every fragment has reported. A fragment that fails outright is retried by SQS and moved to a dead-letter queue after repeated failure; a fragment that is merely slow, or that trips the provider's request-rate limit, backs off and retries on its own without blocking any other fragment." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
 <defs>
   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
@@ -204,8 +204,9 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <line x1="170" y1="140" x2="202" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
 
   <rect x="205" y="110" width="170" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="290" y="134" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Verify + allowlist</text>
-  <text x="290" y="150" text-anchor="middle" fill="currentColor" font-size="10">HMAC signature, repo check</text>
+  <text x="290" y="130" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Verify + allowlist</text>
+  <text x="290" y="145" text-anchor="middle" fill="currentColor" font-size="10">HMAC signature, repo check</text>
+  <text x="290" y="159" text-anchor="middle" fill="currentColor" font-size="9.5">posts status: pending</text>
 
   <line x1="375" y1="140" x2="407" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
 
@@ -308,13 +309,21 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <text x="1075" y="597" text-anchor="middle" fill="var(--human)" font-size="9" font-weight="600">reject?</text>
 
   <rect x="1000" y="640" width="220" height="55" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="1110" y="662" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Resolved</text>
-  <text x="1110" y="678" text-anchor="middle" font-size="10" fill="currentColor">one-way, guarded</text>
+  <text x="1110" y="656" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Decided, once</text>
+  <text x="1110" y="670" text-anchor="middle" font-size="9.5" fill="currentColor">approve: stops blocking</text>
+  <text x="1110" y="684" text-anchor="middle" font-size="9.5" fill="currentColor">reject: PR stays blocked</text>
   <path d="M 1075 625 L 1110 638" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <rect x="1000" y="435" width="220" height="70" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
+  <text x="1110" y="456" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">ship/compliance check</text>
+  <text x="1110" y="472" text-anchor="middle" font-size="10" fill="currentColor">pending, then success / failure / error</text>
+  <text x="1110" y="487" text-anchor="middle" font-size="9.5" fill="currentColor">green only after every fragment reported</text>
+  <path d="M 935 400 L 1000 455" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <path d="M 740 560 L 740 528 L 980 528 L 980 485 L 998 485" stroke="currentColor" marker-end="url(#arrow)"></path>
+  <path d="M 1075 555 L 1095 507" stroke="currentColor" marker-end="url(#arrow)"></path>
 </g>
 </svg>
 </div>
-<figcaption>The two deployables and how they connect: the always-on webhook that only ever does cheap work, and the independently-scaling processor that does one flagged fragment's real review per invocation.</figcaption>
+<figcaption>The two deployables and how they connect: the always-on webhook that only does cheap work, and the independently scaling processor that reviews one flagged fragment per invocation. The check on the pull request is recomputed from stored alerts by every path that touches them.</figcaption>
 </figure>
 
 <div class="walkthrough">
@@ -326,7 +335,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <div class="trigger-row">
     <div class="trigger active">
       <div class="label">GitHub webhook: a pull request opens or updates</div>
-      <div class="desc">The only trigger. No polling, no scheduled scan — SHIP reacts to the same event GitHub already fires for every PR.</div>
+      <div class="desc">The only trigger for a review. No polling, no scheduled scan. SHIP reacts to the pull_request event GitHub already fires (opened, synchronize, reopened, edited).</div>
     </div>
   </div>
 </div>
@@ -343,7 +352,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">Verify + allowlist</span>
           <span class="step-kind tool">tool</span>
         </div>
-        <div class="step-desc">HMAC-SHA256 signature check against the configured webhook secret (fails closed if that secret is ever missing — there is no silent "allow unsigned" default), then the named repo against the connected-repositories table (one GetItem, point-lookup, fails closed if the table can't be read). A payload naming any repo not connected through Gate is rejected before it can spend this service's GitHub token or model budget.</div>
+        <div class="step-desc">HMAC-SHA256 signature check against the configured webhook secret (fails closed if that secret is ever missing — there is no silent "allow unsigned" default), then the named repo against the connected-repositories table (one GetItem, point-lookup, fails closed if the table can't be read). A payload naming any repo not connected through Gate is rejected before it can spend this service's GitHub token or model budget. Once a commit is accepted, the webhook posts the <code class="mono">ship/compliance</code> status as <code class="mono">pending</code> to the commit GitHub just reported, so a required check is never satisfied by absence. If the repository can't be verified, or the diff can't be read, it posts <code class="mono">error</code> instead.</div>
       </div>
     </div>
 
@@ -376,7 +385,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">Enqueue</span>
           <span class="step-kind tool">tool</span>
         </div>
-        <div class="step-desc">One SQS message per flagged fragment — not one message for the whole PR. This is the design choice the rest of this document explains: making each fragment its own unit of work is what everything downstream depends on.</div>
+        <div class="step-desc">One SQS message per flagged fragment, not one message for the whole PR. Making each fragment its own unit of work is what everything downstream depends on. Before queueing, the webhook writes a review ledger for the pull request (an item keyed <code class="mono">review#&lt;repo&gt;#&lt;pr&gt;</code> in <code class="mono">ship-status</code>) listing the fragment keys this commit's review must hear back from. A fragment too large to queue stays in that list, never reports, and posts an <code class="mono">error</code> status.</div>
       </div>
     </div>
   </div>
@@ -390,13 +399,11 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   in a PR, one after another — works fine for a PR with one or two issues.
   It stops working once a PR has enough flagged issues that reviewing all
   of them, one at a time, takes longer than that single Lambda invocation
-  is allowed to run: AWS Lambda has a hard, non-negotiable ceiling on how
+  is allowed to run: AWS Lambda has a hard ceiling of 900 seconds on how
   long one invocation may run, and nothing resets that clock partway
-  through. A live test against this exact failure mode confirmed it
-  directly — a PR with several genuinely different flagged issues had its
-  review silently cut short mid-way, with no error surfaced anywhere; the
-  issues reviewed before the cutoff were recorded correctly, the rest
-  simply never got a turn.
+  through. A review that hits the ceiling stops with no error surfaced
+  anywhere; the fragments reviewed before the cutoff are recorded and the
+  rest never get a turn.
   </p>
   <p class="step-desc" style="max-width:none">
   Making each fragment its own independent, queued job removes the shared
@@ -442,7 +449,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">Gate: where most alerts resolve</span>
           <span class="step-kind human">human</span>
         </div>
-        <div class="step-desc">A token-gated dashboard (deliberately a separate credential from the webhook's own — compromising one can't silently disable the other) listing every frozen alert with its file, category, risk score, plain-English summary, citation, and suggested patch. The token is only ever pasted once: it establishes a signed-in session cookie, so every page after that is a plain link, not a secret sitting in a URL. Approve/Reject is a one-way, guarded transition: a duplicate webhook delivery or a retried job cannot silently reopen or overwrite a decision a human already made. The same decision is posted back to the PR as a comment and folded into a recomputed <code class="mono">ship/compliance</code> commit status — resolving the last blocking finding is what turns the check green. Gate also has a history view (every past disposition, with the reason a human gave) and a connected-repos view (connecting a repository is a form submission here, not a redeploy). A spoken confirmation through Relay can resolve one too, under a narrower condition — see below.</div>
+        <div class="step-desc">A token-gated dashboard (a separate credential from the webhook's, so compromising one can't disable the other) listing every finding still waiting for a decision, grouped by pull request and numbered the way Relay numbers them: blockers first, then by detector theme, then by risk score. Each finding shows file, category, risk score, plain-English summary, citation and suggested patch. The token is pasted once and becomes an httponly session cookie that holds the shared token and lasts a week, so later pages are plain links. A person decides with a written reason. <b>Approve</b> accepts the risk: the finding stops blocking. <b>Reject</b> says the finding is real: it leaves this list because it is decided, but the pull request stays blocked until a later commit no longer contains the flagged code. For a blocking finding the buttons read "Accept risk &amp; merge" and "Confirm &mdash; needs a fix". The transition is one-way and guarded: a redelivered webhook or a retried job cannot reopen or overwrite a decision. The decision is posted to the PR as a comment ("Risk accepted" or "Rejected &mdash; this needs a code fix") and the commit status is recomputed. Gate also has a history view (every past decision with its reason; rejected findings that still hold a merge are marked) and a connected-repos view (connecting a repository is a form submission here, not a redeploy). A person can also decide by voice through Relay, under the rules further down.</div>
       </div>
     </div>
   </div>
@@ -453,9 +460,22 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
   <div class="zone-note">Two independent mechanisms, for two different failure shapes.</div>
   <div class="route-split">
     <div class="branch-item" style="background:var(--data-tint)"><b>Slow, or rate-limited</b>A fragment that hits the model provider's own request-rate limit backs off and retries automatically (adaptive retry, configured once at the shared client rather than a hand-guessed delay) &mdash; it does not fail, it just takes longer, and it never blocks any other fragment's own review.<div class="lens-tags"><span class="lens-tag">adaptive backoff</span></div></div>
-    <div class="branch-item" style="background:var(--data-tint)"><b>Genuinely broken</b>A fragment that fails outright (a malformed message, an unrecoverable error) is retried a bounded number of times by SQS itself, then moved to a dead-letter queue instead of being retried forever or silently dropped &mdash; visible for manual triage, not lost.<div class="lens-tags"><span class="lens-tag">dead-letter queue</span></div></div>
+    <div class="branch-item" style="background:var(--data-tint)"><b>Failing outright</b>A fragment that fails outright (a malformed message, an unrecoverable error) is retried a bounded number of times by SQS itself, then moved to a dead-letter queue instead of being retried forever or silently dropped. It stays visible for manual triage. Because it never reports to the review ledger, the pull request's check stays pending. Nothing consumes the dead-letter queue yet, so no explicit error status is posted for it.<div class="lens-tags"><span class="lens-tag">dead-letter queue</span></div></div>
   </div>
   <p class="step-desc" style="max-width:none;margin-top:14px">Every alert write is idempotent regardless of which path a fragment took to get there: the alert's own ID is derived from the specific violation (repo, PR, file, category, and the fragment text itself), not a random ID. A retried or redelivered fragment that reaches the same real violation overwrites the same row rather than creating a duplicate — and a write can never re-freeze or overwrite an alert a human has already resolved.</p>
+</div>
+
+<div class="zone">
+  <div class="zone-label">The check on the pull request</div>
+  <div class="zone-note"><code class="mono">ship/compliance</code> is a commit status. A required check can only be satisfied by a status, so every accepted commit ends in one. Make it required in branch protection and it stops the merge button.</div>
+  <div class="route-split">
+    <div class="branch-item" style="background:var(--data-tint)"><b>pending</b>Posted the moment the webhook accepts a commit. It is also what a green result becomes while sibling fragments are still being judged, and what stays in place when SHIP can't read its own state.</div>
+    <div class="branch-item" style="background:var(--data-tint)"><b>success</b>Nothing waits for a decision, or only flagged (non-blocking) findings do, or findings were approved. Posted only after every queued fragment has reported.</div>
+    <div class="branch-item" style="background:var(--human-tint)"><b>failure</b>A blocking finding waits for a decision, or a rejected finding's flagged code is still in the PR. Posted at once, without waiting for the other fragments.</div>
+    <div class="branch-item" style="background:var(--infra-tint)"><b>error</b>A review that could not run: the diff could not be read, the repository allowlist could not be checked, the commit could not be queued, or a fragment was too large to queue.</div>
+  </div>
+  <p class="step-desc" style="max-width:none;margin-top:14px">One function, <code class="mono">derive_commit_status</code>, maps stored alerts to a state, and every path that posts a verdict uses it: the webhook, the fragment processor, Gate and Relay's voice decisions. Concurrent writers therefore converge on the same answer, and ordering stops mattering. The status goes to the pull request's <em>current</em> head commit, read from GitHub. The commit stored on an alert is only the fallback if that lookup fails, so a decision made long after the commit it was found on can't leave a stale status on the head.</p>
+  <p class="step-desc" style="max-width:none">The review ledger keeps a green result honest. Each fragment ticks itself off when it finishes, whether or not it found anything, and a duplicate SQS delivery counts once. A newer commit replaces the ledger, and a result for an older commit is ignored. If the ledger can't be read, the check stays pending and the reason is logged. A rejected finding is released by the next commit: the webhook compares that commit's flagged fragments with each held rejection and releases the ones whose fragment is gone. If that step fails, the rejection keeps blocking.</p>
 </div>
 
 <div class="zone">
@@ -475,7 +495,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <div class="zone">
   <div class="zone-label">Relay &middot; the MCP server behind the Alexa Skill</div>
-  <div class="zone-note">A completely separate Lambda from the review pipeline above. Relay carries no judgment of its own &mdash; Detector already reasoned, Triage already routed, Gate already recorded whatever a human decided. Relay only reads that and routes it to a surface.</div>
+  <div class="zone-note">A separate Lambda from the review pipeline. Relay judges no code: Detector already reasoned, Triage already routed, and a person already recorded what they concluded. Relay reads that, routes it to a surface, and enforces the rules for deciding by voice. It is built for a 500 ms answer budget (the Alexa+ requirement noted in its code), which is why it never calls a model.</div>
   <div class="pipeline">
     <div class="step-row">
       <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
@@ -484,7 +504,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">release_status</span>
           <span class="step-kind tool">tool, voice-safe</span>
         </div>
-        <div class="step-desc">The only tool ever read aloud. Reads a precomputed summary (<code class="mono">ship-status</code>, one <code class="mono">GetItem</code>) rather than aggregating on request &mdash; Alexa+ allows roughly half a second round-trip, and aggregating over every alert on every ask would blow that budget as findings accumulate. Hard-capped to one sentence with no line breaks: a finding list physically cannot be spoken, enforced by the server, not a prompt asked to behave.</div>
+        <div class="step-desc">The only tool read aloud. It reads the precomputed summary (<code class="mono">ship-status</code>, one <code class="mono">GetItem</code>) instead of aggregating, so the answer takes the same time at any number of findings. The sentence is capped at 180 characters with no line breaks, enforced by the server: a list of findings cannot be spoken. Examples: "2 blockers found. Ready for your decision." followed by an offer that names only screens that exist ("Want it on the laptop?", "Want it on the laptop or the tablet?", or "Want it on a screen?" for three or more, and no offer when none exist); "No blocking issues. Good to move ahead."; "Nothing needs a decision, but 1 rejected finding still blocks the merge until fixed." If the summary can't be read it says "I can't check right now. Open the review console." and never reports all clear.</div>
       </div>
     </div>
     <div class="step-row">
@@ -494,37 +514,68 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">blocked_pull_requests / finding_detail</span>
           <span class="step-kind tool">tool, screen-only</span>
         </div>
-        <div class="step-desc">Citations, file paths, code, and every finding &mdash; rendered on whatever screen asked, never spoken. Calling either also records the alert as recently shown, the fact the approval gate below checks.</div>
+        <div class="step-desc">Citations, file paths, code and every finding, rendered on whatever screen asked and never spoken. <code class="mono">blocked_pull_requests</code> returns the findings grouped by pull request, numbered from 1 within each: blockers first, then by detector theme, then by risk score. Calling either tool records the finding as recently shown, together with the number it carried, which is what the decision rules below check.</div>
       </div>
     </div>
     <div class="step-row">
-      <div class="step-connector"><div class="dot"></div></div>
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
       <div class="step-card tool">
         <div class="step-head">
           <span class="step-title">display_on</span>
           <span class="step-kind tool">tool, action</span>
         </div>
-        <div class="step-desc">Routes the current findings to a named surface. A real push over that device's open WebSocket connection, reported honestly when the named device isn't connected rather than pretending it worked &mdash; see Cross-device push below.</div>
+        <div class="step-desc">Routes the findings to a named screen. An open page receives a push over its WebSocket, and the findings count as shown only if the post succeeded ("Putting it on your laptop."). If no page is open but the screen was registered for alerts, Relay holds the findings for that name and sends a notification ("I've sent a notification to your laptop. Open it to review."). If neither is possible: "I don't see a laptop connected right now." The name <code class="mono">here</code> means the caller renders its own copy. A success reply carries <code class="mono">routing</code>: the number and id of each open finding, no content.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">connected_screens / findings_routing</span>
+          <span class="step-kind tool">tool, read-only</span>
+        </div>
+        <div class="step-desc"><code class="mono">connected_screens</code> lists the screen names that are open now or registered for alerts, so nobody is offered a screen that isn't there. <code class="mono">findings_routing</code> lists each open finding's id, its number now, whether it was shown in the last ten minutes, and the number it had on the screen that showed it (<code class="mono">shown_position</code>). Neither returns finding text, and reading routing records nothing as shown.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">stage_decisions / proceed / cancel_pending</span>
+          <span class="step-kind tool">tool, action</span>
+        </div>
+        <div class="step-desc"><code class="mono">stage_decisions</code> validates a batch of decisions for one pull request (finding id, approve or reject, reason) and stores it as pending. It applies nothing. <code class="mono">proceed</code> re-checks each finding and applies the batch, then reports an outcome per finding (applied, skipped, already decided, not found, error) and speaks them: "Done. Applied all 3." or "Applied 2 of 3. 1 already decided in the console." A finding that failed for a temporary reason stays staged for another <code class="mono">proceed</code>. <code class="mono">cancel_pending</code> drops the batch. A staged batch expires after ten minutes. Each applied decision is recorded on the finding, commented on the PR, and followed by a recomputed status and summary.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">request_risk_acceptance</span>
+          <span class="step-kind tool">tool, action</span>
+        </div>
+        <div class="step-desc">Approves one finding in a single step, under the same two server rules (shown on a screen in the last ten minutes, and a reason). If either is missing it performs nothing and returns where to decide. It is for other MCP clients; the Alexa Skill's model is never given it.</div>
       </div>
     </div>
   </div>
-  <p class="step-desc" style="max-width:none;margin-top:14px">The ASGI app is built fresh inside the handler on every single Lambda invocation, not once at import time &mdash; a genuine SDK/Lambda incompatibility, not a style choice. The MCP Python SDK's Streamable HTTP session manager can enter its own lifespan exactly once per instance; a warm container reusing a module-level app object crashes the <em>second</em> request against it with "SessionManager .run() can only be called once per instance," independent of stateful/stateless mode. Confirmed by direct reproduction before relying on the fix, not assumed. One consequence worth stating plainly: this Lambda has no session continuity of its own to build on &mdash; every invocation starts a session manager that has never seen a client before. That fact is what shaped the approval design below.</p>
+  <p class="step-desc" style="max-width:none;margin-top:14px">The ASGI app is built fresh inside the handler on every Lambda invocation, not once at import time. The MCP Python SDK's Streamable HTTP session manager can enter its lifespan once per instance, and a warm container reusing a module-level app crashes the <em>second</em> request with "SessionManager .run() can only be called once per instance". Responses are plain JSON rather than an event stream, which a Lambda Function URL in buffered mode requires. One consequence: every invocation starts a session manager that has never seen a client, so no MCP session id can carry state between calls. That shaped the decision design below.</p>
 </div>
 
 <div class="zone">
   <div class="zone-label">Voice can confirm a decision. It can never make one blind.</div>
-  <div class="zone-note">request_risk_acceptance &mdash; revised mid-build after a real architectural correction, not the original design.</div>
-  <p class="step-desc" style="max-width:none">The first version was simpler and wrong: no tool would ever accept a risk by voice, full stop. The actual failure SHIP exists to catch isn't "a decision happened over voice," it's "a decision happened without a human genuinely engaging with what they were deciding." A person who asked to see the findings, had them rendered on a real screen, and then says "override it, here's why" has done exactly what human oversight requires &mdash; refusing that and forcing a trip to a web form adds friction without adding safety. What still must never work is "ignore it, go ahead" with no review at all, the actual TLGP-002 shape this project polices in other people's code.</p>
+  <div class="zone-note">The server checks the same facts for every decision tool. The skill adds checks of its own.</div>
+  <p class="step-desc" style="max-width:none">What SHIP exists to catch is not "a decision happened over voice". It is "a decision happened without a person engaging with what they were deciding". A person who asked to see the findings, had them rendered on a screen and then says why has done what human oversight requires. Sending them to a web form instead adds friction and no safety. What must never work is "ignore it, go ahead" with no review at all, which is the TLGP-002 shape this project flags in other people's code.</p>
   <div class="route-split" style="margin-top:14px">
-    <div class="branch-item" style="background:var(--human-tint)"><b>Reviewed, then confirmed</b>blocked_pull_requests or finding_detail was called for this exact alert_id within the last ten minutes, and a reason was given. Performed for real: resolve_alert() writes the resolution to ship-alerts, same durability Gate's own resolve gives it.<div class="lens-tags"><span class="lens-tag">performed = true</span></div></div>
-    <div class="branch-item" style="background:var(--infra-tint)"><b>Blind, or no reason</b>Either condition missing: refused, and this tool never performs anything &mdash; returns where the decision must be made instead. The review gate is reported first, since that's the one the "ignore it, go ahead" case has to fail on.<div class="lens-tags"><span class="lens-tag">performed = false</span></div></div>
+    <div class="branch-item" style="background:var(--human-tint)"><b>Reviewed, said why, confirmed</b>Every finding in the batch is open, was shown on a screen in the last ten minutes, and has a reason of at most 500 characters. <code class="mono">proceed</code> re-checks each one and writes it as a conditional update that fails if someone decided the finding first.<div class="lens-tags"><span class="lens-tag">performed &gt; 0</span></div></div>
+    <div class="branch-item" style="background:var(--infra-tint)"><b>Unseen, unexplained or unclear</b>One finding that is unseen, already decided, unknown or without a reason refuses the whole batch with a plain sentence and changes nothing. Silently applying part of it would decide something the person didn't say. An unreadable record of what was shown counts as not shown.<div class="lens-tags"><span class="lens-tag">performed = 0</span></div></div>
   </div>
-  <p class="step-desc" style="max-width:none;margin-top:14px">The gate is keyed on the alert and a time window, not on an MCP session &mdash; a real correction, not the original design. The first version keyed on <code class="mono">Mcp-Session-Id</code>, reasoning it was a stable per-conversation identifier. Live-tested against the actually-deployed system, not assumed correct from a local check: it never arrived, because a session manager built fresh on every invocation has no process for that id to have continuity with. <code class="mono">ship-recent-reviews</code> (alert_id &rarr; when last shown, a ten-minute window) is the honest signal that's actually available in this architecture, in place of a session identity that structurally cannot exist here.</p>
+  <p class="step-desc" style="max-width:none;margin-top:14px"><b>What the skill checks before Relay is called.</b> The model reaches four tools (<code class="mono">release_status</code>, <code class="mono">display_on</code>, <code class="mono">stage_decisions</code>, <code class="mono">proceed</code>) and never sees finding text. A decision is staged only for a pull request that was shown to this person. The reason must be built from words the person said (at least two content words beyond the command, a number or a screen name, and at least 60 percent of them present in what was said this turn or in the last three exchanges). The model says "the second one"; code turns that into a finding id using the number each finding had on the screen that displayed it, and Relay only ever receives ids. A number two seen findings both claim is dropped, not guessed. Staging and proceeding never happen in one turn, and only the person's plain confirmation applies a staged batch. Saying no, cancel or stop drops it. Relay does not check that a reason is in the person's own words or that a confirmation was spoken; a client that calls Relay directly supplies both itself.</p>
+  <p class="step-desc" style="max-width:none">The record of what was shown is keyed on the finding with a ten-minute window (<code class="mono">ship-recent-reviews</code>), not on an MCP session, because a session manager built fresh on every invocation has nothing for a session id to continue. The record also stores the number the finding carried on that screen. Findings that arrive or get decided afterwards therefore can't move "the second one" onto a different finding. See <a href="https://github.com/pandayv/ship-engine/blob/main/docs/voice-resolution-workflow.md" style="color:inherit">docs/voice-resolution-workflow.md</a> for the flow and the exact sentences.</p>
 </div>
 
 <div class="zone">
-  <div class="zone-label">Cross-device push</div>
-  <div class="zone-note">Push, not polling &mdash; a deliberate choice, not the default.</div>
+  <div class="zone-label">Screens: push to an open page, notify a closed one</div>
+  <div class="zone-note">Push, not polling, and a notification is not a display.</div>
   <div class="pipeline">
     <div class="step-row">
       <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
@@ -533,63 +584,142 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
           <span class="step-title">API Gateway WebSocket API</span>
           <span class="step-kind tool">infra</span>
         </div>
-        <div class="step-desc">connect / disconnect / register routes, handled by a small dedicated Lambda (device_gateway_handler.py) kept deliberately separate from Relay so Relay's own IAM role stays scoped to exactly what answering a question requires.</div>
+        <div class="step-desc">Routes <code class="mono">$connect</code>, <code class="mono">$disconnect</code>, <code class="mono">register</code>, <code class="mono">subscribe</code> and <code class="mono">ack</code>, handled by a small dedicated Lambda (<code class="mono">device_gateway_handler.py</code>) kept separate from Relay so Relay's IAM role stays narrow. API Gateway doesn't relay a route's return value to the client, so every reply is posted back over the Management API, the same path Relay uses to push.</div>
       </div>
     </div>
     <div class="step-row">
-      <div class="step-connector"><div class="dot"></div></div>
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
       <div class="step-card tool">
         <div class="step-head">
           <span class="step-title">ship-device-connections</span>
           <span class="step-kind tool">infra</span>
         </div>
-        <div class="step-desc">Which device is reachable under which name. A display page (any browser, a TV's, an iPad's, a smart fridge's) opens ship-display.html, names itself once, and sits idle with no polling until Relay pushes a finding to it by name.</div>
+        <div class="step-desc">Which open page answers to which name. Any browser opens <code class="mono">ship-display.html</code>, names itself once (1 to 30 letters or digits, remembered by the browser) and sits idle with no polling. It registers again every five minutes, which keeps it inside API Gateway's 10-minute idle limit. A row older than two hours or silent for fifteen minutes is treated as gone, and a push that finds a dead connection removes its row.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">ship-push-subscriptions / ship-pending-display</span>
+          <span class="step-kind tool">infra</span>
+        </div>
+        <div class="step-desc">A page registers its browser's push address once, after the person allows notifications. From then on <code class="mono">display_on</code> can reach that screen with the page closed: it stores the findings for that name for ten minutes and sends a short Web Push notification signed with a VAPID key held in Parameter Store (<code class="mono">ship-sw.js</code> shows it). The notification carries a count and never a finding. Tapping it opens the page, which receives the held findings when it registers. A push address the browser reports gone is removed.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card human">
+        <div class="step-head">
+          <span class="step-title">Seen means displayed</span>
+          <span class="step-kind human">rule</span>
+        </div>
+        <div class="step-desc">A finding pushed to an open page counts as shown when the post succeeds. Held findings count as shown only when the page displays them and sends an <code class="mono">ack</code>, which it does only while the page is visible, and only for findings that were actually held for that name. A notification alone never counts.</div>
       </div>
     </div>
   </div>
-  <p class="step-desc" style="max-width:none;margin-top:14px">A genuine compliance event happens on the order of weeks, not seconds. A display polling every few seconds to catch that would spend nearly all its traffic finding nothing changed; an idle WebSocket connection costs nothing until there's actually something to say. A stale connection self-heals rather than erroring: a <code class="mono">GoneException</code> from a disconnected socket removes that row instead of raising.</p>
+  <p class="step-desc" style="max-width:none;margin-top:14px">A genuine compliance event happens on the order of weeks, not seconds. A display polling every few seconds would spend nearly all its traffic finding nothing changed. An idle WebSocket costs nothing until there is something to say. Every send is time-capped because the skill is waiting on Relay: each WebSocket post has a 1.0 s connect and 1.5 s read timeout, at most six connections per name are tried, and the whole push stops after 2 s. A notification send takes at most 2 s and the set stops after 2.5 s.</p>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Alexa Skill &middot; stands in for the Alexa+ add-on</div>
+  <div class="zone-note">Alexa+ add-on tooling is limited to select partners, so a custom skill ("ship review") plays the add-on's part. It hears the person and calls the same MCP server.</div>
+  <div class="pipeline">
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">Plain intents</span>
+          <span class="step-kind tool">tool</span>
+        </div>
+        <div class="step-desc">Status, show-on-a-screen, turn-on-alerts, yes, no, help and stop are answered by plain code, fast. Free text uses one intent per verb (approve, reject, mark, show, what) because Alexa drops a carrier phrase from the slot it hands the skill. The skill performs the MCP handshake (<code class="mono">initialize</code>, <code class="mono">notifications/initialized</code>, <code class="mono">tools/list</code>) once per warm container. Alexa gives a skill 8 seconds: calls to Relay time out at 5, and the skill stops waiting at 7 and speaks an apology.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card agent">
+        <div class="step-head">
+          <span class="step-title">Free speech: the model proposes</span>
+          <span class="step-kind agent">agent</span>
+        </div>
+        <div class="step-desc">Anything else goes to Amazon Nova Lite through the Bedrock Converse API (temperature 0, 3 s read timeout). It sees the person's words, the last three exchanges and a note saying which screens exist, which findings the person has already seen (repo, pull request, numbers) and whether a decision is staged. If the model is slow or fails, simple rules answer status and show requests.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">Code decides</span>
+          <span class="step-kind tool">tool</span>
+        </div>
+        <div class="step-desc">Plain code checks the proposal: the four-tool limit, a screen the person named or used last, a pull request that was shown, a reason in the person's own words, numbers mapped to ids, and a plain confirmation for <code class="mono">proceed</code>. What is spoken back is Relay's sentence, so the model can't claim an approval Relay refused. The model's own words are spoken only when it used no tool.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="step-connector"><div class="dot"></div><div class="line"></div></div>
+      <div class="step-card tool">
+        <div class="step-head">
+          <span class="step-title">Echo alert</span>
+          <span class="step-kind tool">tool</span>
+        </div>
+        <div class="step-desc">When a finding is newly recorded, the fragment processor sends an <code class="mono">AMAZON.MessageAlert.Activated</code> proactive event from "SHIP", carrying the count of open findings, to every Alexa user the skill has saved (<code class="mono">ship-alexa-users</code>). Alexa has no generic alert type, so it reads as unread messages. The person allows notifications once in the Alexa app; "turn on alerts" sends them the permission card. Each finding notifies once, and a retried job doesn't repeat it. The skill's Login with Amazon credentials live in Parameter Store.</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="zone">
   <div class="zone-label">Self-improvement loop</div>
-  <div class="zone-note">scripts/pattern_miner.py &mdash; periodic, off Detector's hot path, same shape as Healing Loop.</div>
-  <p class="step-desc" style="max-width:none">The first design considered was few-shot: feed Detector the raw text of recently dismissed findings directly. Rejected before building &mdash; after a month or two of dismissals there are too many raw examples to fit in a prompt, and picking a recent subset is arbitrary. Instead, a batch job extracts a small, bounded set of <em>generalized</em> patterns from accumulated dismissals, merging new evidence into existing patterns rather than appending, so the set stays small regardless of how much history exists.</p>
+  <div class="zone-note">scripts/pattern_miner.py &mdash; periodic, off Detector's hot path, same shape as Healing Loop. No schedule is set up in the repo; it runs by hand.</div>
+  <p class="step-desc" style="max-width:none">Feeding Detector the raw text of recent human decisions doesn't scale: after a month or two there are too many to fit in a prompt, and picking a recent subset is arbitrary. Instead, a batch job extracts a small, bounded set of <em>generalized</em> patterns from accumulated decisions, merging new evidence into existing patterns rather than appending, so the set stays small regardless of how much history exists.</p>
   <div class="route-split" style="margin-top:14px">
-    <div class="branch-item" style="background:var(--agent-tint)"><b>No human approval gate per pattern</b>Considered and rejected directly: a pattern is often an abstraction tied to field-level data associations, not a business rule a human can confidently judge in isolation. Asking for sign-off on every one is real, recurring toil for no real safety gain.<div class="lens-tags"><span class="lens-tag">automatic, not manual</span></div></div>
-    <div class="branch-item" style="background:var(--agent-tint)"><b>Two automatic guards instead</b>MIN_SUPPORT &mdash; a pattern only becomes retrieval-eligible once independent dismissals confirm it, not one person's single call. Retrieved as context, never a rule &mdash; Detector's grounded, citation-based judgment still runs on every fragment regardless of what a pattern says.<div class="lens-tags"><span class="lens-tag">ship-learned-patterns</span></div></div>
+    <div class="branch-item" style="background:var(--agent-tint)"><b>No human approval gate per pattern</b>A pattern is often an abstraction tied to field-level data associations, not a business rule a person can judge in isolation. Asking for sign-off on every one is recurring toil with little safety gain.<div class="lens-tags"><span class="lens-tag">automatic, not manual</span></div></div>
+    <div class="branch-item" style="background:var(--agent-tint)"><b>Two automatic guards instead</b>MIN_SUPPORT: a pattern becomes retrieval-eligible only after independent decisions confirm it, not one person's single call. And a pattern is retrieved as context, never a rule: Detector's grounded, citation-based judgment still runs on every fragment.<div class="lens-tags"><span class="lens-tag">ship-learned-patterns</span></div></div>
   </div>
 </div>
 
 <div class="zone">
   <div class="zone-label">Operational visibility</div>
-  <div class="zone-note">repo_store.stuck &mdash; built from a real incident, not a hypothetical one.</div>
-  <p class="step-desc" style="max-width:none">Live-caught: an SQS event source mapping was disabled by hand, and the webhook kept returning <code class="mono">200 "accepted, queued for review"</code> for every delivery, silently reviewing nothing, for days. The failure that mattered wasn't a crash to catch &mdash; it was a system that looked completely healthy from every angle that was actually checked. ship-repos now tracks <code class="mono">last_event_at</code> alongside <code class="mono">last_reviewed_at</code>; a gap between the two past a 20-minute grace window (generous against the worst real Detector latency observed, ~440s on a cold AgentCore container) surfaces as a visible "stuck" badge on Gate's connected-repos view &mdash; the first time anyone looks, not after a monitoring system fires.</p>
+  <div class="zone-note">A pipeline that looks healthy from every angle checked is the failure to design against.</div>
+  <p class="step-desc" style="max-width:none"><b>Silent stalls.</b> A disabled SQS event source mapping would leave the webhook returning <code class="mono">200 "accepted, queued for review"</code> for every delivery while reviewing nothing. <code class="mono">ship-repos</code> tracks <code class="mono">last_event_at</code> alongside <code class="mono">last_reviewed_at</code>. A gap between the two past a 20-minute grace window (generous against the ~440 s worst Detector latency observed on a cold AgentCore container) shows as a "stuck" badge on Gate's connected-repos view.</p>
+  <p class="step-desc" style="max-width:none"><b>Audit lines.</b> Relay writes one line to CloudWatch for every decision and every refusal: the tool, the outcome, the pull request, the finding ids (first 12 characters), a short reason code, small counts and the Lambda request id. They never carry the reason a person gave or any finding text.</p>
+  <p class="step-desc" style="max-width:none"><b>Delivery that survives retries.</b> The PR comment and the Echo alert for a finding are each claimed under a short lease and marked only after a successful send. A retry finishes whichever step is missing without repeating the one already done, and a finding a person has already decided gets no new comment.</p>
+</div>
+
+<div class="zone">
+  <div class="zone-label">Scope of this proof of concept</div>
+  <p class="step-desc" style="max-width:none">The webhook (an HMAC signature) and Gate (a dashboard token) authenticate their callers. Relay and the WebSocket API do not authenticate callers in code. Relay accepts only the Host and Origin values it is configured with, which stops a page on another site from calling it in a browser but not a direct call. Anyone who holds the endpoint URLs, which appear in this repository, can call Relay's tools, decision tools included, and can register a screen name. The decision rules (shown on a screen, a reason, a confirmation) are procedural checks, not an identity check. An authorizer in front of both endpoints and a verified identity on each decision are not built.</p>
 </div>
 
 <div class="zone">
   <div class="zone-label">AWS infrastructure</div>
   <div class="infra-grid">
     <div class="infra-item"><div class="name">Lambda &middot; ship-webhook</div><div class="role">Always-on, fast-ack only, no model calls</div></div>
-    <div class="infra-item"><div class="name">Lambda &middot; ship-fragment-processor</div><div class="role">Independently-scaling, one flagged fragment per invocation</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-fragment-processor</div><div class="role">Independently scaling, one flagged fragment per invocation; also sends the Echo alert</div></div>
     <div class="infra-item"><div class="name">Lambda &middot; ship-relay</div><div class="role">The MCP server, SnapStart-enabled, a fresh ASGI app per invocation</div></div>
-    <div class="infra-item"><div class="name">Lambda &middot; ship-alexa-skill</div><div class="role">The Alexa Skill: turns what you say into calls to Relay over MCP, using a language model for open-ended requests</div></div>
-    <div class="infra-item"><div class="name">Alexa notification</div><div class="role">Chimes the Echo when a finding is recorded; the skill's credentials sit in Parameter Store</div></div>
-    <div class="infra-item"><div class="name">Lambda &middot; device-gateway</div><div class="role">WebSocket connect/disconnect/register, kept separate from Relay's own IAM role</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-alexa-skill</div><div class="role">The Alexa Skill: speech to Relay calls, with Nova Lite for open-ended requests</div></div>
+    <div class="infra-item"><div class="name">Lambda &middot; ship-device-gateway</div><div class="role">WebSocket connect, disconnect, register, subscribe and ack, kept separate from Relay's IAM role</div></div>
     <div class="infra-item"><div class="name">SQS</div><div class="role">Fragment queue + dead-letter queue, concurrency-capped consumer</div></div>
-    <div class="infra-item"><div class="name">API Gateway WebSocket API</div><div class="role">Real, server-initiated push to a named display device</div></div>
+    <div class="infra-item"><div class="name">API Gateway WebSocket API</div><div class="role">Server-initiated push to a named, open display page</div></div>
+    <div class="infra-item"><div class="name">Alexa proactive events</div><div class="role">Chimes the Echo when a finding is recorded</div></div>
+    <div class="infra-item"><div class="name">Web Push</div><div class="role">Notifies a registered screen whose page is closed; signed with a VAPID key</div></div>
+    <div class="infra-item"><div class="name">SSM Parameter Store</div><div class="role">SecureString: the VAPID private key and the skill's Login with Amazon credentials</div></div>
     <div class="infra-item"><div class="name">Bedrock AgentCore Runtime</div><div class="role">Deployed Detector agent, callable remotely from either review-pipeline Lambda</div></div>
-    <div class="infra-item"><div class="name">Bedrock &middot; Amazon Nova Lite</div><div class="role">Primary reasoning model &mdash; picked over Claude Haiku 4.5 on a measured benchmark: same accuracy, 20&times; the request quota</div></div>
+    <div class="infra-item"><div class="name">Bedrock &middot; Amazon Nova Lite</div><div class="role">Primary reasoning model, picked over Claude Haiku 4.5 on a measured benchmark: same accuracy, 20&times; the request quota. Also the skill's free-speech model</div></div>
     <div class="infra-item"><div class="name">Bedrock Titan Embeddings</div><div class="role">Regulation-corpus retrieval, and the same mechanism for learned-pattern retrieval</div></div>
-    <div class="infra-item"><div class="name">DynamoDB &middot; ship-alerts</div><div class="role">Idempotent alert storage, Gate's source of truth</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-alerts</div><div class="role">Idempotent alert storage and decisions, Gate's source of truth</div></div>
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-repos</div><div class="role">Connected repositories, the webhook's allowlist, plus received-vs-reviewed health</div></div>
-    <div class="infra-item"><div class="name">DynamoDB &middot; ship-status</div><div class="role">Precomputed release summary &mdash; Relay's voice path is one GetItem regardless of finding count</div></div>
-    <div class="infra-item"><div class="name">DynamoDB &middot; ship-device-connections</div><div class="role">Which device is reachable under which name, for the push path</div></div>
-    <div class="infra-item"><div class="name">DynamoDB &middot; ship-recent-reviews</div><div class="role">Which alert was shown on a screen and when, the voice-approval time window</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-status</div><div class="role">Precomputed release summary (Relay's voice path is one GetItem), and one <code class="mono">review#&hellip;</code> ledger item per pull request</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-recent-reviews</div><div class="role">Which finding was shown on a screen, when, and under what number</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-pending-dispositions</div><div class="role">Decisions staged by voice, one batch per pull request, ten-minute life</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-device-connections</div><div class="role">Which open page answers to which name</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-push-subscriptions</div><div class="role">Browsers registered for alerts, by screen name</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-pending-display</div><div class="role">Findings held for a closed page, ten-minute life</div></div>
     <div class="infra-item"><div class="name">DynamoDB &middot; ship-alexa-users</div><div class="role">Which Alexa users SHIP may notify</div></div>
-    <div class="infra-item"><div class="name">DynamoDB &middot; ship-learned-patterns</div><div class="role">Generalized patterns mined from dismissed findings</div></div>
+    <div class="infra-item"><div class="name">DynamoDB &middot; ship-learned-patterns</div><div class="role">Generalized patterns mined from human decisions</div></div>
     <div class="infra-item"><div class="name">FastAPI + Mangum</div><div class="role">Webhook route and the Gate dashboard, one deployable app</div></div>
   </div>
-  <div class="zone-note" style="margin-top:14px">Two fallback model backends sit alongside Bedrock, switchable with one environment variable: Google Gemini, for when AWS credits run out, and a local Ollama model, for a fully offline path.</div>
+  <div class="zone-note" style="margin-top:14px">Two fallback model backends sit alongside Bedrock, switchable with one environment variable: Google Gemini, for when AWS credits run out, and a local Ollama model, for a fully offline path. Reference IAM policies for each Lambda role are in <code class="mono">infra/iam/</code>; the repo does not apply them.</div>
 </div>
 </div>
 

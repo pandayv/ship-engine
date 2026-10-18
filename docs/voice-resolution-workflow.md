@@ -1,182 +1,160 @@
-# Voice-driven multi-finding resolution — workflow
+# Deciding findings by voice
 
-**Built and verified live** (2026-10-02): `stage_decisions` and `proceed`
-are real Relay tools, deployed, exercised end to end against the live
-system, a staged decision, confirmed pending on screen, committed with
-proceed, and confirmed on GitHub (a real comment, a real commit-status
-update on the commit the finding was found on). See
-`src/relay/server.py` and `src/storage/pending_store.py`. This doc stays
-as the design record; the "still open" items below are resolved, not
-hypothetical.
+This page describes how a spoken decision works today. The code behind it is
+`src/relay/server.py` (`stage_decisions`, `proceed`, `cancel_pending`),
+`src/storage/pending_store.py` and `src/storage/session_store.py` on the
+Relay side, and `alexa-skill/lambda/orchestrator.py` on the skill side.
 
-## The problem this solves
+## The idea
 
-Today, voice can confirm exactly one already-reviewed finding per turn,
-in a fixed "approve it" → "why?" → reason dialogue. If a finding is
-pushed to a screen with no input device, a TV, a kitchen display, there's
-no way to act on more than one finding without a round trip per item.
-That makes voice mostly a notifier: it can tell you something's wrong,
-but it can't be how you actually clear your review. The point of putting
-this on a voice assistant is that voice should be able to carry the
-work, not just the announcement of it.
+Voice should be able to carry the work of reviewing, not only announce it.
+But a decision made by voice must still be a decision a person made. The
+person looked at the finding, said why in their own words, and confirmed.
+Every rule below serves that one sentence.
 
-## Decision shapes a person actually uses
+Two steps make it work without a spoken read-back. The person's sentence
+stages the decisions and shows them on the screen as pending. A plain "yes"
+then applies them. Nothing is final until that second step, so a mistake
+caught on the pending screen needs a correction, not an undo.
 
-Not just "approve all" and "approve one, reject one":
+## What approve and reject mean
 
-- **Approve everything shown.** "We're good to move forward."
-- **Reject everything shown**, the mirror case. "None of these are fine,
-  they all need fixes."
-- **Mixed, per finding.** "First one's a non-issue. Second one's an
-  actual blocker."
-- **Exclusion.** "Approve all of these except the second one." Probably
-  the natural pattern once there are more than two or three findings,
-  not enumeration.
-- **Partial, explicit deferral.** "Just handle the first one for now,
-  I'll get to the rest later." Has to leave the rest genuinely
-  untouched, a real state, not an accident of the conversation ending.
+| Decision | Meaning | Effect on the pull request |
+|---|---|---|
+| Approve | The person accepts the risk. | The finding stops blocking. The `ship/compliance` check passes once nothing else blocks. |
+| Reject | The finding is real and the pull request is not ready. | The check stays failing ("N findings rejected, fix the code") until a later commit no longer contains the flagged code. |
 
-## How a person refers to a finding
+A rejected finding is decided, so it never comes back as something to
+review. Voice still reports it: "Nothing needs a decision, but 1 rejected
+finding still blocks the merge until fixed." The findings screen carries a
+note for any pull request a rejected finding still holds, and Gate's history
+view marks the row "Still blocking the merge".
 
-Ordinal ("first," "second") is the easy case, unambiguous given a
-numbered screen. Real speech also reaches for:
+The release is found by code, not by time. A rejected finding is released
+when a commit is processed whose flagged fragments no longer include its
+fragment (`alert_store.release_fixed_rejections`, called from the webhook).
+A fragment that changed at all is judged again as a new finding.
 
-- What it's about: "the PII one," "the one in the underwriting file"
-- Severity: "the worse one," "the one that's actually risky"
-- Anaphoric, referring back to what was just discussed: "that one," "the
-  one you just read me the detail on." Only works if the conversation
-  has short-term memory of what it just said, which lives in Alexa+'s
-  own session, not in Relay (Relay stays stateless regardless).
-- By exclusion: "not the first one, the other one"
+## The flow
 
-Build for ordinal first. The design shouldn't *break* the moment someone
-uses anything else, falling back to "I didn't catch which one you mean"
-is fine; silently guessing is not.
+1. The person asks what is up. Relay answers from the precomputed summary.
+2. The person asks for a screen. Relay pushes the findings and records every
+   finding as shown, together with the number it had on that screen.
+3. The person speaks a decision with a number and a reason.
+4. The skill checks the sentence and turns each spoken number into a finding
+   id, using the numbers Relay recorded as shown.
+5. `stage_decisions` validates the whole batch, stores it, and pushes the
+   screen so each row shows "Pending: approve" or "Pending: reject" with the
+   reason. Alexa says: "Got it, take a look and say proceed when you're ready."
+6. The person confirms with a plain yes. The skill calls `proceed`.
+7. `proceed` re-checks every finding, writes each decision, comments on the
+   pull request, recomputes the commit status and the summary, and refreshes
+   the screen. Alexa says how many were applied and what was left alone.
 
-## When a reference doesn't land cleanly
+Saying no, cancel or stop clears the staged batch ("Okay, I won't apply it.")
+and the screen stops showing it as pending. Stopping the skill does the same.
+A staged batch also expires after ten minutes on Relay, after which
+`proceed` answers "Nothing pending to confirm."
 
-The category that matters most, because guessing wrong is worse than not
-supporting the feature:
+## Who checks what
 
-- "The third one" when only two exist. Has to say so, not fail silently.
-- A description that could match two findings (two PII issues in the
-  same file). Resolving the wrong one is a real, bad outcome for a
-  compliance tool specifically, not a minor UX miss.
+The model translates speech into a proposed call. It never sees finding text,
+only counts and the numbers on screen. Plain code decides.
 
-## Stage on screen, confirm with "proceed"
+| Check | Where | Detail |
+|---|---|---|
+| Which tools the model can reach | Skill | `release_status`, `display_on`, `stage_decisions`, `proceed`. The one-step `request_risk_acceptance` is not among them. |
+| A pull request that was shown | Skill | A decision is staged only for a repo and pull request Relay recorded as shown to this person. |
+| A reason in the person's words | Skill | The reason needs at least two content words beyond the command, a number or a screen name, and at least 60 percent of them must appear in what the person said this turn or in the last three exchanges. |
+| Number to finding id | Skill | The model gives a number. Code maps it to an id using the number each finding had on the screen that displayed it (`findings_routing`, `shown_position`). Relay is only ever sent ids. A number two seen findings both claim is dropped, not guessed. |
+| A screen the person named | Skill | The screen must be one the person named, used last, or the only one connected. A guess is stopped and the person is asked "Which screen?". |
+| Never stage and proceed together | Skill | A turn may do one or the other. The model calling `proceed` on its own is refused. Only a plain confirmation applies a staged batch. |
+| Shown recently | Relay | Each finding must have been shown on a screen in the last ten minutes. An unreadable record counts as not shown. |
+| A reason on record | Relay | Not empty, at most 500 characters. A long reason is refused, never cut. |
+| The whole batch or nothing | Relay | One unseen, already decided or unknown finding refuses the entire batch. |
+| Checked again at commit | Relay | `proceed` re-checks each finding, because the world changes between staging and confirming. |
+| Decide once | Relay | The write is conditional on the finding still waiting. A second decision on the same finding is refused. |
 
-Not a voice read-back. A read-back of several findings ("Finding 1
-accepted... Finding 2 confirmed...") would strain or break the existing
-one-sentence voice cap the moment there are more than two or three
-findings, and it adds exactly the friction this feature is trying to
-remove.
+## Referring to findings
 
-Instead: the voice utterance captures the decisions and reasons, but
-doesn't resolve anything yet. It pushes the captured decisions to the
-screen as **pending**, next to the findings they apply to, and voice
-gives one short prompt:
+Numbers are the way to point at a finding. The screen shows one table per
+pull request, and the numbers restart in each one. Within a pull request,
+blockers come first, then findings grouped by theme (data exposure, human
+oversight, bias and fairness, agent capability), then by risk score. The
+numbering is one flat sequence through the whole table, so "first" never
+means two things.
 
-> *"Alexa, I've reviewed these. First one's a non-issue. Second one's an
-> actual blocker, we need a fix."*
-> **"Got it, take a look and say proceed when you're ready."**
->
-> *[Screen updates: Finding 1 shows "Pending: Accept — non-issue".
-> Finding 2 shows "Pending: Needs fix — needs a fix".]*
->
-> *"Proceed."*
-> **"Done."**
+The number a person speaks is the number the screen showed. Relay stores that
+number with each finding when it displays it, so findings that arrive or get
+decided afterwards cannot shift "the second one" onto a different finding.
 
-Nothing is actually resolved until "proceed." This gets two things at
-once: voice responses stay short regardless of how many findings are
-involved, and a misunderstanding is caught by looking at the pending
-screen and saying so, before anything is committed, not after. That
-also means there's no "undo" problem to solve, correcting a pending
-decision before commit isn't an undo, it's just not having said
-"proceed" yet.
+Pointing at a finding by topic or severity ("the PII one") is not supported.
+The model never sees finding text, so it cannot resolve such a phrase. A
+number that was never shown gets this answer: "I don't have a finding number
+N that you've looked at on that pull request. Which one did you mean?"
 
-## Conversation continuity
+Decisions can be mixed, for example "first one is a false positive because
+it's test data, second one is real because it leaks a phone number". Each
+decision carries its own reason. Findings the person does not mention stay
+untouched.
 
-- Changing your mind before committing is just restating the decision
-  ("actually, finding 2 is fine too") and the pending screen updates
-  again, still nothing resolved until "proceed."
-- Asking for a reminder of what something was without re-navigating to
-  the screen ("what was wrong with the second one again?") is a natural
-  ask mid-review.
-- If a new finding lands *while* someone's mid-conversation, because
-  Detector just finished judging another fragment, "second" can't start
-  silently meaning something different than it did thirty seconds ago.
-  The position list is frozen for the life of that review conversation.
-  Anything that arrives mid-session waits to be numbered until the next
-  "what's up."
+## When a sentence does not land
 
-## Scope: one PR at a time
+Guessing wrong is worse than not supporting the feature, so each failure has
+its own plain answer.
 
-Once "what's up" can report blockers across several PRs, "these" and
-"first" get ambiguous at a higher level, findings in *which* PR? Voice
-resolves against whatever's currently on screen for one PR at a time.
-Bulk and ordinal commands don't reach across PRs. Matches how a person
-actually thinks about it, one queue at a time.
+| Situation | What Alexa says |
+|---|---|
+| Nothing has been shown yet | "Take a look at them on a screen first, then tell me why." |
+| No reason | "What's the reason?" or "What's the reason for each one?" |
+| The same finding named twice | "You mentioned the same finding twice. Which decision did you mean?" |
+| Unclear approve or reject | "I couldn't tell whether that was an approve or a reject. Which was it?" |
+| A finding not shown recently | "Finding 2 hasn't been shown on a screen recently. Take a look first." |
+| A finding already decided | "Finding 2 was already decided in the console." |
+| A finding that no longer exists | "Finding 2 is no longer there. Take a fresh look at the screen." |
+| A reason over 500 characters | "That reason is too long. Please give it in a sentence or two." |
+| No open findings on that pull request | "I don't see any open findings on pandayv/micro-finance #2 right now." |
 
-## What stays exactly the same
+## What `proceed` says
 
-Voice still can't approve something that was never shown on a screen.
-Every finding still needs a reason, every time. This isn't a new path
-around that rule, it's the same rule working across more than one
-finding in a single conversation instead of being limited to one.
+`proceed` reports one outcome per finding: applied, skipped (not shown
+recently), already decided, not found, or error. The spoken sentence says so
+honestly.
 
-## What the screen has to show for this to work
+- All applied: "Done." for one, "Done. Applied all 3." for several.
+- Some applied: "Applied 2 of 3. 1 already decided in the console."
+- Every save failed: "I couldn't save that just now. Say proceed to try again."
 
-Numbered order, not just a stack of cards, grouped by PR, and within a
-PR:
+A finding that failed for a temporary reason stays staged with its original
+clock, so a second confirmation retries it without extending the window. A
+tool error is logged and never read aloud. The skill says "Something went
+wrong on my side. Please try again in a moment." instead.
 
-1. **Blockers before review-only findings.** A blocking finding outranks
-   a review-only one regardless of risk score, it's the one actually
-   stopping the merge.
-2. **Clustered by detector theme within that**, all the PII findings
-   together, then the human-oversight-gap ones, and so on, which also
-   makes "approve all the PII ones" a natural thing to say.
-3. **Risk score descending as the final tiebreaker.**
+Status questions follow the same rule. If the summary cannot be read, Alexa
+says "I can't check right now. Open the review console." It never says all
+clear on a failed read.
 
-The numbering itself stays one flat sequence straight through the whole
-list, 1, 2, 3, regardless of the visual theme clusters, so "first" and
-"second" are never ambiguous between "first overall" and "first in this
-theme." "First" and "second" only mean anything if the screen shows
-these numbers explicitly, in the same order voice resolves them against.
-This is the same display change the PR-grouped Gate redesign already
-needs, one UI change serves both, not two separate pieces of work.
+## What a decision writes
 
-## What's actually new, mechanically
+For each applied finding Relay records the decision on the finding (with the
+reason and `voice` as who decided), comments on the pull request, and then,
+once per request, recomputes the `ship/compliance` status from stored alerts
+and posts it to the pull request's current head. It refreshes the release
+summary Relay speaks from. Each decision, refusal and cancel also writes one
+audit line (tool, outcome, pull request, finding ids, a reason code, counts)
+that carries no reason text and no finding text.
 
-One tool, given a repo and PR, that takes a list of decisions (position,
-approve or reject, reason) and **stages** them rather than resolving
-anything immediately: it writes a pending-disposition record and pushes
-the updated screen state showing each touched finding as pending. A
-second trigger, "proceed," reads that pending record and loops through
-it, calling the existing approve/reject logic once per finding, same
-safety check as always (must have been shown recently), then clears the
-pending record. The model only ever has to construct one call with a
-structured list, not make several separate tool calls in one turn,
-removing a dependency on orchestration behavior that didn't need to be
-there.
+## Continuity and scope
 
-Finding order and numbering reuse the same data that already generates
-the screen push, extended with the severity/theme/risk sort above, and
-frozen for the duration of the conversation.
-
-## Settled
-
-- **Bulk approvals recording an identical reason across every finding
-  they touch are fine, by design.** The goal is reducing friction, not
-  adding a "confirm the same reason applies to all of these?" step.
-- **Who's speaking doesn't matter.** An alert goes to the person
-  responsible for it. If other people are in the room and that person
-  can't control who talks, that's not something SHIP needs to solve.
-  Keep it simple.
-- **No undo needed.** Resolved by the stage-then-"proceed" design above,
-  not by building a reopen mechanism. Nothing is final until "proceed,"
-  so there's nothing to undo.
-- **One tool handles the batch**, rather than depending on whether the
-  Alexa+/Bedrock orchestration supports several tool calls in a single
-  turn. Removes the dependency instead of needing to verify it.
-- **Sort order: severity, then detector theme, then risk score, numbered
-  flat.** See "What the screen has to show" above.
+- The conversation memory (the last three exchanges, which findings were
+  shown, the staged batch) lives in the Alexa session attributes held by the
+  skill. Relay stays stateless.
+- Changing your mind before confirming is restating the decision. A new
+  staged set replaces the old one for that pull request.
+- A batch covers one pull request. Bulk and numbered commands do not reach
+  across pull requests.
+- A decision that has been applied is final in this version. There is no
+  reopen.
+- Several findings may share one reason. That is by design.
+- SHIP does not identify who is speaking. An alert goes to the person
+  responsible for the release.

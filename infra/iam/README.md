@@ -8,7 +8,7 @@ These are **reference files reviewed against the code. They have not been applie
 | `ship-relay-role.json` | `ship-relay-role` | `ship-relay` (MCP server) |
 | `ship-device-gateway-role.json` | `ship-device-gateway-role` | `ship-device-gateway` (WebSocket routes) |
 | `ship-fragment-processor-role.json` | `ship-fragment-processor-role` | `ship-fragment-processor` (SQS consumer) |
-| `ship-webhook-role.json` | `ship-webhook-role` (name from `deploy.sh`) | `ship-webhook` (GitHub webhook and the Gate console) |
+| `ship-webhook-AgentCore-lambda-role.json` | `ship-webhook-AgentCore-lambda-role` (read from the Lambda's configuration; `deploy.sh` names a different role) | `ship-webhook` (GitHub webhook and the Gate console) |
 | `ask-lambda-SHIPReview-1791468806554.json` | `ask-lambda-SHIPReview-1791468806554` | `ship-alexa-skill` |
 
 ## Applying one
