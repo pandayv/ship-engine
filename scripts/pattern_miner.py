@@ -139,7 +139,15 @@ def mine() -> dict:
 
 
 def main() -> int:
-    result = mine()
+    # Paused on purpose. A reviewer now either okays a finding to move forward (approve) or confirms
+    # it is real and keeps the PR blocked (reject). Neither says "this was a false alarm": a reviewer
+    # can accept a real risk, and a confirmed finding is the opposite of a dismissal. Mining
+    # "rejected" as dismissals would teach Detector to wave through the violations people confirmed.
+    # Re-enable once a review can record an explicit false-positive outcome.
+    print("Pattern mining is paused: review decisions no longer say whether a finding was a false positive.")
+    return 1
+
+    result = mine()  # noqa: unreachable until a false-positive outcome exists
     print(json.dumps(result, indent=2))
     print(f"\n{result['processed']} new dismissal(s) processed: "
           f"{result['reinforced']} reinforced an existing pattern, "
