@@ -21,11 +21,17 @@ turns the PR's own `ship/compliance` check red, and as a required check
 that stops the merge button. It is a gate, not a dashboard entry someone
 has to remember to open.
 
-Then ask it out loud. *"Alexa, ask ship review what's up."* gets one
-sentence. It says how many blockers there are and offers a screen to
-look at, never the finding itself. Say *"show it on the laptop"* and the detail appears there, as one
-table per pull request with numbered rows. Decide in your own words:
-*"Allow the first one on pull request 2 because it's only test data."*
+Then talk to it. A voice should feel like a conversation, so SHIP asks and
+you answer in plain words. *"Alexa, ask ship review what's up."* gets one
+sentence. It says how many blockers there are and offers a screen to look
+at, never the finding itself. Say *"the laptop"* and the detail appears
+there, as one table per pull request with numbered rows. Alexa asks *"Want
+to go through them?"* and takes you through the findings you have looked
+at, one at a time: *"Number 1 on pull request 1. Allow, block, or skip?"*
+Answer the way you would answer a colleague: *"Allow it, it's only test
+data."* Leave the reason out and SHIP asks for it. Each decision shows on
+the screen as pending, and at the end of a pull request one plain yes
+applies the batch.
 
 Allow means you accept the risk, and the finding stops blocking. Block
 means you confirm the finding is real, and the pull request stays blocked
@@ -37,8 +43,9 @@ server, refuses unless the finding was shown on a screen in the last ten
 minutes and a reason is on the record. It applies nothing until a second
 step, the person's plain yes. The Alexa Skill adds two more checks. The
 reason must be built from the person's own words, and only that yes can
-trigger the second step. The language model that hears the request never
-sees a finding and has no way around these checks.
+trigger the second step. A bare yes never decides anything. In the guided
+review, plain code reads every answer. No language model is involved, and
+none ever sees a finding.
 
 SHIP polices this exact pattern, an AI decision applied with no human
 oversight, in other people's code. It holds itself to the same rule in its
@@ -64,8 +71,9 @@ spec (`2025-11-25`, Streamable HTTP) and runs on AWS Lambda. Alexa+ add-on
 tooling is limited to select partners, and the hackathon
 [FAQ](https://amazonappdev2026.devpost.com/details/faqs) says so. So an
 Alexa Skill, "ship review", stands in for the add-on and is the MCP client.
-Amazon Nova Lite on Bedrock turns free speech into tool calls, and plain
-code checks every call. An Echo drives the whole flow. A web simulator that
+Plain code runs the guided review. Amazon Nova Lite on Bedrock turns other
+free speech into tool calls, and plain code checks every call. An Echo
+drives the whole flow. A web simulator that
 acts as an MCP client (`initialize`, `tools/list`, `tools/call`) is
 included for anyone without a device.
 
@@ -109,10 +117,17 @@ how each integration went.
   be read aloud. The tests check outcomes: a refusal changes nothing, an
   allowed finding stops blocking the PR's check, a blocked one keeps it
   failing.
-- **The model proposes, code decides.** The model can reach four tools and
-  never sees finding text. Spoken numbers become finding ids in code, using
-  the numbers the person saw on a screen. What Alexa says back is Relay's
-  sentence, never the model's paraphrase.
+- **Questions that take any answer.** Alexa only understands a sentence
+  that matches one of a skill's sample phrases, so a free answer to a
+  question falls to "I didn't understand". Every question SHIP asks uses
+  slot elicitation, which makes Alexa hand back whatever the person says
+  as plain words.
+- **The model proposes, code decides.** In the guided review, code reads
+  every answer with a wide vocabulary and no model, so the meaning of an
+  answer is predictable. For other free speech the model can reach four
+  tools and never sees finding text. Spoken numbers become finding ids in
+  code, using the numbers the person saw on a screen. What Alexa says back
+  is Relay's sentence, never the model's paraphrase.
 - **Push, not polling.** A WebSocket sits idle until a finding needs to
   reach a screen. If the page is closed, a Web Push notification wakes it,
   and the findings count as seen only after the page displays them.
@@ -120,7 +135,8 @@ how each integration went.
 ## Design: a coherent product
 
 Voice, screen and decision are three surfaces doing three different jobs on
-purpose. Alexa triggers and routes. A nearby display renders the detail.
+purpose. Alexa triggers, routes and asks the questions. A nearby display
+renders the detail.
 Deciding a finding, in Gate with a typed reason or by voice with a spoken
 one, always requires having seen it first. That split is why the refusal
 (allowing something you've never looked at fails) reads as a design
@@ -162,8 +178,8 @@ model behaving.
 A compliance gatekeeper isn't an obvious fit for a voice assistant, and
 that's the point. Most voice submissions extend something that already has
 a screen. SHIP inverts it. The finding lives on a screen by design, and
-voice's only job is saying whether one exists, where to look, and taking a
-decision once the person has looked.
+voice's job is saying whether one exists, where to look, and then asking
+about each finding and taking the decision once the person has looked.
 
 The sharper move is to hold SHIP's own interface to the standard it
 enforces on others. The failure SHIP exists to catch is not "a decision
@@ -171,6 +187,9 @@ happened over voice". It is a decision with no review behind it. So voice
 can confirm a decision after a person has seen the evidence and said why,
 and it can't make one blind.
 
-**Try it:** [web simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)
-· [screen display page](https://pandayv.github.io/ship-engine/ship-display.html)
-· [architecture](https://pandayv.github.io/ship-engine/architecture.html)
+**Try it:** on an Echo, say "Alexa, ask ship review what's up" and answer what
+it asks. Without a device, use the
+[web simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)
+and the [screen display page](https://pandayv.github.io/ship-engine/ship-display.html).
+The [architecture page](https://pandayv.github.io/ship-engine/architecture.html)
+walks through every component.

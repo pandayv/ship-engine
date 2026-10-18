@@ -417,3 +417,32 @@ def test_skipping_the_last_pull_request_ends_the_review():
     rf.answer(session, "skip", ctx)
     rf.answer(session, "skip", ctx)               # skip PR 2 (the only one left to offer)
     assert "flow" not in session
+
+
+def test_a_pull_request_named_in_a_decision_wins_over_the_one_being_reviewed():
+    session = {"screen": "laptop"}
+    rf.begin(session, THREE)                                   # on pull request 1
+    relay = Relay()
+    turn = rf.answer(session, "allow the first one on pull request 7 because it is test data", ctx_for(relay, routing=THREE))
+    staged = relay.named("stage_decisions")[0]
+    assert staged["pr_number"] == 7 and staged["decisions"][0]["alert_id"] == "c1"
+    assert turn.speech.startswith("Got it.") or "pull request 7" in turn.speech
+
+
+def test_a_decision_for_another_pull_request_is_not_taken_once_this_one_is_partly_decided():
+    session = {"screen": "laptop"}
+    rf.begin(session, THREE)
+    relay = Relay()
+    rf.answer(session, "allow, it's test data", ctx_for(relay, routing=THREE))
+    staged_before = len(relay.named("stage_decisions"))
+    turn = rf.answer(session, "allow the first one on pull request 7 because it is test data", ctx_for(relay, routing=THREE))
+    assert len(relay.named("stage_decisions")) == staged_before
+    assert "We're on pull request 1" in turn.speech
+
+
+def test_a_pull_request_that_has_not_been_shown_is_not_decided():
+    session = {"screen": "laptop"}
+    rf.begin(session, ROUTING)
+    relay = Relay()
+    turn = rf.answer(session, "allow the first one on pull request 99 because it is test data", ctx_for(relay))
+    assert relay.named("stage_decisions") == [] and "I don't have pull request 99" in turn.speech

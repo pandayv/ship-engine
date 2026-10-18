@@ -540,6 +540,19 @@ def _on_next_pr(session, text, ctx):
 
 def _on_decide(session, text, ctx):
     flow = session["flow"]
+    named_pr = pr_named(text)
+    if named_pr is not None and named_pr != flow["pr"]:
+        # "allow the first one on pull request 2" while on pull request 1: the pull request the
+        # person names wins. A decision must never land on a different pull request than the one said.
+        if flow["decisions"]:
+            return _miss(session, f"We're on pull request {flow['pr']}, and you've decided some of it. "
+                                  f"Finish this one, or say stop first. " + _question(flow))
+        routing = ctx.seen_routing()
+        target = next((p for p in _pr_list(routing) if p[1] == named_pr), None)
+        if target is None:
+            return _miss(session, f"I don't have pull request {named_pr} on your screen. " + _question(flow))
+        _enter_pr(session, routing, target[0], target[1], first=False)
+        flow = session["flow"]
     parsed = parse_answer(text)
     action = parsed["action"]
 

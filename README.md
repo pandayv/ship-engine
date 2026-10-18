@@ -249,7 +249,7 @@ a colleague. A few examples:
 
 Full sentences work too: "Allow the first one on pull request 2 because
 it's only test data." Approve, accept, dismiss, clear and ignore are
-understood as allow, and reject, deny and confirm as block. SHIP answers in
+understood as allow, and reject and confirm as block. SHIP answers in
 allow and block.
 
 If you give a decision without a reason, SHIP asks for one. A bare yes
@@ -348,18 +348,30 @@ has reported. If SHIP can't read its state, the check stays pending.
   manager can run its lifespan only once per instance. The docstring at
   the top of [`src/relay/server.py`](src/relay/server.py) has the details.
 - **Alexa Skill:** [`alexa-skill/`](alexa-skill/) stands in for an Alexa+
-  add-on. Common requests have their own intents and are answered by
-  plain code. Anything else goes to Amazon Nova Lite on Bedrock. Decisions
+  add-on. Alexa only understands a sentence that matches one of the
+  skill's sample phrases, so a free answer to a question would fall to "I
+  didn't understand". The skill avoids that by asking every question with
+  a `Dialog.ElicitSlot` directive on `AnswerIntent`, whose one slot is an
+  `AMAZON.SearchQuery`. Alexa then hands back whatever the person says as
+  plain words. The guided review in
+  [`review_flow.py`](alexa-skill/lambda/review_flow.py) reads those words
+  in code, with a wide vocabulary and no model, so the meaning of an
+  answer is predictable. It keeps its state in the session under `flow`.
+  While a review is under way, an answer belongs to it even when Alexa
+  picks another intent: yes, no, stop and help answer the current question,
+  and the fallback intent repeats it. Common requests have their own
+  intents and are answered by plain code (see the intents below). Other
+  free speech goes to Amazon Nova Lite on Bedrock. Explicit sentences
   arrive on `AllowIntent` and `BlockIntent`, one per verb, so the verb
   survives Alexa's carrier-phrase handling. Approve, accept, clear,
   dismiss and ignore reach the model as allow, and reject and confirm as
-  block. The model chooses among `release_status`, `display_on`, `stage_decisions` and
-  `proceed`. Plain code then checks the choice. The model never sees
-  finding text. It must name a screen the person used, give numbers the
-  person saw, and give a reason built from the person's own words. Only
-  the person's plain yes can apply a staged decision. What is spoken back
-  is Relay's sentence, not the model's. If the model is slow, simple
-  rules answer instead.
+  block. The model chooses among `release_status`, `display_on`,
+  `stage_decisions` and `proceed`. Plain code then checks the choice. The
+  model never sees finding text. It must name a screen the person used,
+  give numbers the person saw, and give a reason built from the person's
+  own words. Only the person's plain yes can apply a staged decision. What
+  is spoken back is Relay's sentence, not the model's. If the model is
+  slow, simple rules answer instead.
 - **Screens:** an API Gateway WebSocket API with a small dedicated Lambda
   ([`device_gateway_handler.py`](device_gateway_handler.py)) for connect,
   disconnect, register, subscribe and acknowledge. It is separate from
@@ -397,6 +409,19 @@ with no line breaks, so a list of findings can't be spoken.
 | `proceed` | Action | Applies the staged batch after re-checking each finding. Reports each outcome: applied, skipped, already decided, not found, unreadable or error. |
 | `cancel_pending` | Action | Drops the staged batch. |
 | `request_risk_acceptance` | Action | Allows one finding in a single step under the same two server rules. It can't block. The skill's model can't reach it. |
+
+### The skill's intents
+
+| Intent | What it carries |
+|---|---|
+| `StatusIntent` | "What's up?" Speaks `release_status`, then asks which screen. |
+| `ShowIntent` | A screen name. The `SCREEN` slot holds tv, tablet, laptop, fridge and `all` ("both", "all of them", "everywhere"). |
+| `StartReviewIntent` | "Let's go through them." Starts the walk-through over what the person has seen. |
+| `AnswerIntent` | The reply to any question the skill asked. One slot, `answer`, elicited with `Dialog.ElicitSlot`. With no review under way, the words go to the model. |
+| `AllowIntent`, `BlockIntent`, `MarkIntent`, `ShowFreeIntent`, `WhatIntent`, `AskIntent` | Free text behind a verb or a neutral carrier. With a review under way, the words are treated as an answer to the current question. |
+| `AlertsIntent` | "Turn on alerts." Sends the notification permission card. |
+| `AMAZON.YesIntent`, `AMAZON.NoIntent`, `AMAZON.StopIntent`, `AMAZON.CancelIntent`, `AMAZON.HelpIntent` | Answers to the current question during a review. Outside one, yes and no go to the model, help describes the skill, and stop ends it and drops an unconfirmed staged decision. |
+| `AMAZON.FallbackIntent` | During a review, repeats the current question. |
 
 ## Setup
 
@@ -448,6 +473,7 @@ src/
   dashboard_ui/templates/  # Gate pages
 alexa-skill/
   lambda/lambda_function.py  # The Alexa Skill: Alexa intents -> Relay over MCP
+  lambda/review_flow.py      # The guided review: the questions, and reading the answers in code
   lambda/orchestrator.py     # Free speech: the model proposes, plain code checks
   skill-package/             # Skill manifest and language model
 infra/iam/                 # Reference IAM policies, one per Lambda role
@@ -460,7 +486,7 @@ docs/
   ship-render.js           # Findings table shared by both pages above
   ship-sw.js               # Service worker that shows the alert notification
   architecture.html        # Full pipeline diagram
-  voice-resolution-workflow.md  # How a spoken decision is checked
+  voice-resolution-workflow.md  # How a spoken decision works and is checked
 scripts/
   healing_loop.py          # Periodic corpus-grounding check
   pattern_miner.py         # Extracts patterns from allowed findings

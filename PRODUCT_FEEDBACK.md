@@ -11,9 +11,8 @@ them also detailed with full reproduction steps in
 
 ## AWS Builder mini-challenge: which services, and how
 
-SHIP's entire review engine and voice/push layer runs on AWS, not as a
-token integration to qualify for this challenge but because the
-architecture genuinely needed each piece.
+SHIP's entire review engine and voice/push layer runs on AWS, because the
+architecture needs each piece.
 
 - **Amazon Bedrock** handles the model backend for Detector, SHIP's
   compliance reasoning agent. Both the model choice and the retry
@@ -36,7 +35,7 @@ architecture genuinely needed each piece.
   enabled), the device gateway (WebSocket connect, disconnect, register,
   subscribe and acknowledge), and the Alexa Skill (speech to Relay calls).
   Deliberately not one do-everything function. A Lambda's blast radius and IAM scope should match what it
-  actually needs, not the union of everything the project does.
+  needs, not the union of everything the project does.
 - **Amazon SQS** decouples fragment review from the webhook's fast-ack
   requirement, with a dead-letter queue for genuine failures and a
   concurrency cap that keeps parallel reviews within the account's real
@@ -102,7 +101,7 @@ look-alikes, not just the happy path.
 Alexa Skill's free-speech tool selection) and embeddings (RAG retrieval).
 
 **What worked well:** the adaptive retry mode
-(`Config(retries={"mode": "adaptive"})`) genuinely solved the
+(`Config(retries={"mode": "adaptive"})`) solved the
 account-wide rate-limit problem. Once configured, concurrent fragment
 reviews backed off and retried automatically with no custom coordination
 code needed.
@@ -115,7 +114,7 @@ subscription permissions (Anthropic models are delivered through
 Marketplace under the hood, which isn't obvious from the API surface),
 and a new-account daily token quota that silently defaults to zero until
 support intervenes. Each produced a different, correctly-worded error and
-each was genuinely solvable, but five sequential gates for a first call
+each was solvable, but five sequential gates for a first call
 is a lot for a hackathon's time budget, and none of them were mentioned
 together on one onboarding page. Separately, per-model
 request-per-minute quota varies by roughly 20x across models on the same
@@ -127,7 +126,7 @@ our model choice.
 past that point.
 
 **Would we build with it again?** **Yes.** The model quality and the
-adaptive-retry story are genuinely good. The new-account activation path
+adaptive-retry story are good. The new-account activation path
 is what we'd want fixed, not the runtime experience.
 
 ### Amazon Bedrock AgentCore Runtime / AgentCore CLI
@@ -157,7 +156,7 @@ budget real time for the CLI-migration surprise if starting fresh today.
 
 **Used for:** all of SHIP's compute functions.
 
-**What worked well:** SnapStart genuinely works as advertised once
+**What worked well:** SnapStart works as advertised once
 configured correctly. A restored invocation measured at 440ms against a
 multi-second cold init, and it's accepted on `arm64` plus Python 3.12
 without qualification, confirmed directly against the API rather than
@@ -212,7 +211,7 @@ the error message doesn't immediately suggest the fix.
 device.
 
 **What worked well:** the core connect/route/integrate/deploy flow is
-genuinely simple once understood, and `post_to_connection` is a clean,
+simple once understood, and `post_to_connection` is a clean,
 predictable API for server-initiated push.
 
 **What needs work:** two things cost real debugging time. First, a
@@ -245,7 +244,7 @@ its documented CLI path.
 **What worked well:** the documented MCP spec requirement (`2025-11-25`,
 Streamable HTTP) is exact and matched what we'd already built
 independent of Alexa+'s own docs. The web-simulator alternative for a
-simulated experience is a genuinely well-designed accommodation for
+simulated experience is a well-designed accommodation for
 exactly the situation we hit.
 
 **What needs work:** the CLI setup (`npm install -g @alexa-ai/cli`,
@@ -281,7 +280,8 @@ instructions, not mid-page after them.
 ### Alexa Skills Kit CLI and skill simulator
 
 **Used for:** an Alexa Skill that stands in for an Alexa+ add-on. It turns
-what Alexa hears into calls to Relay over MCP.
+what Alexa hears into calls to Relay over MCP, and it walks the person
+through the findings one question at a time.
 
 **What worked well:** `ask deploy` with the Lambda deployer created the
 skill, its language model, the Lambda function, the function's role and
@@ -292,13 +292,22 @@ was verified before any hardware was involved. Amazon's documentation
 states that a Lambda trigger carrying the skill ID already rejects any
 other caller, so the skill needs no signature-checking code.
 
+Slot elicitation made the voice a conversation. The skill sends each
+question with a `Dialog.ElicitSlot` directive for an intent whose one slot
+is an `AMAZON.SearchQuery`, and Alexa returns whatever the person says as
+plain words. The skill's own code then reads the answer.
+
 **What needs work:** the notification catalog has no generic alert type,
-so a compliance alert has to be phrased as a message count. And when a free
+so a compliance alert has to be phrased as a message count. When a free
 text slot (`AMAZON.SearchQuery`) sits behind a carrier phrase, Alexa hands
 the skill only the slot, so a verb used as the carrier ("allow ...",
 "block ...") disappears from what the skill receives. The skill keeps one
 intent per verb (`AllowIntent`, `BlockIntent`) and puts the verb back
-itself. Details in [`FRICTION_LOG.md`](FRICTION_LOG.md).
+itself. And Alexa understands a sentence only if it matches a sample phrase,
+so a free answer to a question ("it's only test data") reaches the skill as
+an unmatched request with no text. Eliciting every question is the way
+around that, and it would help to have it described as the way to ask an
+open question. Details in [`FRICTION_LOG.md`](FRICTION_LOG.md).
 
 **Onboarding:** `ask configure` was self-explanatory, and linking the AWS
 profile there meant no separate credential setup for the deploy.

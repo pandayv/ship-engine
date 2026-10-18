@@ -217,3 +217,41 @@ neutral carriers such as "can you" and "please".
 
 **Suggestion:** document that the carrier phrase is not part of the slot value,
 or expose the matched sample or the full utterance text to the skill.
+
+---
+
+## Questions: an answer that matches no sample phrase is lost
+
+**Task attempted:** have the skill ask a question and act on a free-form
+answer. For example, "What's the reason?" followed by "it's only test data",
+or "Allow, block, or skip?" followed by "first one is fine".
+
+**Steps taken:**
+1. Asked the question as an ordinary spoken reply, with a reprompt.
+2. Answered with sentences that no sample phrase covered.
+
+**Expected:** the skill receives the words, or is at least told that they
+were an answer to the question it just asked.
+
+**Actual:** Alexa matches every utterance against the skill's sample phrases,
+including a reply to a question. A sentence that fits none of them reaches
+the skill as an unmatched request with no text. The skill could only say it
+did not understand and ask the same question again.
+
+**Severity:** high for any skill that asks open questions. The conversation
+cannot move past the first answer nobody wrote a sample phrase for.
+
+**Workaround used:** slot elicitation. Every question is sent with a
+`Dialog.ElicitSlot` directive for an intent (`AnswerIntent`) whose single slot
+is an `AMAZON.SearchQuery` with the sample `{answer}`. Alexa then hands back
+whatever the person says as plain words. Code reads those words with a wide
+vocabulary instead of a language model, so what an answer means is
+predictable and a misheard answer cannot become a decision.
+
+**What works, in general:** sample phrases suit commands. A question needs a
+slot that takes any words, and the skill has to say that a question is open
+by eliciting it. Understanding the answer is then the skill's job.
+
+**Suggestion:** describe slot elicitation with `AMAZON.SearchQuery` as the way
+to ask an open question, in the dialog documentation. Or pass the raw
+utterance text to the skill on `AMAZON.FallbackIntent`.
