@@ -726,3 +726,14 @@ def test_connected_screens_is_empty_when_no_display_page_is_open(monkeypatch):
 
 def test_connected_screens_is_one_of_relays_tools():
     assert "connected_screens" in {t.__name__ for t in relay.TOOLS}
+
+
+def test_cancel_pending_drops_the_staged_decisions_without_resolving_anything(two_blocking, session_table, monkeypatch):
+    from src.storage import pending_store
+    cleared = []
+    monkeypatch.setattr(pending_store, "clear_pending", lambda repo, pr: cleared.append((repo, pr)))
+    resolved = []
+    monkeypatch.setattr(relay, "_resolve_one", lambda *a, **k: resolved.append(a))
+    result = relay.cancel_pending("pandayv/micro-finance", 2)
+    assert cleared == [("pandayv/micro-finance", 2)] and resolved == []
+    assert result["performed"] == 0 and "won't apply" in result["spoken_response"]

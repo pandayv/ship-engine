@@ -481,6 +481,21 @@ def proceed(repo: str, pr_number: int, device: str = "") -> dict:
     }
 
 
+def cancel_pending(repo: str, pr_number: int, device: str = "") -> dict:
+    """Drops whatever stage_decisions staged for this PR, without resolving anything.
+    Used when the person says no to a staged batch, so the screen stops showing it as
+    pending. Nothing in ship-alerts changes."""
+    pending_store.clear_pending(repo, pr_number)
+    if device:
+        push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+    return {
+        "modality": Modality.ACTION.value,
+        "performed": 0,
+        "spoken_response": Spoken("Okay, I won't apply it.").to_text(),
+        "console_url": _console("/dashboard"),
+    }
+
+
 def _notify_registered_device(name: str, status, payload: dict) -> bool:
     """No page is open on this screen, but if the person registered it for alerts, hold the
     findings for it and send a notification. The findings are NOT marked as shown here: a
@@ -603,7 +618,7 @@ def connected_screens() -> dict:
 
 
 TOOLS = (release_status, blocked_pull_requests, finding_detail, request_risk_acceptance,
-         stage_decisions, proceed, display_on, connected_screens, findings_routing)
+         stage_decisions, proceed, cancel_pending, display_on, connected_screens, findings_routing)
 
 
 def create_app() -> Starlette:

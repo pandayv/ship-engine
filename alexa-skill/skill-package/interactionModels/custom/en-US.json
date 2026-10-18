@@ -58,8 +58,7 @@
             "put it on my {screen}",
             "send it to the {screen}",
             "send it to my {screen}",
-            "on the {screen}",
-            "the {screen}"
+            "on the {screen}"
           ]
         },
         {
@@ -84,23 +83,27 @@
             "let us {request}",
             "lets {request}",
             "go ahead and {request}",
-            "tell me {request}",
             "tell it to {request}",
             "what about {request}",
             "how about {request}",
-            "what is {request}",
             "what are {request}",
             "is there {request}",
             "are there {request}",
             "do {request}",
             "does {request}",
             "the {request}",
-            "that {request}",
-            "this {request}",
-            "it {request}",
             "{request} for me",
             "{request} on the screen",
-            "{request} right now"
+            "{request} right now",
+            "okay {request}",
+            "ok {request}",
+            "let's {request}",
+            "so {request}",
+            "now {request}",
+            "then {request}",
+            "and {request}",
+            "also {request}",
+            "just {request}"
           ]
         },
         {
@@ -179,6 +182,32 @@
             "i want to be notified",
             "let me know when something is found",
             "tell me when something is found"
+          ]
+        },
+        {
+          "name": "MarkIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "mark {request}"
+          ]
+        },
+        {
+          "name": "WhatIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "what's {request}",
+            "what is {request}",
+            "whats {request}"
           ]
         }
       ],

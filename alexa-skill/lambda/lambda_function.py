@@ -51,7 +51,9 @@ RELAY_TIMEOUT_SECONDS = 5
 # the person hears our apology instead of Alexa's generic failure message.
 ANSWER_BY_SECONDS = 7.0
 
-REPROMPT = "You can ask what's up, or say show it on the TV."
+# Marker for "say whatever is the useful next step right now". The words come from
+# next_step(), which looks at where the conversation is.
+REPROMPT = object()
 
 # Intents that carry free text, and the verb to restore in front of it. The
 # general intent has only neutral carriers ("can you ...", "please ..."), so
@@ -61,6 +63,8 @@ FREE_TEXT_INTENTS = {
     "ShowFreeIntent": "show ",
     "ApproveIntent": "approve ",
     "RejectIntent": "reject ",
+    "MarkIntent": "mark ",
+    "WhatIntent": "what is ",
 }
 
 # One MCP session per warm container. Relay is stateless, so this is the
@@ -187,7 +191,21 @@ def remember_user(user_id, source):
 
 # --------------------------------------------------------------- Alexa output
 
+def next_step(session):
+    """The one useful thing to suggest right now, from where the conversation is. Never
+    names a screen that is not set up."""
+    session = session or {}
+    if session.get("routing"):
+        return "Say approve or reject, with the number and a reason."
+    screens = session.get("screens")
+    if screens:
+        return f"You can ask what's up, or say show it on the {screens[0]}."
+    return "You can ask what's up."
+
+
 def speak(text, end=False, reprompt=None, session=None, card=None):
+    if reprompt is REPROMPT:
+        reprompt = next_step(session)
     response = {"outputSpeech": {"type": "PlainText", "text": text}, "shouldEndSession": end}
     if card:
         response["card"] = card
@@ -239,23 +257,29 @@ def _session(event):
         "history": list(attributes.get("history", [])),
         "routing": list(attributes.get("routing", [])),
         "screen": attributes.get("screen"),
+        "screens": attributes.get("screens"),
         "pending": attributes.get("pending"),
     }
 
 
 def status_reply(session):
+    connected_screens(session)
     sentence = str(call_tool("release_status"))
     orchestrator.remember(session, "what's the status", sentence)
     return speak(sentence, reprompt=REPROMPT, session=session)
 
 
-def connected_screens():
-    """The names of the screens that are set up right now, or None if that could not be checked."""
+def connected_screens(session=None):
+    """The names of the screens that are set up right now, or None if that could not be checked.
+    Remembered in the session so a reprompt can name a screen that really exists."""
     try:
-        return list(call_tool("connected_screens").get("screens", []))
+        screens = list(call_tool("connected_screens").get("screens", []))
     except Exception:  # noqa: BLE001 - not knowing must not stop the answer
         log.exception("could not list the connected screens")
         return None
+    if session is not None:
+        session["screens"] = screens
+    return screens
 
 
 def seen_routing():
@@ -282,7 +306,7 @@ def seen_routing():
 
 def show_reply(slots, session):
     screen = _slot_value(slots, "screen")
-    connected = connected_screens()
+    connected = connected_screens(session)
     card = orchestrator.console_card(CONSOLE_URL) if connected == [] and CONSOLE_URL else None
     if not screen and connected and len(connected) == 1:
         screen = connected[0]       # only one to choose from, so no need to ask
@@ -300,6 +324,8 @@ def show_reply(slots, session):
         session["routing"] = result.get("routing") or []
     sentence = result.get("spoken_response", "Okay.")
     orchestrator.remember(session, f"show it on the {screen}", sentence)
+    if result.get("delivered"):
+        sentence += " Say approve or reject, with the number and a reason."
     return speak(sentence, reprompt=REPROMPT, session=session)
 
 
@@ -307,7 +333,7 @@ def free_text_reply(text, session):
     """Anything said in the person's own words. A language model picks the tools;
     if it can't be used in time, plain rules cover the common requests."""
     _connect()
-    connected = connected_screens()
+    connected = connected_screens(session)
     seen = seen_routing()
     if seen is not None:
         session["routing"] = seen       # what Relay says was seen, not what we remember
@@ -340,6 +366,8 @@ def alerts_reply(session):
 def on_intent(request, session):
     name = request["intent"]["name"]
     slots = request["intent"].get("slots")
+    log.info("intent %s heard %s", name,
+             {k: v.get("value") for k, v in (slots or {}).items() if isinstance(v, dict)})
     if name == "StatusIntent":
         return status_reply(session)
     if name == "ShowIntent":
@@ -367,7 +395,10 @@ def on_intent(request, session):
         )
     if name in ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"):
         return speak("Okay.", end=True)
-    return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT, session=session)
+    # Alexa could not match what was said to anything it knows. It hands over no text,
+    # so say what does work instead of guessing.
+    log.info("no intent matched: %s", name)
+    return speak("Sorry, I missed that. " + next_step(session), reprompt=REPROMPT, session=session)
 
 
 # --------------------------------------------------------------------- entry
@@ -398,7 +429,7 @@ def handler(event, context):
             return on_intent(request, session)
         if kind == "SessionEndedRequest":
             return {"version": "1.0", "response": {}}
-        return speak("I didn't catch that. " + REPROMPT, reprompt=REPROMPT, session=session)
+        return speak("Sorry, I missed that. " + next_step(session), reprompt=REPROMPT, session=session)
     except RelayError:
         log.exception("Relay call failed")
         return speak("I couldn't reach SHIP just now. Please try again in a moment.", end=True)

@@ -309,7 +309,7 @@ def test_anything_more_than_a_confirmation_is_not_treated_as_one(said):
 def test_saying_no_drops_the_staged_decision_without_proceeding(said):
     relay = Relay()
     speech, _, session = turn(said, model_says({"text": "x"}), relay, {"pending": PENDING})
-    assert relay.calls == [] and "pending" not in session and "won't apply" in speech
+    assert relay.names == ["cancel_pending"] and "pending" not in session and "won't apply" in speech
 
 
 def test_staging_a_decision_remembers_it_so_the_next_yes_can_confirm_it():
@@ -409,3 +409,19 @@ def test_a_screen_that_was_only_notified_becomes_the_last_screen_but_gives_no_ro
     relay = Relay({"display_on": {"delivered": False, "notified": True, "spoken_response": "I've sent a notification to your tablet. Open it to review.", "routing": []}})
     speech, _, session = turn("show it on the tablet", model_says(use("display_on", surface="tablet")), relay, connected=["tablet"])
     assert session["screen"] == "tablet" and not session.get("routing") and "notification" in speech
+
+
+def test_saying_no_to_a_staged_batch_also_clears_it_on_relay():
+    session = {"pending": {"repo": "r", "pr_number": 2}, "screen": "tablet"}
+    speech, relay, session = turn("no, never mind", model_says(), session=session)
+    assert speech == "Okay, I won't apply it." and "pending" not in session
+    assert relay.calls == [("cancel_pending", {"repo": "r", "pr_number": 2, "device": "tablet"})]
+
+
+def test_a_failure_to_clear_it_on_relay_does_not_change_the_answer():
+    class Down(Relay):
+        def __call__(self, name, args=None):
+            raise RuntimeError("relay down")
+    session = {"pending": {"repo": "r", "pr_number": 2}}
+    speech, _, session = turn("cancel", model_says(), relay=Down(), session=session)
+    assert speech == "Okay, I won't apply it." and "pending" not in session

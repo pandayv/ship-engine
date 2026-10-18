@@ -26,9 +26,12 @@ The voice gate itself (the person must have seen the finding on a screen, and
 must give a reason) is enforced by Relay, not here and not by the model.
 """
 
+import logging
 import re
 import time
 from collections import namedtuple
+
+log = logging.getLogger(__name__)
 
 # What to say, and what to put on a card in the Alexa app, for one turn.
 Reply = namedtuple("Reply", ["speech", "card"], defaults=[None])
@@ -74,7 +77,8 @@ def console_card(url):
     return {"type": "Simple", "title": "SHIP review console",
             "content": f"Open this on any device and sign in to review the findings: {url}"}
 LOOK_FIRST = "Take a look at them on a screen first, then tell me why."
-ASK_REASON = "What's the reason for each one?"
+ASK_REASON = "What's the reason?"
+ASK_REASON_EACH = "What's the reason for each one?"
 # Words that are the command itself, not a reason for it. "approve everything" is not a reason.
 COMMAND_WORDS = {"approve", "approved", "accept", "reject", "rejected", "dismiss", "clear", "ignore", "allow", "confirm",
                  "block", "everything", "all", "any", "these", "those", "findings", "finding", "first", "second", "third",
@@ -302,6 +306,11 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
         remember(session, utterance, speech)
         return Reply(speech)
     if pending and is_cancellation(utterance):
+        try:    # so the screen stops showing it as pending; the answer does not depend on this
+            call_tool("cancel_pending", {"repo": pending["repo"], "pr_number": pending["pr_number"],
+                                         **({"device": session["screen"]} if session.get("screen") else {})})
+        except Exception:  # noqa: BLE001
+            log.exception("could not clear the staged decision on Relay")
         session.pop("pending", None)
         speech = "Okay, I won't apply it."
         remember(session, utterance, speech)
@@ -378,7 +387,7 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
             decisions = clean_decisions(args.get("decisions"))
             said = [utterance] + [earlier for earlier, _ in session.get("history", [])]
             if not decisions or any(not reason_is_theirs(d["reason"], said) for d in decisions):
-                speech = ASK_REASON
+                speech = ASK_REASON_EACH if decisions and len(decisions) > 1 else ASK_REASON
                 continue
             args["decisions"] = decisions
             args["pr_number"] = target[1]

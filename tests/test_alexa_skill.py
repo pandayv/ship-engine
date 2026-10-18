@@ -96,7 +96,8 @@ def test_the_mcp_handshake_runs_in_order_and_only_once(skill):
     skill.handler(request_event(intent("StatusIntent")), None)
     skill.handler(request_event(intent("StatusIntent")), None)
     methods = [m for m, _, _ in skill.sent]
-    assert methods == ["initialize", "notifications/initialized", "tools/list", "tools/call", "tools/call"]
+    # each turn asks which screens exist, then for the status
+    assert methods == ["initialize", "notifications/initialized", "tools/list"] + ["tools/call"] * 4
 
 
 def test_calls_after_initialize_carry_the_negotiated_protocol_version(skill):
@@ -286,7 +287,7 @@ def test_asking_to_show_it_with_exactly_one_screen_connected_just_uses_it(skill)
     skill.connected = ["laptop"]
     skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
     reply = skill.handler(request_event(intent("ShowIntent", {})), None)
-    assert spoken(reply) == "Putting it on your laptop."
+    assert spoken(reply) == "Putting it on your laptop. Say approve or reject, with the number and a reason."
     assert ("tools/call", "display_on", "2025-11-25") in skill.sent
 
 
@@ -334,3 +335,36 @@ def test_a_screen_that_was_only_notified_is_remembered_as_the_last_one_used(skil
     reply = skill.handler(request_event(intent("ShowIntent", {"screen": {"name": "screen", "value": "tablet", "resolutions": {"resolutionsPerAuthority": [
         {"status": {"code": "ER_SUCCESS_MATCH"}, "values": [{"value": {"id": "tablet", "name": "tablet"}}]}]}}})), None)
     assert reply["sessionAttributes"]["screen"] == "tablet" and "sent a notification" in spoken(reply)
+
+
+# --- what the skill suggests next, and what it does when it did not understand ---
+
+
+def test_the_suggestion_never_names_a_screen_that_is_not_set_up(skill):
+    skill.connected = ["laptop", "tablet"]
+    reply = skill.handler(request_event(intent("StatusIntent")), None)
+    prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
+    assert "laptop" in prompt and "TV" not in prompt and "tv" not in prompt
+
+
+def test_with_no_screen_the_suggestion_does_not_offer_one(skill):
+    skill.connected = []
+    reply = skill.handler(request_event(intent("StatusIntent")), None)
+    assert reply["response"]["reprompt"]["outputSpeech"]["text"] == "You can ask what's up."
+
+
+def test_once_findings_have_been_seen_the_suggestion_is_to_decide(skill):
+    session = {"routing": [{"repo": "r", "pr_number": 1, "findings": []}]}
+    assert "approve or reject" in skill.next_step(session)
+
+
+def test_an_unmatched_phrase_gets_a_useful_answer_not_a_screen_offer(skill):
+    skill.connected = []
+    reply = skill.handler(request_event(intent("AMAZON.FallbackIntent")), None)
+    text = spoken(reply)
+    assert text.startswith("Sorry, I missed that.") and "TV" not in text
+
+
+def test_mark_and_what_is_keep_their_first_word(skill, monkeypatch):
+    assert spoken_to_model(skill, monkeypatch, "MarkIntent", "the first one as a false positive") == "mark the first one as a false positive"
+    assert spoken_to_model(skill, monkeypatch, "WhatIntent", "wrong with the first one") == "what is wrong with the first one"
