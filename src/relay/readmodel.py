@@ -121,21 +121,20 @@ class ReleaseStatus:
 
         multi_pr = len(self.pull_requests) > 1
 
+        held_note = (f" {held} blocked {'finding' if held == 1 else 'findings'} still {'holds' if held == 1 else 'hold'} the merge."
+                     if held else "")
         if self.blocking:
             noun = "blocker" if self.blocking == 1 else "blockers"
             sentence = f"{self.blocking} {noun} found"
             if multi_pr:
                 sentence += f" across {len(self.pull_requests)} PRs"
-            sentence += ". Ready for your decision."
+            sentence += ". Ready for your decision." + held_note
         else:
             noun = "issue" if self.review == 1 else "issues"
             sentence = f"{self.review} {noun} found"
             if multi_pr:
                 sentence += f" across {len(self.pull_requests)} PRs"
-            if held:
-                sentence += f". {held} blocked {'finding' if held == 1 else 'findings'} still {'holds' if held == 1 else 'hold'} the merge."
-            else:
-                sentence += ". None blocking. Ready for your review."
+            sentence += "." + held_note if held else ". None blocking. Ready for your review."
 
         return Spoken(sentence, screen_hint=screen_hint)
 

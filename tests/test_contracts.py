@@ -290,9 +290,19 @@ class TestScreenRendersRelaysPayload:
         pr6 = html[html.index("Pull request #6"):html.index("Pull request #5")]
         assert pr6.index("Needs a decision") < pr6.index("Flagged")
 
-    def test_the_header_counts_blocking_and_flagged(self):
+    def test_the_header_counts_what_needs_a_decision_and_what_is_flagged(self):
         html = render(relay_payload([make("b1", 6), make("b2", 6, severity="review", score=6.0)]))["html"]
-        assert "<b>1</b> blocking &middot; <b>1</b> flagged" in html
+        assert "<b>1</b> needs a decision &middot; <b>1</b> flagged" in html
+
+    def test_the_header_says_how_many_need_a_decision_in_the_plural(self):
+        html = render(relay_payload([make("b1", 6), make("b2", 6, score=8)]))["html"]
+        assert "<b>2</b> need a decision" in html and "flagged" not in html.split("ship-pr-counts")[1].split("</span>")[0]
+
+    def test_the_header_shows_findings_a_reviewer_already_blocked_on_that_pull_request(self):
+        payload = relay_payload([make("b1", 6), make("b2", 6, score=8)])
+        payload["held"] = [{"repo": "a/one", "pr_number": 6, "count": 1}, {"repo": "a/one", "pr_number": 9, "count": 4}]
+        html = render(payload)["html"]
+        assert "<b>2</b> need a decision &middot; <b>1</b> blocked" in html     # only this pull request's own blocked count
 
     def test_a_staged_block_shows_on_its_row(self):
         pending = {("a/one", 1): [{"alert_id": "x1", "decision": "block", "reason": "it leaks a phone number"}]}

@@ -89,6 +89,17 @@ HELP_TEXT = ("Say allow, block or skip. You can add a reason, like allow, it's t
              "Say back to change the last one, or stop.")
 ALLOW_EXAMPLE = "What's the reason? For example, test data, a false positive, or a risk you accept."
 BLOCK_EXAMPLE = "What's the reason? For example, it exposes personal data, or it needs a fix."
+SHORT_REASON_ASKS = ("What's the reason?", "And why?", "Why's that?")
+
+
+def reason_prompt(session, decision):
+    """The question asking why. The examples are said once in a conversation, then it is kept
+    short, so asking about the fifth finding does not repeat what the first one already taught."""
+    asked = int(session.get("reasons_asked") or 0)
+    session["reasons_asked"] = asked + 1
+    if asked == 0:
+        return ALLOW_EXAMPLE if decision == o.DECISION_ALLOW else BLOCK_EXAMPLE
+    return SHORT_REASON_ASKS[(asked - 1) % len(SHORT_REASON_ASKS)]
 
 
 class Turn:
@@ -271,9 +282,15 @@ def _enter_pr(session, routing, repo, pr_number, first=True):
     return Turn(intro + _question(session["flow"]), elicit=True)
 
 
-def _question(flow):
+def _question(flow, full=False):
+    """"Number 1 on pull request 1. Allow, block, or skip?" the first time on a pull request, then
+    just "Number 2. Allow, block, or skip?": the pull request has not changed. Said in full again
+    whenever the person might have lost track (a repeat, a correction, going back)."""
     queue, i = flow["queue"], flow["i"]
     pos = queue[i][1]
+    if flow.get("announced") and not full:
+        return f"Number {pos}. Allow, block, or skip?"
+    flow["announced"] = True
     return f"Number {pos} on pull request {flow['pr']}. Allow, block, or skip?"
 
 
@@ -395,6 +412,21 @@ def _summary(session, lead=""):
     return Turn(f"{lead}That's all for pull request {flow['pr']}: {', '.join(parts)}. Say yes to apply.".strip(), elicit=True)
 
 
+def _what_happened(flow):
+    """"Done. 1 allowed, 1 blocked. Pull request 1 stays blocked..." so the person hears where the
+    pull request stands, not just that something was done."""
+    allowed = sum(1 for d in flow["decisions"] if d[2] == o.DECISION_ALLOW)
+    blocked = sum(1 for d in flow["decisions"] if d[2] == o.DECISION_BLOCK)
+    skipped = len(flow["skipped"])
+    counts = ", ".join(p for p in (f"{allowed} allowed" if allowed else "", f"{blocked} blocked" if blocked else "") if p)
+    sentence = f"Done. {counts}."
+    if blocked:
+        sentence += f" Pull request {flow['pr']} stays blocked until the code is fixed."
+    if skipped:
+        sentence += f" {skipped} still {'needs' if skipped == 1 else 'need'} a decision."
+    return sentence
+
+
 def _after_pr(session, lead):
     """This pull request is finished. Offers the next one, or ends."""
     flow = session["flow"]
@@ -425,7 +457,7 @@ def repeat(session):
         return None
     stage = flow["stage"]
     if stage == DECIDE:
-        return Turn("Sorry, I missed that. " + _question(flow) + " You can also say stop.", elicit=True)
+        return Turn("Sorry, I missed that. " + _question(flow, full=True) + " You can also say stop.", elicit=True)
     if stage == REASON:
         return Turn("Sorry, I missed that. Just say a few words about why.", elicit=True)
     if stage == APPLY:
@@ -559,23 +591,23 @@ def _on_decide(session, text, ctx):
     if action == "stop":
         return _stop(session, ctx)
     if action == "help":
-        return Turn(HELP_TEXT + " " + _question(flow), elicit=True)
+        return Turn(HELP_TEXT + " " + _question(flow, full=True), elicit=True)
     if action == "repeat":
-        return Turn(_question(flow), elicit=True)
+        return Turn(_question(flow, full=True), elicit=True)
     if action == "back":
         return _back(session, ctx)
     if action is None:
         # A bare yes or no here is not a decision: ask what they want to do with the finding.
         if parse_confirm(text) is not None:
-            return _miss(session, _question(flow))
-        return _miss(session, "I didn't catch that. " + _question(flow))
+            return _miss(session, _question(flow, full=True))
+        return _miss(session, "I didn't catch that. " + _question(flow, full=True))
 
     # Aim at the finding they named, if any ("number 3, block it").
     named = parsed["number"]
     if named is not None:
         idx = next((k for k, q in enumerate(flow["queue"]) if q[1] == named), None)
         if idx is None:
-            return _miss(session, f"I don't have a number {named} that you've looked at. " + _question(flow))
+            return _miss(session, f"I don't have a number {named} that you've looked at. " + _question(flow, full=True))
         flow["i"] = idx
 
     if action == "skip":
@@ -589,7 +621,7 @@ def _on_decide(session, text, ctx):
         flow["stage"] = REASON
         flow["draft"] = {"decision": action, "bulk": parsed["bulk"]}
         flow["misses"] = 0
-        return Turn(ALLOW_EXAMPLE if action == o.DECISION_ALLOW else BLOCK_EXAMPLE, elicit=True)
+        return Turn(reason_prompt(session, action), elicit=True)
     return _commit(session, ctx, action, reason, parsed["bulk"])
 
 
@@ -628,7 +660,7 @@ def _on_reason(session, text, ctx):
         # "actually, block it": they changed their mind about the decision itself.
         draft["decision"] = parsed["action"]
         flow["draft"] = draft
-        return Turn(ALLOW_EXAMPLE if parsed["action"] == o.DECISION_ALLOW else BLOCK_EXAMPLE, elicit=True)
+        return Turn(reason_prompt(session, parsed["action"]), elicit=True)
 
     reason = parsed["reason"] or reason_from(text)
     if not reason_is_enough(reason, text):
@@ -652,7 +684,7 @@ def _back(session, ctx):
     if refusal is not None:
         return refusal
     flow["stage"] = DECIDE
-    return Turn(f"Okay. {_question(flow)}", elicit=True)
+    return Turn(f"Okay. {_question(flow, full=True)}", elicit=True)
 
 
 def _stop(session, ctx):
@@ -674,6 +706,8 @@ def _on_apply(session, text, ctx):
         result = ctx.call_tool("proceed", {"repo": flow["repo"], "pr_number": flow["pr"], **_device(session)})
         o._after_proceed(session, result)
         said = o.clean_speech((result or {}).get("spoken_response") if isinstance(result, dict) else str(result)) or "Done."
+        if said == "Done." and isinstance(result, dict) and result.get("performed") == len(flow["decisions"]):
+            said = _what_happened(flow)
         return _after_pr(session, said)
     if answer_ == "no":
         try:

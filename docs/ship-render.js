@@ -69,6 +69,14 @@ function shipInstallStyles() {
 
 // A staged decision is shown only if it is exactly "allow" or "block". Anything else shows
 // nothing, never a guess: the screen must not present a decision the server would refuse.
+// "2 need a decision · 1 flagged · 1 blocked": what is open here, and what a reviewer already blocked.
+function prCounts(needDecision, flagged, blocked) {
+  const parts = ["<b>" + needDecision + "</b> need" + (needDecision === 1 ? "s" : "") + " a decision"];
+  if (flagged) parts.push("<b>" + flagged + "</b> flagged");
+  if (blocked) parts.push("<b>" + blocked + "</b> blocked");
+  return parts.join(" &middot; ");
+}
+
 function shipPendingNote(f) {
   const decision = f.pending && f.pending.decision;
   if (decision !== "allow" && decision !== "block") return "";
@@ -111,12 +119,14 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
     const findings = pr.findings.slice().sort((a, b) => a.position - b.position);
     const blocking = findings.filter(f => f.blocks_merge).length;
     const flagged = findings.length - blocking;
+    const heldHere = held.filter(h => h.repo === pr.repo && Number(h.pr_number) === Number(pr.pr_number))
+      .reduce((n, h) => n + Number(h.count || 0), 0);
     html +=
       '<section class="ship-pr">' +
         '<div class="ship-pr-head">' +
           '<span class="ship-pr-title">Pull request #' + shipEsc(pr.pr_number) + "</span>" +
           '<span class="ship-pr-repo">' + shipEsc(pr.repo) + "</span>" +
-          '<span class="ship-pr-counts"><b>' + blocking + "</b> blocking &middot; <b>" + flagged + "</b> flagged</span>" +
+          '<span class="ship-pr-counts">' + prCounts(blocking, flagged, heldHere) + "</span>" +
         "</div>" +
         '<div class="ship-scroll"><table class="ship-table"><thead><tr>' +
           "<th>#</th><th>Status</th><th>File</th><th>What&rsquo;s wrong</th><th>Rule</th>" +

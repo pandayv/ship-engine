@@ -295,6 +295,7 @@ def _session(event):
         "screen": attributes.get("screen"),
         "screens": attributes.get("screens"),
         "flow": attributes.get("flow"),
+        "reasons_asked": attributes.get("reasons_asked"),
         "pending": attributes.get("pending"),
     }
 

@@ -1256,3 +1256,18 @@ def test_the_tool_descriptions_teach_allow_and_block_and_not_approve_or_reject()
     assert '"allow"' in text and '"block"' in text
     for old in ("approved (", "approve ", "reject ", "rejects", "approves"):
         assert old not in text.lower(), old
+
+
+@pytest.mark.parametrize("held,tail", [(1, " 1 blocked finding still holds the merge."), (3, " 3 blocked findings still hold the merge.")])
+def test_a_finding_the_reviewer_blocked_is_still_counted_when_others_need_a_decision(held, tail):
+    # Seen live: after blocking one of three, the status said "1 blocker" and the blocked one
+    # disappeared from what Alexa said, although the pull request was still blocked by it.
+    grouped = _group([_alert(severity="blocking", score=9.0)])
+    status = ReleaseStatus([replace(grouped[0], held=held)])
+    spoken = status.to_spoken().to_text()
+    assert spoken == "1 blocker found. Ready for your decision." + tail and len(spoken) <= SPEECH_CHAR_BUDGET
+
+
+def test_the_sentence_is_unchanged_when_nothing_is_blocked():
+    grouped = _group([_alert(severity="blocking", score=9.0)])
+    assert ReleaseStatus(grouped).to_spoken().to_text() == "1 blocker found. Ready for your decision."

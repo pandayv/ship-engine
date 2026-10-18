@@ -32,9 +32,11 @@ class Relay:
     def __call__(self, name, args=None):
         self.calls.append((name, args))
         if name == "stage_decisions":
+            self.last_staged = len(args["decisions"])
             return self.stage_reply or {"staged": len(args["decisions"]), "spoken_response": "Got it."}
         if name == "proceed":
-            return {"performed": 1, "spoken_response": "Done.", "of": 1}
+            n = getattr(self, "last_staged", 1)
+            return {"performed": n, "spoken_response": "Done.", "of": n}
         return {"spoken_response": "Okay."}
 
     def named(self, name):
@@ -122,7 +124,7 @@ def test_a_decision_with_a_reason_in_one_sentence_is_staged_and_the_next_questio
     staged = relay.named("stage_decisions")
     assert staged == [{"repo": "r", "pr_number": 1, "device": "laptop", "decisions": [
         {"alert_id": "a1", "position": 1, "decision": "allow", "reason": "only test data"}]}]
-    assert turn.speech == "Got it. Number 2 on pull request 1. Allow, block, or skip?" and turn.elicit
+    assert turn.speech == "Got it. Number 2. Allow, block, or skip?" and turn.elicit
 
 
 def test_a_decision_without_a_reason_asks_for_one_and_says_what_a_reason_could_be():
@@ -262,7 +264,7 @@ def test_changing_your_mind_while_giving_a_reason_changes_the_decision():
     session, relay, _ = started()
     rf.answer(session, "allow", ctx_for(relay))
     turn = rf.answer(session, "actually block it", ctx_for(relay))
-    assert turn.speech == rf.BLOCK_EXAMPLE
+    assert turn.speech == "What's the reason?"      # the examples were said once already
     rf.answer(session, "it exposes the account number", ctx_for(relay))
     assert relay.named("stage_decisions")[0]["decisions"][0]["decision"] == "block"
 
@@ -446,3 +448,49 @@ def test_a_pull_request_that_has_not_been_shown_is_not_decided():
     relay = Relay()
     turn = rf.answer(session, "allow the first one on pull request 99 because it is test data", ctx_for(relay))
     assert relay.named("stage_decisions") == [] and "I don't have pull request 99" in turn.speech
+
+
+# ------------------------------------------------------------------ not repeating itself, and saying where it stands
+
+
+def test_the_examples_for_a_reason_are_said_once_then_the_question_is_short_and_varied():
+    session, relay, _ = started(routing=[{"repo": "r", "pr_number": 1, "findings": [
+        {"position": n, "alert_id": f"a{n}"} for n in range(1, 6)]}])
+    ctx = ctx_for(relay)
+    asks = []
+    for _ in range(4):
+        asks.append(rf.answer(session, "allow", ctx).speech)
+        rf.answer(session, "because it is test data", ctx)
+    assert asks[0] == rf.ALLOW_EXAMPLE
+    assert "For example" not in " ".join(asks[1:])
+    assert asks[1:] == list(rf.SHORT_REASON_ASKS)
+
+
+def test_the_pull_request_is_named_the_first_time_and_not_on_every_question_after():
+    session, relay, first = started()
+    assert "Number 1 on pull request 1." in first.speech
+    second = rf.answer(session, "allow, it's test data", ctx_for(relay))
+    assert second.speech == "Got it. Number 2. Allow, block, or skip?"
+    # but a repeat names it in full again, in case the person lost track
+    assert rf.repeat(session).speech.startswith("Sorry, I missed that. Number 2 on pull request 1.")
+
+
+def test_after_applying_it_says_where_the_pull_request_stands():
+    session, relay, _ = started(routing=[{"repo": "r", "pr_number": 1, "findings": [
+        {"position": n, "alert_id": f"a{n}"} for n in (1, 2, 3)]}])
+    ctx = ctx_for(relay)
+    rf.answer(session, "allow, it's only test data", ctx)
+    rf.answer(session, "skip", ctx)
+    rf.answer(session, "block it, it leaks personal data", ctx)
+    spoken = rf.answer(session, "yes", ctx).speech
+    assert spoken == ("Done. 1 allowed, 1 blocked. Pull request 1 stays blocked until the code is fixed. "
+                      "1 still needs a decision. That's everything you've looked at.")
+
+
+def test_the_closing_sentence_names_allowed_blocked_and_what_still_needs_a_decision():
+    flow = {"pr": 1, "decisions": [["a1", 1, "allow", "x"], ["a3", 3, "block", "y"]], "skipped": ["a2"]}
+    assert rf._what_happened(flow) == ("Done. 1 allowed, 1 blocked. Pull request 1 stays blocked until the code is fixed. "
+                                       "1 still needs a decision.")
+    assert rf._what_happened({"pr": 2, "decisions": [["b1", 1, "allow", "x"]], "skipped": []}) == "Done. 1 allowed."
+    assert rf._what_happened({"pr": 2, "decisions": [["b1", 1, "block", "x"], ["b2", 2, "block", "y"]], "skipped": ["b3", "b4"]}) == (
+        "Done. 2 blocked. Pull request 2 stays blocked until the code is fixed. 2 still need a decision.")
