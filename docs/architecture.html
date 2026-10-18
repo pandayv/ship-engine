@@ -670,7 +670,7 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 
 <div class="zone">
   <div class="zone-label">Self-improvement loop</div>
-  <div class="zone-note">scripts/pattern_miner.py &mdash; periodic, off Detector's hot path, same shape as Healing Loop. No schedule is set up in the repo; it runs by hand.</div>
+  <div class="zone-note">scripts/pattern_miner.py &mdash; periodic, off Detector's hot path, same shape as Healing Loop. No schedule is set up in the repo; it runs by hand. It learns from findings a reviewer approved (okayed to move forward). A rejected finding, confirmed real, is never mined. A pattern reaches Detector only after 3 independent decisions, and then as context, never as a rule.</div>
   <p class="step-desc" style="max-width:none">Feeding Detector the raw text of recent human decisions doesn't scale: after a month or two there are too many to fit in a prompt, and picking a recent subset is arbitrary. Instead, a batch job extracts a small, bounded set of <em>generalized</em> patterns from accumulated decisions, merging new evidence into existing patterns rather than appending, so the set stays small regardless of how much history exists.</p>
   <div class="route-split" style="margin-top:14px">
     <div class="branch-item" style="background:var(--agent-tint)"><b>No human approval gate per pattern</b>A pattern is often an abstraction tied to field-level data associations, not a business rule a person can judge in isolation. Asking for sign-off on every one is recurring toil with little safety gain.<div class="lens-tags"><span class="lens-tag">automatic, not manual</span></div></div>

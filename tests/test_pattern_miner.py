@@ -41,7 +41,7 @@ def table(monkeypatch):
     return fake
 
 
-def _alert(alert_id="a1", taxonomy_id="PIIE-001", resolution="rejected",
+def _alert(alert_id="a1", taxonomy_id="PIIE-001", resolution="approved",
            resolved_at="2026-09-27T00:00:00+00:00", reason="hashed before sending, not raw PII"):
     return Alert(
         alert_id=alert_id, repo="pandayv/micro-finance", pr_number=1, file="x.py",
@@ -66,14 +66,16 @@ def _mock_similarity(monkeypatch, value):
     )
 
 
-# --- only real dismissals are mined ---
+# --- only findings a reviewer okayed are mined ---
 
 
-def test_approved_resolutions_are_never_mined(table, monkeypatch):
+def test_confirmed_findings_are_never_mined(table, monkeypatch):
+    # A rejected finding is one a reviewer confirmed is real. Learning from it as if it
+    # were okayed would teach Detector to wave through the violations people confirmed.
     _mock_extraction(monkeypatch)
     monkeypatch.setattr(
         "src.storage.alert_store.list_resolved_alerts",
-        lambda: [_alert(resolution="approved")],
+        lambda: [_alert(resolution="rejected")],
     )
     result = miner.mine()
     assert result["processed"] == 0

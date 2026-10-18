@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Pattern Miner — Detector's self-improvement loop. Extracts durable,
-generalized patterns from human-dismissed findings, so Detector gets
-better at telling real violations from look-alikes over time, without
+Pattern Miner — Detector's feedback loop. Extracts durable, generalized
+patterns from the findings reviewers okayed to move forward, so Detector
+learns over time what human review lets through, without
 growing an ever-larger few-shot example bag and without a human having to
 approve every extracted pattern. See src/rag/pattern_store.py's module
 docstring for the full reasoning behind both of those design choices.
 
 Same shape as scripts/healing_loop.py on purpose: scheduled/on-demand,
 never on Detector's per-fragment hot path. This does one real Bedrock call
-per NEW dismissal since the last run, not a full re-scan of history —
-already-mined dismissals are never reprocessed.
+per NEW okayed finding since the last run, not a full re-scan of history —
+already-mined decisions are never reprocessed.
 
-Algorithm, per new dismissal (resolution == "rejected", i.e. a human
-determined this specific finding was NOT actually a violation):
-  1. Ask the model for one general, reusable sentence explaining why this
-     kind of case isn't a violation — generalized from this specific
-     instance, not restating its specific values.
+Which decision feeds the loop: a reviewer either okays a finding to move
+forward (resolution == "approved") or confirms it is real and keeps the PR
+blocked (resolution == "rejected"). Only the okayed ones are mined. A
+confirmed finding is the opposite signal and must never teach Detector to
+wave similar code through.
+
+Algorithm, per new okayed finding:
+  1. Ask the model for one general, reusable sentence describing why a
+     reviewer was comfortable letting this kind of case through —
+     generalized from this specific instance, not restating its values.
   2. Embed that candidate sentence and compare it against every existing
      pattern (same cosine-similarity retrieval as Detector's own query
      path). A close match (>= SIMILARITY_THRESHOLD) is reinforcement of
@@ -24,9 +29,9 @@ determined this specific finding was NOT actually a violation):
      row. Anything else becomes a new pattern with support_count = 1.
   3. A pattern only affects a future judgment once support_count reaches
      MIN_SUPPORT (src/rag/pattern_store.py) — reinforced by independent
-     dismissals, not created by one person's single call.
+     decisions, not created by one person's single call.
 
-Cursor: the resolved_at of the last dismissal processed, stored as a
+Cursor: the resolved_at of the last decision processed, stored as a
 sentinel row in ship-learned-patterns itself (pattern_store.CURSOR_ID) —
 one row, not a second table, at this scale.
 """
@@ -38,23 +43,23 @@ import json
 SIMILARITY_THRESHOLD = 0.85
 MODEL_ID = "amazon.nova-lite-v1:0"  # same production model Detector uses — see detector.py's benchmark
 
-EXTRACTION_PROMPT = """A human reviewer determined the following flagged code \
-change was NOT actually a compliance violation.
+EXTRACTION_PROMPT = """A human reviewer looked at the following flagged code \
+change and okayed it to move forward.
 
 Taxonomy category: {taxonomy_id}
 What Detector originally flagged: {plain_english_summary}
-The human's reason for dismissing it: {resolution_reason}
+The reviewer's reason: {resolution_reason}
 
 State ONE general, reusable sentence describing the underlying PATTERN that made \
-this a false positive — generalized so it applies to similar future cases, not a \
-restatement of this specific instance's file names or values. Respond with only \
-that one sentence, nothing else."""
+the reviewer comfortable letting this kind of case through — generalized so it \
+applies to similar future cases, not a restatement of this specific instance's \
+file names or values. Respond with only that one sentence, nothing else."""
 
 
-def _new_rejected_alerts_since(cursor: str | None):
+def _new_okayed_alerts_since(cursor: str | None):
     from src.storage.alert_store import list_resolved_alerts
 
-    alerts = [a for a in list_resolved_alerts() if a.resolution == "rejected"]
+    alerts = [a for a in list_resolved_alerts() if a.resolution == "approved"]
     if cursor:
         alerts = [a for a in alerts if a.resolved_at and a.resolved_at > cursor]
     return sorted(alerts, key=lambda a: a.resolved_at or "")
@@ -103,7 +108,7 @@ def mine() -> dict:
     from src.rag import pattern_store
 
     cursor = pattern_store.get_cursor()
-    new_alerts = _new_rejected_alerts_since(cursor)
+    new_alerts = _new_okayed_alerts_since(cursor)
     existing = pattern_store.list_patterns(eligible_only=False)
 
     reinforced, created = 0, 0
@@ -139,17 +144,9 @@ def mine() -> dict:
 
 
 def main() -> int:
-    # Paused on purpose. A reviewer now either okays a finding to move forward (approve) or confirms
-    # it is real and keeps the PR blocked (reject). Neither says "this was a false alarm": a reviewer
-    # can accept a real risk, and a confirmed finding is the opposite of a dismissal. Mining
-    # "rejected" as dismissals would teach Detector to wave through the violations people confirmed.
-    # Re-enable once a review can record an explicit false-positive outcome.
-    print("Pattern mining is paused: review decisions no longer say whether a finding was a false positive.")
-    return 1
-
-    result = mine()  # noqa: unreachable until a false-positive outcome exists
+    result = mine()
     print(json.dumps(result, indent=2))
-    print(f"\n{result['processed']} new dismissal(s) processed: "
+    print(f"\n{result['processed']} new okayed finding(s) processed: "
           f"{result['reinforced']} reinforced an existing pattern, "
           f"{result['created']} started a new one.")
     return 0

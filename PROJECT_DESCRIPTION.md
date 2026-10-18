@@ -93,6 +93,10 @@ how each integration went.
 - **Grounded, not recalled.** Every citation traces to sourced regulation
   text retrieved at judgment time. A Healing Loop script re-checks that the
   stored text still matches the source.
+- **A feedback loop.** What reviewers okay becomes a small set of general
+  patterns. A pattern counts only after several independent decisions, and
+  Detector treats it as context while it still judges every finding against
+  the regulation text. A finding a reviewer confirmed is real never feeds it.
 - **Parallel, retryable review.** Each flagged fragment is its own SQS job.
   A slow or failed one can't block the others, and a dead-letter queue
   catches failures instead of dropping them.

@@ -32,6 +32,9 @@ Rely on facts, not memory or guesswork. Every citation traces to sourced regulat
 **Meet you where you are.**
 The answer finds you, on whatever device is nearest. Voice gives the headline. A screen gives the detail.
 
+**Learns from your decisions.**
+What reviewers okay shapes the next review. Detector still judges every finding against the regulation text.
+
 **Honest when unsure.**
 A status SHIP can't read is never called all clear. A review that hasn't finished never shows a green check.
 
@@ -407,8 +410,9 @@ What's not built yet:
   A GitHub-API integration away, not an architecture change.
 - **Scheduling the Healing Loop and the pattern miner.**
   [Healing Loop](scripts/healing_loop.py) re-checks that sourced
-  regulation text still matches the law. Both run as manual scripts, not
-  on a schedule or alert channel.
+  regulation text still matches the law. The pattern miner turns approved
+  findings into patterns. Both run as manual scripts, not on a schedule
+  or alert channel.
 - **A dead-letter consumer.** A review whose queue message exhausts its
   retries leaves the check pending, which is the safe direction. A
   consumer would turn that into an explicit error status.

@@ -1,5 +1,5 @@
 """
-Learned patterns extracted from human dismissals — Detector's
+Learned patterns extracted from the findings reviewers okayed — Detector's
 self-improvement loop.
 
 WHY PATTERNS, NOT EXAMPLES. The first design considered here was few-shot:
