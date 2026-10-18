@@ -27,3 +27,8 @@ typing-inspection
 # back to the PR, same as Gate's web path) — that module uses requests,
 # not httpx, and was never on Relay's request path before.
 requests
+# Web Push to screens with no page open (src/relay/webpush.py). pywebpush imports
+# aiohttp at load time, so the Lambda package needs it (arm64 wheels) even though only
+# the synchronous webpush() call is used.
+pywebpush==2.5.0
+aiohttp
