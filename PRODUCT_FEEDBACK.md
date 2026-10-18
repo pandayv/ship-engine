@@ -37,7 +37,7 @@ architecture needs each piece.
   Deliberately not one do-everything function. A Lambda's blast radius and IAM scope should match what it
   needs, not the union of everything the project does.
 - **Amazon SQS** decouples fragment review from the webhook's fast-ack
-  requirement, with a dead-letter queue for genuine failures and a
+  requirement, with a dead-letter queue for failures and a
   concurrency cap that keeps parallel reviews within the account's real
   Bedrock rate limit.
 - **Amazon DynamoDB** holds one table per access pattern, each narrow: idempotent alert persistence, which repos are watched
