@@ -71,6 +71,7 @@ fresh FastMCP instance costs about 2ms, confirmed by measurement.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from mcp.server.fastmcp import FastMCP
@@ -81,12 +82,16 @@ from starlette.middleware.cors import CORSMiddleware
 from src.api.github_writeback import comment_for_decision, post_pr_comment, sync_pr_check
 from src.relay.modality import Modality, Spoken
 from src.relay.push import push_to_device
+from src.relay import webpush
+from src.storage import push_store
 from src.storage.device_store import list_all_connections
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
 from src.storage import pending_store, session_store
 from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert, theme_for
 from src.storage.status_store import refresh_summary
+
+log = logging.getLogger(__name__)
 
 CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
 
@@ -476,6 +481,25 @@ def proceed(repo: str, pr_number: int, device: str = "") -> dict:
     }
 
 
+def _notify_registered_device(name: str, status, payload: dict) -> bool:
+    """No page is open on this screen, but if the person registered it for alerts, hold the
+    findings for it and send a notification. The findings are NOT marked as shown here: a
+    notification is not a display. The page reports that it displayed them once the person
+    opens it (the ack route in device_gateway_handler.py)."""
+    try:
+        if not push_store.subscriptions_for_device(name):
+            return False
+        alert_ids = [f.alert_id for pr in status.pull_requests for f in pr.findings]
+        push_store.save_pending(name, payload, alert_ids)
+        count = len(alert_ids)
+        sent = webpush.notify_device(
+            name, f"{count} finding{'s' if count != 1 else ''} need{'' if count != 1 else 's'} a decision. Tap to review.")
+        return sent > 0
+    except Exception:  # noqa: BLE001 - an unreachable screen is a normal answer, not an error
+        log.exception("could not notify %s", name)
+        return False
+
+
 def display_on(surface: str) -> dict:
     """Route the current findings to a display surface the person chose —
     for example "tv", "ipad", "laptop", or "here". Use when someone says
@@ -506,21 +530,53 @@ def display_on(surface: str) -> dict:
             "spoken_response": Spoken("Showing it here.").to_text(),
         }
 
-    result = push_to_device(normalised, _findings_payload(status))
+    payload = _findings_payload(status)
+    result = push_to_device(normalised, payload)
     delivered = bool(result["delivered_to"])
+    notified = False
     if delivered:
         _mark_shown(status)
+    else:
+        notified = _notify_registered_device(normalised, status, payload)
+
+    if delivered:
+        spoken = f"Putting it on your {normalised}."
+    elif notified:
+        spoken = f"I've sent a notification to your {normalised}. Open it to review."
+    else:
+        spoken = f"I don't see a {normalised} connected right now."
 
     return {
         "modality": Modality.ACTION.value,
         "surface": normalised,
         "delivered": delivered,
+        "notified": notified,
         "routing": _routing(status) if delivered else [],
         "console_url": _console("/dashboard"),
-        "spoken_response": Spoken(
-            f"Putting it on your {normalised}." if delivered
-            else f"I don't see a {normalised} connected right now."
-        ).to_text(),
+        "spoken_response": Spoken(spoken).to_text(),
+    }
+
+
+def findings_routing() -> dict:
+    """Where each open finding sits and whether the person has seen it on a screen in the
+    last ten minutes. Positions, ids and a yes or no only: nothing that must stay off the
+    speaker. Reading this records nothing as shown. Use it to know which findings a spoken
+    decision may point at."""
+    status = _findings_detail()
+    return {
+        "modality": Modality.ACTION.value,
+        "pull_requests": [
+            {
+                "repo": pr.repo,
+                "pr_number": pr.pr_number,
+                "findings": [
+                    {"position": i, "alert_id": f.alert_id, "blocks_merge": f.severity == SEVERITY_BLOCKING,
+                     "seen": session_store.was_shown_recently(f.alert_id)}
+                    for i, f in enumerate(pr.findings, start=1)
+                ],
+            }
+            for pr in status.pull_requests
+        ],
     }
 
 
@@ -528,18 +584,26 @@ def connected_screens() -> dict:
     """Which screens are set up right now, by the name each one gave itself
     ("tv", "laptop", "tablet"). SAFE TO SPEAK: names only. Use before offering
     a choice of screens, so the person is never offered one that is not there.
-    An empty list means no display page is open anywhere: say so, and offer
-    another way to review (the review console)."""
-    names = sorted({c.device_name for c in list_all_connections()})
+    A screen counts if its page is open now or if it was registered for alerts
+    (it is then reached by a notification). An empty list means neither exists:
+    say so, and offer another way to review (the review console)."""
+    live = {c.device_name for c in list_all_connections()}
+    try:
+        registered = push_store.subscribed_device_names()
+    except Exception:  # noqa: BLE001 - the live screens still count if the registry cannot be read
+        log.exception("could not read the registered screens")
+        registered = set()
     return {
         "modality": Modality.ACTION.value,
-        "screens": names,
+        "screens": sorted(live | registered),
+        "open_now": sorted(live),
+        "notify_only": sorted(registered - live),
         "console_url": _console("/dashboard"),
     }
 
 
 TOOLS = (release_status, blocked_pull_requests, finding_detail, request_risk_acceptance,
-         stage_decisions, proceed, display_on, connected_screens)
+         stage_decisions, proceed, display_on, connected_screens, findings_routing)
 
 
 def create_app() -> Starlette:

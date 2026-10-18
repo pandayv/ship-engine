@@ -403,3 +403,9 @@ def test_unrelated_names_still_do_not_match():
     assert o.match_connected("tv", ["laptop", "tablet"]) is None
     assert o.match_connected("laptop", ["macbook"]) == "macbook"
     assert o.match_connected("tablet", []) is None
+
+
+def test_a_screen_that_was_only_notified_becomes_the_last_screen_but_gives_no_routing():
+    relay = Relay({"display_on": {"delivered": False, "notified": True, "spoken_response": "I've sent a notification to your tablet. Open it to review.", "routing": []}})
+    speech, _, session = turn("show it on the tablet", model_says(use("display_on", surface="tablet")), relay, connected=["tablet"])
+    assert session["screen"] == "tablet" and not session.get("routing") and "notification" in speech

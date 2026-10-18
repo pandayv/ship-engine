@@ -391,9 +391,10 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
             session["pending"] = {"repo": args["repo"], "pr_number": args["pr_number"]}
         if name == "proceed":
             session.pop("pending", None)
-        if name == "display_on" and isinstance(result, dict) and result.get("delivered"):
+        if name == "display_on" and isinstance(result, dict) and (result.get("delivered") or result.get("notified")):
             session["screen"] = args["surface"]
-            session["routing"] = result.get("routing") or []
+            if result.get("delivered"):
+                session["routing"] = result.get("routing") or []
         if name == "proceed" and isinstance(result, dict) and result.get("performed"):
             session["routing"] = []     # the numbers on screen have moved on
 
@@ -425,9 +426,10 @@ def fallback_turn(utterance, session, call_tool, connected=None, console_url="")
                 return Reply(not_connected(screen, connected), console_card(console_url) if none else None)
             screen = registered
         result = call_tool("display_on", {"surface": screen})
-        if isinstance(result, dict) and result.get("delivered"):
+        if isinstance(result, dict) and (result.get("delivered") or result.get("notified")):
             session["screen"] = screen
-            session["routing"] = result.get("routing") or []
+            if result.get("delivered"):
+                session["routing"] = result.get("routing") or []
         return Reply((result or {}).get("spoken_response", "Okay.") if isinstance(result, dict) else str(result))
     if re.search(r"\b(status|blocked|blocking|blockers?|ship|going on|what'?s up|anything)\b", text):
         return Reply(str(call_tool("release_status")))

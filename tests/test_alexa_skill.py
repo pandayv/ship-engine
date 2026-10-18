@@ -18,7 +18,7 @@ sys.path.insert(0, str(SKILL_PATH.parent))   # the skill imports orchestrator.py
 STATUS_SENTENCE = "2 blockers found. Ready for your decision. Want it on a screen?"
 TOOLS = [
     "release_status", "blocked_pull_requests", "finding_detail",
-    "request_risk_acceptance", "stage_decisions", "proceed", "display_on", "connected_screens",
+    "request_risk_acceptance", "stage_decisions", "proceed", "display_on", "connected_screens", "findings_routing",
 ]
 
 
@@ -34,6 +34,7 @@ def skill(monkeypatch):
     module.fail_relay = False
     module.display_reply = {"spoken_response": "Putting it on your tv."}
     module.connected = ["tv", "laptop"]
+    module.routing_reply = []
 
     def fake_post(body, protocol=None):
         if module.fail_relay:
@@ -50,6 +51,8 @@ def skill(monkeypatch):
             name = body["params"]["name"]
             if name == "connected_screens":
                 text = json.dumps({"screens": module.connected})
+            elif name == "findings_routing":
+                text = json.dumps({"pull_requests": module.routing_reply})
             else:
                 text = STATUS_SENTENCE if name == "release_status" else json.dumps(module.display_reply)
             return {"jsonrpc": "2.0", "id": body["id"], "result": {"content": [{"type": "text", "text": text}]}}
@@ -301,3 +304,33 @@ def test_the_permission_asked_for_is_the_one_the_manifest_declares():
     mod = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(mod)
     assert mod.NOTIFICATIONS_SCOPE in declared
+
+
+# --- what was seen comes from Relay, not from the skill's memory ---
+
+
+def test_findings_seen_on_another_device_are_known_to_the_next_turn(skill, monkeypatch):
+    skill.routing_reply = [{"repo": "pandayv/micro-finance", "pr_number": 1, "findings": [
+        {"position": 1, "alert_id": "a1", "blocks_merge": True, "seen": True},
+        {"position": 2, "alert_id": "a2", "blocks_merge": True, "seen": False}]}]
+    routing = skill.seen_routing()
+    assert routing[0]["pr_number"] == 1 and [f["position"] for f in routing[0]["findings"]] == [1, 2]
+
+
+def test_a_pull_request_nobody_has_seen_is_not_offered_for_decisions(skill):
+    skill.routing_reply = [{"repo": "r", "pr_number": 2, "findings": [{"position": 1, "alert_id": "x", "seen": False}]}]
+    assert skill.seen_routing() == []
+
+
+def test_if_relay_cannot_say_what_was_seen_the_answer_is_unknown_not_empty(skill, monkeypatch):
+    original = skill.call_tool
+    monkeypatch.setattr(skill, "call_tool", lambda name, args=None: (_ for _ in ()).throw(skill.RelayError("down")) if name == "findings_routing" else original(name, args))
+    assert skill.seen_routing() is None
+
+
+def test_a_screen_that_was_only_notified_is_remembered_as_the_last_one_used(skill):
+    skill.connected = ["tablet"]
+    skill.display_reply = {"delivered": False, "notified": True, "spoken_response": "I've sent a notification to your tablet. Open it to review.", "routing": []}
+    reply = skill.handler(request_event(intent("ShowIntent", {"screen": {"name": "screen", "value": "tablet", "resolutions": {"resolutionsPerAuthority": [
+        {"status": {"code": "ER_SUCCESS_MATCH"}, "values": [{"value": {"id": "tablet", "name": "tablet"}}]}]}}})), None)
+    assert reply["sessionAttributes"]["screen"] == "tablet" and "sent a notification" in spoken(reply)

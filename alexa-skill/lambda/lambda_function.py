@@ -258,6 +258,28 @@ def connected_screens():
         return None
 
 
+def seen_routing():
+    """Which findings the person has actually seen on a screen, according to Relay, as
+    [{repo, pr_number, findings}] for each pull request with at least one seen finding.
+    None if that could not be checked. This is the source of truth: the skill's own
+    memory of what it displayed is not, because the person may have opened a notification
+    on a device the skill never talked to."""
+    try:
+        data = call_tool("findings_routing")
+    except Exception:  # noqa: BLE001
+        log.exception("could not read which findings were seen")
+        return None
+    routing = []
+    for pr in data.get("pull_requests", []):
+        if any(f.get("seen") for f in pr.get("findings", [])):
+            routing.append({
+                "repo": pr["repo"], "pr_number": pr["pr_number"],
+                "findings": [{"position": f["position"], "alert_id": f["alert_id"],
+                              "blocks_merge": f.get("blocks_merge")} for f in pr["findings"]],
+            })
+    return routing
+
+
 def show_reply(slots, session):
     screen = _slot_value(slots, "screen")
     connected = connected_screens()
@@ -272,8 +294,9 @@ def show_reply(slots, session):
             return speak(orchestrator.not_connected(screen, connected), reprompt=REPROMPT, session=session, card=card)
         screen = registered     # the name the screen actually registered under
     result = call_tool("display_on", {"surface": screen})
-    if result.get("delivered"):
+    if result.get("delivered") or result.get("notified"):
         session["screen"] = screen
+    if result.get("delivered"):
         session["routing"] = result.get("routing") or []
     sentence = result.get("spoken_response", "Okay.")
     orchestrator.remember(session, f"show it on the {screen}", sentence)
@@ -285,6 +308,9 @@ def free_text_reply(text, session):
     if it can't be used in time, plain rules cover the common requests."""
     _connect()
     connected = connected_screens()
+    seen = seen_routing()
+    if seen is not None:
+        session["routing"] = seen       # what Relay says was seen, not what we remember
     try:
         reply = orchestrator.run_turn(
             text, session, _mcp["tool_defs"], call_tool, _converse, _deadline,

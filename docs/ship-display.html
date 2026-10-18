@@ -110,6 +110,14 @@ body {
 .f-cite { display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; color: var(--ink-soft); }
 .empty-state { color: var(--ink-soft); text-align: center; padding: 22px; font-size: 13.5px; }
 .decision-box { display: none; }
+
+/* ---- one-time alert setup ---- */
+.alerts { margin-top: 18px; }
+.alerts button {
+  font: inherit; font-weight: 600; font-size: 13.5px; padding: 9px 18px; border-radius: 9px;
+  border: 1px solid var(--agent); background: var(--agent-tint); color: var(--agent); cursor: pointer;
+}
+.alerts-note { font-size: 12.5px; color: var(--ink-soft); margin-top: 8px; max-width: 360px; margin-inline: auto; }
 </style>
 </head>
 <body>
@@ -137,6 +145,10 @@ body {
     <div class="glyph">◎</div>
     <div class="headline">All clear</div>
     <div class="sub">Watching as <b id="idleName"></b> — nothing pushed yet.</div>
+    <div class="alerts">
+      <button id="alertsBtn" hidden>Get alerts on this screen</button>
+      <div class="alerts-note" id="alertsNote"></div>
+    </div>
   </div>
 
   <div class="screen-wrap" id="screenWrap">
@@ -159,6 +171,8 @@ body {
 // nobody is necessarily standing in front of.
 const WS_URL = "wss://9vkr6eelzd.execute-api.us-west-2.amazonaws.com/prod";
 const STORAGE_KEY = "ship_display_device_name";
+// Public half of SHIP's push key. It identifies the sender to the browser and is safe to publish.
+const VAPID_PUBLIC_KEY = "BN01jnTPD-xPJl6369CEslizn_uqw2V2zN3vG-Es-YblR4HISRi1yHKoU-OnidSwYzoNbeHGCG41RrYBlj0dlqk";
 
 const dot = document.getElementById("dot");
 const statusLine = document.getElementById("statusLine");
@@ -170,6 +184,8 @@ const idleName = document.getElementById("idleName");
 const screenWrap = document.getElementById("screenWrap");
 const screenBar = document.getElementById("screenBar");
 const screenBody = document.getElementById("screenBody");
+const alertsBtn = document.getElementById("alertsBtn");
+const alertsNote = document.getElementById("alertsNote");
 
 let ws = null;
 let reconnectDelayMs = 1000;
@@ -196,14 +212,15 @@ function showNamePrompt() {
 
 function connect() {
   setStatus("connecting…");
-  ws = new WebSocket(WS_URL);
+  const sock = new WebSocket(WS_URL);
+  ws = sock;
 
-  ws.addEventListener("open", () => {
+  sock.addEventListener("open", () => {
     reconnectDelayMs = 1000; // reset backoff on a real successful connect
-    ws.send(JSON.stringify({ action: "register", device_name: deviceName }));
+    sock.send(JSON.stringify({ action: "register", device_name: deviceName }));
   });
 
-  ws.addEventListener("message", (event) => {
+  sock.addEventListener("message", (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -211,6 +228,11 @@ function connect() {
       setStatus("watching as <b>" + shipEsc(msg.registered) + "</b>", "live");
       renameBtn.hidden = false;
       showIdle();
+      sendSubscription();   // keeps this browser's alert address filed under the current name
+      return;
+    }
+    if ("subscribed" in msg) {
+      showAlertState();
       return;
     }
 
@@ -223,24 +245,109 @@ function connect() {
     const anyBlocking = (msg.pull_requests || []).some(pr => pr.findings.some(f => f.blocks_merge));
     dot.className = "dot" + (anyBlocking ? " alert" : " live");
     shipRenderFindings(screenBar, screenBody, "SHIP release status", msg);
+    acknowledge(msg);
   });
 
-  ws.addEventListener("close", () => {
+  sock.addEventListener("close", () => {
     // Required, not optional: API Gateway WebSocket connections drop on
     // a 10-minute idle timeout or a 2-hour hard cap, neither
     // configurable (confirmed against AWS's own quota docs before
     // building this) — an ambient display with no reconnect logic would
     // silently stop working partway through the day it's meant to sit
     // there. Exponential backoff, capped, so a genuine outage doesn't
-    // hammer the API.
+    // hammer the API. A socket that was replaced on purpose (rename) stays closed.
+    if (sock !== ws) return;
     setStatus("reconnecting…");
     dot.className = "dot";
-    setTimeout(connect, reconnectDelayMs);
+    setTimeout(() => { if (sock === ws) connect(); }, reconnectDelayMs);
     reconnectDelayMs = Math.min(reconnectDelayMs * 1.6, 15000);
   });
 
-  ws.addEventListener("error", () => { ws.close(); });
+  sock.addEventListener("error", () => { sock.close(); });
 }
+
+// The findings now on screen count as seen only because this page says so. Relay
+// holds findings it notified about and marks them seen on this message, not before.
+function acknowledge(payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const ids = (payload.pull_requests || []).flatMap(pr => pr.findings.map(f => f.alert_id));
+  if (ids.length) ws.send(JSON.stringify({ action: "ack", device_name: deviceName, alert_ids: ids }));
+}
+
+// ---- one-time alert setup: lets SHIP reach this screen with the page closed ----
+
+function alertsSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+function keyBytes(base64url) {
+  const pad = "=".repeat((4 - base64url.length % 4) % 4);
+  const raw = atob((base64url + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+
+async function currentSubscription() {
+  if (!alertsSupported()) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+
+async function sendSubscription() {
+  if (Notification.permission !== "granted" || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const sub = await currentSubscription();
+  if (sub) ws.send(JSON.stringify({ action: "subscribe", device_name: deviceName, subscription: sub.toJSON() }));
+}
+
+async function showAlertState() {
+  if (!alertsSupported()) {
+    alertsBtn.hidden = true;
+    alertsNote.textContent = "This browser can't receive alerts while closed. On an iPhone or iPad, add this page to the Home Screen first.";
+  } else if (Notification.permission === "denied") {
+    alertsBtn.hidden = true;
+    alertsNote.textContent = "Alerts are blocked for this site. Allow notifications in the browser's site settings, then reload.";
+  } else if (Notification.permission === "granted" && await currentSubscription()) {
+    alertsBtn.hidden = true;
+    alertsNote.textContent = "Alerts are on. SHIP can reach this screen with the page closed.";
+  } else {
+    alertsBtn.hidden = false;
+    alertsNote.textContent = "";
+  }
+}
+
+alertsBtn.addEventListener("click", async () => {
+  alertsBtn.disabled = true;
+  try {
+    const permission = await Notification.requestPermission();   // the browser's one-time Allow prompt
+    if (permission === "granted") {
+      const reg = await navigator.serviceWorker.register("ship-sw.js");
+      await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (!existing) {
+        await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC_KEY) });
+      }
+      await sendSubscription();
+    }
+  } catch (err) {
+    alertsNote.textContent = "Couldn't turn on alerts: " + (err && err.message ? err.message : err);
+  }
+  alertsBtn.disabled = false;
+  showAlertState();
+});
+
+// Tapping a notification while this page is already open: collect what is waiting.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "ship-opened" && deviceName) {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "register", device_name: deviceName }));
+      else connect();
+    }
+  });
+}
+
+// A tab that was asleep in the background reconnects the moment it is looked at.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && deviceName && (!ws || ws.readyState === WebSocket.CLOSED)) connect();
+});
 
 function startWatching(name) {
   deviceName = name.trim();
@@ -253,13 +360,16 @@ document.getElementById("nameGo").addEventListener("click", () => startWatching(
 nameInput.addEventListener("keydown", e => { if (e.key === "Enter") startWatching(nameInput.value); });
 document.querySelectorAll(".preset").forEach(b => b.addEventListener("click", () => startWatching(b.dataset.name)));
 renameBtn.addEventListener("click", () => {
-  if (ws) ws.close();
+  const old = ws;
+  ws = null;            // replaced on purpose: its close must not trigger a reconnect
+  if (old) old.close();
   showNamePrompt();
 });
 
 const saved = (() => { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } })();
 if (saved) startWatching(saved);
 else showNamePrompt();
+showAlertState();
 </script>
 </body>
 </html>

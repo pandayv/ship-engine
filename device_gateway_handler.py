@@ -31,6 +31,7 @@ WebSocket invocation and self-describing beats a second source of truth.
 import json
 import logging
 
+from src.storage import push_store, session_store
 from src.storage.device_store import register_connection, remove_connection
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,35 @@ def handler(event, context):
         log.info("disconnect: connection_id=%s", connection_id)
         return {"statusCode": 200}
 
+    if route == "subscribe":
+        body = json.loads(event.get("body") or "{}")
+        device_name = (body.get("device_name") or "").strip()
+        try:
+            push_store.save_subscription(device_name, body.get("subscription") or {})
+        except ValueError as exc:
+            return {"statusCode": 400, "body": str(exc)}
+        log.info("subscribe: device_name=%s", device_name)
+        try:
+            _ack(event, connection_id, {"subscribed": device_name.lower()})
+        except Exception:
+            log.exception("could not confirm the subscription to connection %s", connection_id)
+        return {"statusCode": 200}
+
+    if route == "ack":
+        # The page says it displayed the findings Relay was holding for it. Only now do
+        # they count as seen, and only the ones that were actually being held.
+        body = json.loads(event.get("body") or "{}")
+        device_name = (body.get("device_name") or "").strip()
+        waiting = push_store.get_pending(device_name) if device_name else None
+        if waiting:
+            held = set(waiting["alert_ids"])
+            for alert_id in body.get("alert_ids") or []:
+                if alert_id in held:
+                    session_store.mark_shown(alert_id)
+            push_store.clear_pending(device_name)
+            log.info("ack: %s displayed %d held findings", device_name, len(held))
+        return {"statusCode": 200}
+
     if route == "register":
         body = json.loads(event.get("body") or "{}")
         device_name = (body.get("device_name") or "").strip()
@@ -81,6 +111,16 @@ def handler(event, context):
             # this one confirmation never arrives. Log it, don't fail the
             # route over it.
             log.exception("could not send register ack to connection_id=%s", connection_id)
+
+        # Findings held for this screen while its page was closed (see src/relay/server.py,
+        # _notify_registered_device). The page renders them and then sends "ack".
+        try:
+            waiting = push_store.get_pending(device_name)
+            if waiting:
+                _ack(event, connection_id, waiting["payload"])
+                log.info("delivered held findings to %s", device_name)
+        except Exception:
+            log.exception("could not deliver held findings to connection_id=%s", connection_id)
         return {"statusCode": 200}
 
     log.warning("unrecognized route: %s", route)
