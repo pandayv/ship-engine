@@ -362,3 +362,58 @@ def test_the_short_repeat_of_the_screen_question_names_at_most_two_screens():
     assert rf.offer_screens({}, ["laptop", "tablet"], "x").reprompt == "Want it on the laptop or the tablet?"
     assert rf.offer_screens({}, ["laptop"], "x").reprompt == "Want it on the laptop?"
     assert rf.offer_screens({}, ["laptop", "tablet", "tv"], "x").reprompt == "Want it on a screen?"
+
+
+# ------------------------------------------------------------------ choosing among several pull requests
+
+THREE = ROUTING + [{"repo": "r", "pr_number": 7, "findings": [{"position": 1, "alert_id": "c1"}]}]
+
+
+def test_a_pull_request_can_be_named_in_many_ways():
+    for said, number in [("pull request 7", 7), ("PR 7", 7), ("go to pull request number 7", 7), ("skip to pr 12", 12)]:
+        assert rf.pr_named(said) == number
+    assert rf.pr_named("the first one") is None and rf.pr_named("yes") is None
+
+
+def test_yes_goes_on_to_the_next_pull_request_and_skip_moves_past_it():
+    session = {"screen": "laptop"}
+    rf.begin(session, THREE)
+    ctx = ctx_for(Relay(), routing=THREE)
+    rf.answer(session, "skip", ctx)
+    rf.answer(session, "skip", ctx)              # PR 1 all skipped
+    turn = rf.answer(session, "skip", ctx)        # at "Want to go on to pull request 2?" -> skip it
+    assert turn.speech == "Skipped. Want to go on to pull request 7?" and session["flow"]["pr"] == 7
+
+
+def test_saying_the_pull_request_number_jumps_straight_to_it():
+    session = {"screen": "laptop"}
+    rf.begin(session, THREE)
+    ctx = ctx_for(Relay(), routing=THREE)
+    rf.answer(session, "skip", ctx)
+    rf.answer(session, "skip", ctx)
+    turn = rf.answer(session, "pull request 7", ctx)
+    assert turn.speech == "Pull request 7 has 1 finding on your screen. Number 1 on pull request 7. Allow, block, or skip?"
+
+
+def test_the_offer_can_name_the_pull_request_to_start_with():
+    session = {}
+    rf.offer_after_show(session, "Putting it on your laptop.", True, False)
+    turn = rf.answer(session, "yes, pull request 7", ctx_for(Relay(), routing=THREE))
+    assert turn.speech.startswith("Pull request 7 has 1 finding") or turn.speech.startswith("Number 1 on pull request 7")
+
+
+def test_a_pull_request_that_was_not_shown_is_not_started():
+    session = {}
+    rf.offer_after_show(session, "Putting it on your laptop.", True, False)
+    turn = rf.answer(session, "pull request 99", ctx_for(Relay(), routing=THREE))
+    assert "I don't have pull request 99" in turn.speech and "flow" in session
+
+
+def test_skipping_the_last_pull_request_ends_the_review():
+    session = {"screen": "laptop"}
+    rf.begin(session, ROUTING)
+    ctx = ctx_for(Relay())
+    rf.answer(session, "skip", ctx)
+    rf.answer(session, "skip", ctx)
+    rf.answer(session, "skip", ctx)               # skip PR 2 (the only one left to offer)
+    assert "flow" not in session

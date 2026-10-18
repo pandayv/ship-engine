@@ -10,7 +10,7 @@ SHIP closes that gap: it catches AI compliance risk before it ships, without slo
 
 **SHIP is a multi-agentic gatekeeper that reads every pull request the moment it opens, catches the ones that quietly cross a legal line, and interacts with you only when it's found something.**
 
-Ask it by voice anytime. It answers in one sentence and shows the full detail on the screen you choose.
+Ask it by voice anytime. It answers in one sentence, shows the full detail on the screen you choose, then walks you through the findings one question at a time. You answer in plain words.
 
 Built for [Build, Ship, Shape: the Amazon Developer Hackathon](https://amazonappdev2026.devpost.com/) (Alexa+ track, AWS Builder mini-challenge).
 
@@ -30,7 +30,7 @@ Assume nothing was checked before this. It doesn't matter who wrote the code, a 
 Rely on facts, not memory or guesswork. Every citation traces to sourced regulation text.
 
 **Meet you where you are.**
-The answer finds you, on whatever device is nearest. Voice gives the headline. A screen gives the detail.
+The answer finds you, on whatever device is nearest. Voice gives the headline and asks the questions. A screen gives the detail. You never need to know the right phrase.
 
 **Learns from your decisions.**
 What reviewers allow shapes the next review. Detector still judges every finding against the regulation text.
@@ -83,30 +83,82 @@ in GDPR, the EU AI Act and OWASP, and are listed in
 
 ### By voice
 
+Voice works best as a conversation. SHIP asks one short question at a
+time, and you answer the way you would answer a colleague.
+
 When SHIP records a new finding, your Echo gets a notification from SHIP
 ("You have 2 new unread messages from SHIP"). Nothing is read out until
 you ask.
 
 > *"Alexa, ask ship review what's up."*
+>
 > **"2 blockers found. Ready for your decision. Want it on the laptop or the tablet?"**
-> *"Show it on the laptop."*
-> **"Putting it on your laptop. Say allow or block, with the number and a reason."**
+>
+> *"The laptop."*
+>
+> **"Putting it on your laptop. Want to go through them?"**
+>
+> *"Yes."*
+>
+> **"Pull request 1 has 2 findings on your screen. Number 1 on pull request 1. Allow, block, or skip?"**
+>
+> *"Allow it, it's only test data."*
+>
+> **"Got it. Number 2 on pull request 1. Allow, block, or skip?"**
+>
+> *"Block."*
+>
+> **"What's the reason? For example, it exposes personal data, or it needs a fix."**
+>
+> *"It leaks a phone number."*
+>
+> **"Got it. That's all for pull request 1: 1 allowed, 1 blocked. Say yes to apply."**
+>
+> *"Yes."*
+>
+> **"Done. Applied all 2. That's everything you've looked at."**
 
 The findings appear on the laptop. SHIP offers only the screens that
-exist. With one screen it asks "Want it on the laptop?". With none it
-says so and puts a link to the review console in your Alexa app.
+exist. With one screen it asks "Want it on the laptop?", and a plain yes
+is enough. With none it says so and puts a link to the review console in
+your Alexa app. Name the screen in your own words ("the tablet please")
+or say "both".
 
-You decide in your own words, using the numbers on the screen:
+The walk-through covers only the findings you have looked at on a screen.
+For each one SHIP asks what to do. Put the reason in the same breath if
+you like, or let SHIP ask for it. Every decision is staged as soon as you
+make it, and the screen shows it as pending. At the end of a pull request
+SHIP says what you decided and waits for your yes. Only that yes applies
+the batch. Then it offers the next pull request.
+
+You can steer at any point. Say skip or next to leave a finding for later,
+go back or undo to take the last decision off, repeat to hear the question
+again, help for the options, or stop. If you stop after deciding some
+findings, SHIP asks whether to apply them or drop them. Point at a finding
+by its number ("number 3, block it"), or decide the rest of a pull request
+at once ("allow all of them because they are test fixtures").
+
+If the screen's page was closed, SHIP sends a notification instead. It
+waits for you to say "ready", then asks Relay whether the findings were
+displayed before it starts.
+
+If SHIP can't make sense of an answer, it asks again. After two misses it
+adds "Say stop to leave."
+
+You can also decide in one sentence, using the numbers on the screen:
 
 > *"Allow the first one on pull request 2 because it's only test data."*
+>
 > **"Got it, take a look and say proceed when you're ready."**
+>
 > *"Yes."*
+>
 > **"Done."**
 
 The decision is staged first and shown on the screen as pending. Nothing
-is applied until you confirm. Say no, cancel or stop, and it is dropped.
-When some decisions can't be applied, SHIP says so plainly, for example
-"Applied 2 of 3. 1 already decided in the console."
+is applied until you confirm. When some decisions can't be applied, SHIP
+says so plainly, for example "Applied 2 of 3. 1 already decided in the
+console."
 
 A blocked finding keeps holding the merge, and voice says so: "Nothing
 needs a decision, but 1 finding that was blocked still holds the merge
@@ -115,8 +167,9 @@ until the code is fixed."
 ### On a screen
 
 The findings screen shows one table per pull request, blockers first.
-Each row has a number, the way you speak it ("first one on pull request
-2"), the file, what's wrong and the rule it breaks. A finding that
+Each row has a number, the one Alexa says when it asks about the finding
+and the one you say to point at it ("number 3, block it"), then the file,
+what's wrong and the rule it breaks. A finding that
 blocks the merge is marked "Needs a decision". One that doesn't is marked
 "Flagged". Staged decisions show on their row as pending, for example
 "Pending: allow" with your reason. When blocked findings still hold a
@@ -133,10 +186,13 @@ when three things are true.
 - You gave a reason in your own words.
 - You confirmed what SHIP understood.
 
-The model that understands your speech never sees a finding. It turns
-what you said into a proposal, and plain code checks every part of it.
-Relay, the server, also refuses a decision on a finding you haven't seen
-or one without a reason, so the model can't talk its way past the rules.
+In the walk-through, plain code reads every answer and no model is
+involved, so what an answer means is predictable. A bare yes never
+decides anything. It only confirms. The model that understands other
+free speech never sees a finding. It turns what you said into a proposal,
+and plain code checks every part of it. Relay, the server, also refuses a
+decision on a finding you haven't seen or one without a reason, so
+the model can't talk its way past the rules.
 
 ## Why not Alexa+
 
@@ -148,8 +204,8 @@ stops at an AWS role that only accounts registered by an Amazon Alexa
 Solutions Architect can assume (see the [friction log](FRICTION_LOG.md)).
 So a custom Alexa Skill called "ship review" stands in for the add-on.
 It does the same job. It hears you and calls the same MCP server an
-add-on would. A Bedrock model, Amazon Nova Lite, turns free speech into
-tool calls. When the add-on opens, it can point at the same server and
+add-on would. Plain code runs the guided review. A Bedrock model, Amazon
+Nova Lite, turns other free speech into tool calls. When the add-on opens, it can point at the same server and
 the skill steps aside.
 
 ## Set up a screen
@@ -167,7 +223,9 @@ to the Home Screen first.
 
 A notification doesn't count as a look. Findings count as seen only when
 a page displays them and reports back, and only while the page is
-visible. A screen's held findings expire after ten minutes.
+visible. A screen's held findings expire after ten minutes. When you
+reach the page from a notification, Alexa waits for you to say "ready"
+and checks with Relay that the findings were displayed.
 
 To get the Echo alert, say "Alexa, ask ship review to turn on alerts".
 Alexa sends a permission request to your Alexa app. Allow it there.
@@ -175,31 +233,37 @@ Alexa sends a permission request to your Alexa app. Allow it there.
 ## What you can say
 
 Open the skill with "Alexa, open ship review", or put a request after
-"Alexa, ask ship review". Say it the way you'd say it to a colleague.
-A few examples:
+"Alexa, ask ship review". Then answer what it asks, the way you'd answer
+a colleague. A few examples:
 
 | You want to | You can say |
 |---|---|
 | Know where things stand | "What's up?" "Can we ship today?" "Any blockers?" "Is anything blocked?" |
-| See the detail | "Show it on the laptop." "Put it on my tablet." "Send it to the TV." |
-| Decide | "Allow the first one on pull request 2 because it's only test data." "Block the second one because it leaks a phone number." "Allow the first two on pull request 1 because they are test fixtures." |
-| Confirm or back out | "Yes." "No." "Cancel." |
+| Choose a screen | "The laptop." "The tablet please." "Both." "Yes" when only one screen is set up. |
+| Start the walk-through | "Yes." "Let's go through them." "Start the review." "Ready" after a notification. |
+| Decide a finding | "Allow it, it's only test data." "Block it, it leaks a phone number." "Test data." "False positive." "First one is fine." |
+| Point at a finding or many | "Number 3, block it." "Allow all of them because they are test fixtures." |
+| Steer | "Skip." "Next." "Go back." "Undo." "Repeat." "Help." "Stop." |
+| Apply or drop | "Yes." "No." |
 | Get alerted | "Turn on alerts." |
 
-You can also say approve, accept, dismiss, clear or ignore instead of
-allow, and reject or confirm instead of block. SHIP understands them and
-answers in allow and block.
+Full sentences work too: "Allow the first one on pull request 2 because
+it's only test data." Approve, accept, dismiss, clear and ignore are
+understood as allow, and reject, deny and confirm as block. SHIP answers in
+allow and block.
 
-SHIP asks when something is missing, such as "What's the reason?" or
-"Which screen?", and says no when a rule says no.
+If you give a decision without a reason, SHIP asks for one. A bare yes
+never decides anything.
 
 ## Try it
 
+- **An Echo with the skill enabled.** Say "Alexa, ask ship review what's
+  up" and answer what it asks.
 - **[The simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
   is a web page that acts as an MCP client of Relay. It opens a session,
   lists the tools, asks for the status and shows the findings on a
-  screen. Decisions are made by voice on the Echo or in the review
-  console, not on this page.
+  screen. The guided conversation and the decisions run on the Echo or in
+  the review console, not on this page.
 - **[The display page](https://pandayv.github.io/ship-engine/ship-display.html)**
   registers a screen. Open it in one tab, then pick that screen in the
   simulator and, when something is waiting, the findings arrive there.

@@ -194,6 +194,15 @@ def parse_answer(text):
     return out
 
 
+_PR_NUMBER = re.compile(r"\b(?:pull request|pr|p r|request)\s*(?:number\s*)?(\d{1,5})\b")
+
+
+def pr_named(text):
+    """The pull request number the person named ("pull request 7", "PR 7"), or None."""
+    m = _PR_NUMBER.search(_norm(text))
+    return int(m.group(1)) if m else None
+
+
 def _is_number_word(token):
     """A finding number said as a digit or an ordinal ("3", "1st", "2nd"): pointing, not a reason."""
     return bool(re.fullmatch(r"\d{1,2}(?:st|nd|rd|th)?", token))
@@ -268,14 +277,24 @@ def _question(flow):
     return f"Number {pos} on pull request {flow['pr']}. Allow, block, or skip?"
 
 
-def begin(session, routing):
-    """Starts the walk-through over what the person has seen. `routing` is Relay's record of it."""
+def begin(session, routing, pr=None):
+    """Starts the walk-through over what the person has seen. `routing` is Relay's record of it.
+    `pr` starts at a pull request the person named."""
     prs = _pr_list(routing)
     if not prs:
         session.pop("flow", None)
         return Turn("I don't see anything on a screen that you've looked at yet. Say show it on a screen first.")
-    repo, pr_number = prs[0]
+    chosen = next((p for p in prs if p[1] == pr), None) if pr is not None else None
+    if pr is not None and chosen is None:
+        return Turn(f"I don't have pull request {pr} on your screen. " + _which_pr_text(prs), elicit=True,
+                    reprompt=_which_pr_text(prs)) if session.get("flow") else Turn(f"I don't have pull request {pr} on your screen.")
+    repo, pr_number = chosen or prs[0]
     return _enter_pr(session, routing, repo, pr_number, first=len(prs) == 1)
+
+
+def _which_pr_text(prs):
+    numbers = [str(p[1]) for p in prs]
+    return "Which one, " + (numbers[0] if len(numbers) == 1 else ", ".join(numbers[:-1]) + " or " + numbers[-1]) + "?"
 
 
 def offer_after_show(session, sentence, delivered, notified):
@@ -434,8 +453,9 @@ def _miss(session, spoken):
 
 def _on_offer(session, text, ctx):
     answer_ = parse_confirm(text)
-    if answer_ == "yes":
-        return begin(session, ctx.seen_routing())
+    named = pr_named(text)
+    if answer_ == "yes" or named is not None:
+        return begin(session, ctx.seen_routing(), pr=named)
     if answer_ == "no":
         session.pop("flow", None)
         return Turn("Okay. Say start whenever you want to go through them.")
@@ -492,12 +512,27 @@ def _on_pick_screen(session, text, ctx):
 def _on_next_pr(session, text, ctx):
     flow = session["flow"]
     answer_ = parse_confirm(text)
+    named = pr_named(text)
+    routing = ctx.seen_routing()
+    if named is not None:
+        pr = next((p for p in _pr_list(routing) if p[1] == named), None)
+        if pr is None:
+            return _miss(session, f"I don't have pull request {named} on your screen. Go on to pull request {flow['pr']}? Say yes or no.")
+        return _enter_pr(session, routing, pr[0], pr[1], first=False)
     if answer_ == "yes":
-        return _enter_pr(session, ctx.seen_routing(), flow["repo"], flow["pr"], first=False)
+        return _enter_pr(session, routing, flow["repo"], flow["pr"], first=False)
+    skipping = parse_answer(text)["action"] == "skip"
+    if skipping:
+        rest = flow.get("remaining") or []
+        if rest:
+            session["flow"] = {"stage": NEXT_PR, "repo": rest[0][0], "pr": rest[0][1], "remaining": rest[1:], "misses": 0}
+            return Turn(f"Skipped. Want to go on to pull request {rest[0][1]}?", elicit=True)
+        session.pop("flow", None)
+        return Turn("Skipped. That's everything you've looked at.")
     if answer_ == "no":
         session.pop("flow", None)
         return Turn("Okay. They're still open.")
-    return _miss(session, f"Go on to pull request {flow['pr']}? Say yes or no.")
+    return _miss(session, f"Go on to pull request {flow['pr']}? Say yes or no, or say skip.")
 
 
 # --- deciding
