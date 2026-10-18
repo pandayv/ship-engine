@@ -737,3 +737,36 @@ def test_no_intent_is_made_only_of_one_word_phrases_because_those_become_alexas_
         slotless = [s for s in intent_["samples"] if "{" not in s]
         if slotless and len(slotless) == len(intent_["samples"]):
             assert all(len(s.split()) >= 2 for s in slotless), intent_["name"]
+
+
+# --- commands that arrive as plain words because Alexa was in the middle of a question ---
+
+
+@pytest.mark.parametrize("said", ["show it on the laptop", "put it on the laptop please", "send it to my laptop"])
+def test_a_show_command_that_arrives_as_free_words_behaves_like_the_show_intent(skill, said):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
+    reply = skill.handler(answer_event(said), None)
+    assert [a for n, a in skill.calls if n == "display_on"] == [{"surface": "laptop"}]
+    assert spoken(reply) == "Putting it on your laptop. Want to go through them?" and directive_of(reply)
+
+
+def test_show_it_on_both_as_free_words_goes_to_every_screen(skill):
+    skill.connected = ["laptop", "tablet"]
+    skill.display_reply = {"delivered": True, "spoken_response": "x", "routing": []}
+    skill.handler(answer_event("show it on both"), None)
+    assert sorted(a["surface"] for n, a in skill.calls if n == "display_on") == ["laptop", "tablet"]
+
+
+@pytest.mark.parametrize("said", ["what's up", "any blockers", "is anything blocked", "status"])
+def test_a_status_question_that_arrives_as_free_words_is_answered_with_the_status(skill, said):
+    skill.connected = ["laptop", "tablet"]
+    reply = skill.handler(answer_event(said), None)
+    assert spoken(reply) == STATUS_SENTENCE and ("release_status" in [n for n, _ in skill.calls])
+
+
+def test_a_sentence_that_is_not_a_command_still_goes_to_the_model_path(skill, monkeypatch):
+    heard = []
+    monkeypatch.setattr(skill.orchestrator, "run_turn", lambda *a, **k: heard.append(a[0]) or skill.orchestrator.Reply("ok"))
+    skill.handler(answer_event("allow the first one on pull request 2 because it is only test data"), None)
+    assert heard == ["allow the first one on pull request 2 because it is only test data"]

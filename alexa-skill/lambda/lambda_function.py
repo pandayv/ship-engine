@@ -471,6 +471,36 @@ def start_review(session):
     return speak_turn(review_flow.begin(session, routing), session)
 
 
+STATUS_ASK = re.compile(r"\b(what'?s up|whats up|what is up|status|any blockers|anything blocked|is anything blocked|can we ship|how are we doing)\b", re.I)
+ALERTS_ASK = re.compile(r"\b(turn on|enable|set up) (alerts|notifications)\b", re.I)
+EVERY_SCREEN = re.compile(r"\b(both|all of them|all screens|every screen|everywhere)\b", re.I)
+
+
+def command_from_words(text, session):
+    """A plain command that reached us as free words, because Alexa was in the middle of one of
+    its own questions and hands over everything said then as plain words. These do not need a
+    language model, and they must behave exactly as they do when Alexa matches them itself.
+    Returns a response, or None if the words are something else."""
+    said = text or ""
+    short = len(said.split()) <= 8
+    if short and ALERTS_ASK.search(said):
+        return alerts_reply(session)
+    if short and STATUS_ASK.search(said):
+        return status_reply(session)
+    if short and orchestrator.WANTS_TO_SEE.search(said):
+        named = orchestrator.screens_named(said)
+        if EVERY_SCREEN.search(said) and not named:
+            return show_all_reply(session)
+        if len(named) == 1:
+            connected = connected_screens(session)
+            registered = orchestrator.match_connected(next(iter(named)), connected) if connected else None
+            if registered:
+                return speak_turn(_show_on(session, registered), session)
+        if len(named) > 1:
+            return show_all_reply(session)
+    return None
+
+
 START_REVIEW = re.compile(r"\b(start|begin|go through|walk me through|review them|run through|step through|one by one|go over)\b", re.I)
 
 
@@ -479,6 +509,9 @@ def free_text_reply(text, session):
     if it can't be used in time, plain rules cover the common requests."""
     if START_REVIEW.search(text or "") and len((text or "").split()) <= 6:
         return start_review(session)      # "let's go through them"
+    command = command_from_words(text, session)
+    if command is not None:
+        return command
     _connect()
     connected, seen = _both(lambda: connected_screens(session), seen_routing)
     if seen is not None:
