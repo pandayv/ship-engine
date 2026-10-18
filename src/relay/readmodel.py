@@ -43,7 +43,7 @@ class PullRequestFindings:
     blocking: int
     review: int
     findings: list[Alert] = field(default_factory=list)
-    # Rejected findings on this PR whose code is still there: decided, so not in
+    # Blocked findings on this PR whose code is still there: decided, so not in
     # `findings`, but the merge is still blocked by them.
     held: int = 0
 
@@ -61,7 +61,7 @@ class ReleaseStatus:
     """What voice is allowed to know: counts, and where to look next."""
 
     pull_requests: list[PullRequestFindings]
-    # PRs whose only blockers are rejected findings: nothing to decide there, so they
+    # PRs held only by blocked findings: nothing to decide there, so they
     # are not in `pull_requests` (which drives numbering and screens), but the merge
     # is still blocked.
     held_only: list[PullRequestFindings] = field(default_factory=list)
@@ -114,8 +114,9 @@ class ReleaseStatus:
         held = self.held
         if self.total == 0:
             if held:
-                noun, verb = ("finding", "blocks") if held == 1 else ("findings", "block")
-                return Spoken(f"Nothing needs a decision, but {held} rejected {noun} still {verb} the merge until fixed.")
+                noun, verb = ("finding", "holds") if held == 1 else ("findings", "hold")
+                return Spoken(f"Nothing needs a decision, but {held} {noun} that "
+                              f"{'was' if held == 1 else 'were'} blocked still {verb} the merge until the code is fixed.")
             return Spoken("No blocking issues. Good to move ahead.")
 
         multi_pr = len(self.pull_requests) > 1
@@ -132,7 +133,7 @@ class ReleaseStatus:
             if multi_pr:
                 sentence += f" across {len(self.pull_requests)} PRs"
             if held:
-                sentence += f". {held} rejected still {'blocks' if held == 1 else 'block'} the merge."
+                sentence += f". {held} blocked {'finding' if held == 1 else 'findings'} still {'holds' if held == 1 else 'hold'} the merge."
             else:
                 sentence += ". None blocking. Ready for your review."
 

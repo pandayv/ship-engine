@@ -81,13 +81,27 @@ def test_showing_here_fetches_the_findings_because_this_page_is_the_screen():
     assert names(out) == ["display_on", "blocked_pull_requests"] and "Pull request #1" in out["screenBody"]
 
 
-def test_approve_never_calls_a_decision_tool_and_explains_what_a_decision_needs():
-    out = run(BASE, {"ask": "Alexa, approve it."})
+@pytest.mark.parametrize("said", ["Alexa, allow it.", "Alexa, block it.", "Alexa, approve it.", "Alexa, reject the first one.",
+                                  "accept it", "clear it"])
+def test_a_decision_phrase_never_calls_a_decision_tool_and_explains_what_a_decision_needs(said):
+    out = run(BASE, {"ask": said})
     assert out["calls"] == [] or all(not n.startswith(("request_risk", "stage_", "proceed")) for n in names(out))
-    assert any("reason in your own words" in t for t in out["transcript"])
+    assert "release_status" not in names(out)           # it is a decision, not a status question
+    assert any("reason in your own words" in t for t in out["transcript"]), said
     html = PAGE.read_text()
     assert '"demo"' not in html and "alert_id: \"demo\"" not in html
     assert "not a voice command" not in html
+
+
+def test_the_preset_button_offers_allow_not_approve():
+    html = PAGE.read_text()
+    assert 'data-q="Alexa, allow it."' in html and '"Allow it."' in html
+    assert "Alexa, approve it." not in html
+
+
+def test_a_status_question_that_mentions_blockers_is_still_a_status_question():
+    out = run(BASE, {"ask": "Alexa, are there any blockers?"})
+    assert "release_status" in names(out)
 
 
 def test_a_failing_tool_does_not_put_the_raw_error_on_the_page():

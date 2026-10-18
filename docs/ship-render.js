@@ -67,15 +67,17 @@ function shipInstallStyles() {
   document.head.appendChild(style);
 }
 
+// A staged decision is shown only if it is exactly "allow" or "block". Anything else shows
+// nothing, never a guess: the screen must not present a decision the server would refuse.
 function shipPendingNote(f) {
-  if (!f.pending) return "";
-  return '<div class="ship-pending">Pending: ' + (f.pending.approved ? "approve" : "reject") +
-    " &mdash; " + shipEsc(f.pending.reason) + "</div>";
+  const decision = f.pending && f.pending.decision;
+  if (decision !== "allow" && decision !== "block") return "";
+  return '<div class="ship-pending">Pending: ' + decision + " &mdash; " + shipEsc(f.pending.reason) + "</div>";
 }
 
 // Renders a blocked_pull_requests-shaped payload into `bodyEl`, and sets
 // `barEl`'s text to a label. One table per pull request, pull requests with a
-// blocker first. Rows follow `position`, the same number a spoken "approve the
+// blocker first. Rows follow `position`, the same number a spoken "allow the
 // first one on pull request 2" points at, and numbering restarts in each pull
 // request. consoleUrl controls the "open review console" link at the bottom —
 // omit it to hide that section entirely (the display page, sitting ambient and
@@ -87,12 +89,12 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
 
   const held = payload && Array.isArray(payload.held) ? payload.held : [];
   const heldNote = held.length
-    ? '<p class="ship-hint">Rejected findings still block the merge until the code is fixed: ' +
+    ? '<p class="ship-hint">Findings that were blocked still hold the merge until the code is fixed: ' +
       held.map(h => shipEsc(h.repo) + " #" + shipEsc(h.pr_number) + " (" + shipEsc(h.count) + ")").join(", ") + ".</p>"
     : "";
 
   if (!payload || !payload.pull_requests || !payload.pull_requests.length) {
-    // Nothing is waiting for a decision. That is only "all clear" if no rejected finding still holds a merge.
+    // Nothing is waiting for a decision. That is only "all clear" if no blocked finding still holds a merge.
     bodyEl.innerHTML = held.length
       ? '<div class="empty-state">Nothing is waiting for a decision.</div>' + heldNote
       : '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
@@ -124,7 +126,7 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
         '<tr class="' + (f.blocks_merge ? "blocking" : "review") + '">' +
           '<td class="ship-num" data-label="Finding">' + shipEsc(f.position) + "</td>" +
           '<td data-label="Status"><span class="ship-chip ' + (f.blocks_merge ? "blocking" : "review") + '">' +
-            (f.blocks_merge ? "Merge blocked" : "Flagged") + "</span>" + shipPendingNote(f) + "</td>" +
+            (f.blocks_merge ? "Needs a decision" : "Flagged") + "</span>" + shipPendingNote(f) + "</td>" +
           '<td class="ship-file" data-label="File">' + shipEsc(f.file) + "</td>" +
           '<td data-label="What&rsquo;s wrong">' + shipEsc(f.what_is_wrong) + "</td>" +
           '<td class="ship-cite" data-label="Rule">' + shipEsc(f.citation) + "</td>" +
@@ -133,7 +135,7 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
     html += "</tbody></table></div></section>";
   }
   const first = pulls[0];
-  html += '<p class="ship-hint">Numbers restart in each pull request. Try: &ldquo;approve the first one on pull request ' +
+  html += '<p class="ship-hint">Numbers restart in each pull request. Try: &ldquo;allow the first one on pull request ' +
     shipEsc(first.pr_number) + " because it&rsquo;s test data.&rdquo;</p>" + heldNote;
   bodyEl.innerHTML = html;
 

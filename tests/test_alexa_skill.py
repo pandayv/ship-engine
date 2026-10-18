@@ -230,10 +230,64 @@ def test_the_general_intent_passes_the_persons_words_unchanged(skill, monkeypatc
     assert spoken_to_model(skill, monkeypatch, "AskIntent", "tell me how many blockers there are") == "tell me how many blockers there are"
 
 
-@pytest.mark.parametrize("intent_name,verb", [("ApproveIntent", "approve "), ("RejectIntent", "reject "), ("ShowFreeIntent", "show ")])
+@pytest.mark.parametrize("intent_name,verb", [("AllowIntent", "allow "), ("BlockIntent", "block "), ("ShowFreeIntent", "show ")])
 def test_the_verb_a_carrier_phrase_swallowed_is_restored(skill, monkeypatch, intent_name, verb):
     said = "the first one because it is test data"
     assert spoken_to_model(skill, monkeypatch, intent_name, said) == verb + said
+
+
+def _language_model():
+    return json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())["interactionModel"]["languageModel"]
+
+
+def _intent_verbs(intent_name):
+    """The verb in front of the slot in each sample of an intent (the part Alexa swallows)."""
+    intents = {i["name"]: i for i in _language_model()["intents"]}
+    return [sample.replace("{request}", "").strip() for sample in intents[intent_name]["samples"]]
+
+
+@pytest.mark.parametrize("verb", ["allow", "approve", "accept", "dismiss", "clear", "ignore"])
+def test_every_way_of_saying_allow_still_reaches_the_allow_intent(verb):
+    assert verb in _intent_verbs("AllowIntent")
+
+
+@pytest.mark.parametrize("verb", ["block", "reject", "confirm"])
+def test_every_way_of_saying_block_still_reaches_the_block_intent(verb):
+    assert verb in _intent_verbs("BlockIntent")
+
+
+@pytest.mark.parametrize("old_word", ["approve", "accept", "dismiss", "clear", "ignore"])
+def test_an_older_word_for_allow_reaches_the_model_as_the_new_word(skill, monkeypatch, old_word):
+    # Alexa matched "<old_word> the first one ..." to the allow intent and swallowed the verb. The model sees "allow".
+    assert old_word in _intent_verbs("AllowIntent")
+    said = "the first one because it is a false positive"
+    assert spoken_to_model(skill, monkeypatch, "AllowIntent", said) == "allow " + said
+
+
+@pytest.mark.parametrize("old_word", ["reject", "confirm"])
+def test_an_older_word_for_block_reaches_the_model_as_the_new_word(skill, monkeypatch, old_word):
+    assert old_word in _intent_verbs("BlockIntent")
+    said = "the second one because it leaks a phone number"
+    assert spoken_to_model(skill, monkeypatch, "BlockIntent", said) == "block " + said
+
+
+def test_the_old_intent_names_are_gone_from_the_model_and_the_skill(skill):
+    names = {i["name"] for i in _language_model()["intents"]}
+    assert {"AllowIntent", "BlockIntent"} <= names and not ({"ApproveIntent", "RejectIntent"} & names)
+    assert not ({"ApproveIntent", "RejectIntent"} & set(skill.FREE_TEXT_INTENTS))
+    assert skill.FREE_TEXT_INTENTS["AllowIntent"] == "allow " and skill.FREE_TEXT_INTENTS["BlockIntent"] == "block "
+
+
+def test_help_gives_an_allow_example_and_the_reprompt_asks_for_allow_or_block(skill):
+    reply = skill.handler(request_event(intent("AMAZON.HelpIntent"), ), None)
+    assert "allow the first one because it's a false positive" in spoken(reply)
+    assert "approve" not in spoken(reply) and "reject" not in spoken(reply)
+
+
+def test_after_findings_are_seen_the_reprompt_asks_for_allow_or_block_with_a_number_and_a_reason(skill):
+    reply = skill.speak("ok", reprompt=skill.REPROMPT, session={"routing": [{"repo": "r", "pr_number": 1, "findings": []}]})
+    prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
+    assert prompt == "Say allow or block, with the number and a reason."
 
 
 def test_the_free_text_intents_are_all_in_the_language_model():
@@ -247,10 +301,14 @@ def test_the_free_text_intents_are_all_in_the_language_model():
 
 
 def test_no_verb_is_used_as_a_carrier_in_the_general_intent():
-    # If it were, Alexa would drop the verb and the model could not tell approve from reject.
-    model = json.loads((SKILL_PATH.parent.parent / "skill-package" / "interactionModels" / "custom" / "en-US.json").read_text())
-    ask = next(i for i in model["interactionModel"]["languageModel"]["intents"] if i["name"] == "AskIntent")
-    verbs = {"approve", "accept", "reject", "dismiss", "confirm", "clear", "ignore", "block", "keep", "show", "put", "send", "mark", "yes", "no"}
+    # If it were, Alexa would drop the verb and the model could not tell allow from block. The verbs are every
+    # verb of the allow and block samples (read from the model, so a new synonym is covered automatically) plus
+    # the other words that mean a decision or a screen.
+    verbs = {"allow", "approve", "accept", "dismiss", "clear", "ignore", "block", "reject", "confirm",
+             "keep", "show", "put", "send", "mark", "yes", "no"}
+    verbs |= {word for name in ("AllowIntent", "BlockIntent") for verb in _intent_verbs(name) for word in verb.split()}
+    assert {"allow", "approve", "accept", "dismiss", "clear", "ignore", "block", "reject", "confirm"} <= verbs
+    ask = next(i for i in _language_model()["intents"] if i["name"] == "AskIntent")
     for sample in ask["samples"]:
         carrier = sample.replace("{request}", "").split()
         assert not (verbs & set(carrier)), sample
@@ -295,7 +353,7 @@ def test_asking_to_show_it_with_exactly_one_screen_connected_just_uses_it(skill)
     skill.connected = ["laptop"]
     skill.display_reply = {"delivered": True, "spoken_response": "Putting it on your laptop.", "routing": []}
     reply = skill.handler(request_event(intent("ShowIntent", {})), None)
-    assert spoken(reply) == "Putting it on your laptop. Say approve or reject, with the number and a reason."
+    assert spoken(reply) == "Putting it on your laptop. Say allow or block, with the number and a reason."
     assert ("tools/call", "display_on", "2025-11-25") in skill.sent
 
 
@@ -400,7 +458,7 @@ def test_with_no_screen_the_suggestion_does_not_offer_one(skill):
 
 def test_once_findings_have_been_seen_the_suggestion_is_to_decide(skill):
     session = {"routing": [{"repo": "r", "pr_number": 1, "findings": []}]}
-    assert "approve or reject" in skill.next_step(session)
+    assert skill.next_step(session) == "Say allow or block, with the number and a reason."
 
 
 def test_an_unmatched_phrase_gets_a_useful_answer_not_a_screen_offer(skill):

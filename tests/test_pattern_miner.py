@@ -2,7 +2,7 @@
 Tests for the pattern-mining batch job (Detector's self-improvement loop).
 
 The two things that actually matter: incremental behavior (never
-reprocess a dismissal the cursor already passed) and the
+reprocess an allowed finding the cursor already passed) and the
 reinforce-vs-create branch, since a bug there either silently duplicates
 near-identical patterns forever or never lets a pattern reach MIN_SUPPORT.
 Both AWS boundaries (the Bedrock extraction call, the embedding calls
@@ -41,7 +41,7 @@ def table(monkeypatch):
     return fake
 
 
-def _alert(alert_id="a1", taxonomy_id="PIIE-001", resolution="approved",
+def _alert(alert_id="a1", taxonomy_id="PIIE-001", resolution="allowed",
            resolved_at="2026-09-27T00:00:00+00:00", reason="hashed before sending, not raw PII"):
     return Alert(
         alert_id=alert_id, repo="pandayv/micro-finance", pr_number=1, file="x.py",
@@ -66,19 +66,37 @@ def _mock_similarity(monkeypatch, value):
     )
 
 
-# --- only findings a reviewer okayed are mined ---
+# --- only findings a reviewer allowed are mined ---
 
 
-def test_confirmed_findings_are_never_mined(table, monkeypatch):
-    # A rejected finding is one a reviewer confirmed is real. Learning from it as if it
-    # were okayed would teach Detector to wave through the violations people confirmed.
+def test_blocked_findings_are_never_mined(table, monkeypatch):
+    # A blocked finding is one a reviewer confirmed is real. Learning from it as if it
+    # were allowed would teach Detector to wave through the violations people confirmed.
     _mock_extraction(monkeypatch)
     monkeypatch.setattr(
         "src.storage.alert_store.list_resolved_alerts",
-        lambda: [_alert(resolution="rejected")],
+        lambda: [_alert(resolution="blocked")],
     )
     result = miner.mine()
     assert result["processed"] == 0
+
+
+def test_only_the_allowed_findings_of_a_mixed_history_are_mined(table, monkeypatch):
+    _mock_extraction(monkeypatch)
+    _mock_similarity(monkeypatch, value=0.0)
+    monkeypatch.setattr(
+        "src.storage.alert_store.list_resolved_alerts",
+        lambda: [_alert(alert_id="ok", resolution="allowed", resolved_at="2026-09-27T00:00:00+00:00"),
+                 _alert(alert_id="real", resolution="blocked", resolved_at="2026-09-28T00:00:00+00:00"),
+                 _alert(alert_id="old-name", resolution="approved", resolved_at="2026-09-29T00:00:00+00:00")],
+    )
+    assert miner.mine()["processed"] == 1
+    assert pattern_store.get_cursor() == "2026-09-27T00:00:00+00:00"
+
+
+def test_the_prompt_describes_an_allowed_finding():
+    text = miner.EXTRACTION_PROMPT
+    assert "allowed it to go ahead" in text and "okayed" not in text
 
 
 # --- incremental behavior ---
@@ -96,7 +114,7 @@ def test_first_run_with_no_cursor_processes_everything(table, monkeypatch):
     assert pattern_store.get_cursor() == "2026-09-27T00:00:00+00:00"
 
 
-def test_a_second_run_only_processes_dismissals_after_the_cursor(table, monkeypatch):
+def test_a_second_run_only_processes_allowed_findings_after_the_cursor(table, monkeypatch):
     _mock_extraction(monkeypatch)
     _mock_similarity(monkeypatch, value=0.0)
     pattern_store.set_cursor("2026-09-27T00:00:00+00:00")
@@ -185,7 +203,7 @@ def test_reinforcement_merges_a_second_taxonomy_id(table, monkeypatch):
     assert set(stored.source_taxonomy_ids) == {"PIIE-001", "PIIE-002"}
 
 
-def test_no_new_dismissals_leaves_the_cursor_untouched(table, monkeypatch):
+def test_no_new_allowed_findings_leaves_the_cursor_untouched(table, monkeypatch):
     pattern_store.set_cursor("2026-09-27T00:00:00+00:00")
     monkeypatch.setattr("src.storage.alert_store.list_resolved_alerts", lambda: [])
     miner.mine()

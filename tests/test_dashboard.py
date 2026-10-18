@@ -57,29 +57,37 @@ def _wire_resolvable(monkeypatch, calls, alert=None):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     monkeypatch.setattr(dashboard_module.alert_store, "get_alert", lambda alert_id: alert or _sample_alert(alert_id))
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert",
-                        lambda alert_id, approved, reason="", resolved_by="": calls.append((alert_id, approved)))
+                        lambda alert_id, decision, reason="", resolved_by="": calls.append((alert_id, decision)))
     posted, synced = [], []
     monkeypatch.setattr(dashboard_module, "post_pr_comment", lambda *a, **k: posted.append((a, k)))
     monkeypatch.setattr(dashboard_module, "sync_pr_check", lambda *a, **k: synced.append((a, k)))
     return posted, synced
 
 
-def test_approve_calls_resolve_with_true(monkeypatch):
+def test_allow_calls_resolve_with_allow(monkeypatch):
     calls = []
     _wire_resolvable(monkeypatch, calls)
-    response = client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+    response = client.post(f"/dashboard/a1/allow?token={TEST_TOKEN}",
                            data={"reason": "Fixture data only."}, follow_redirects=False)
     assert response.status_code == 303
-    assert calls == [("a1", True)]
+    assert calls == [("a1", "allow")]
 
 
-def test_reject_calls_resolve_with_false(monkeypatch):
+def test_block_calls_resolve_with_block(monkeypatch):
     calls = []
     _wire_resolvable(monkeypatch, calls)
-    response = client.post(f"/dashboard/a1/reject?token={TEST_TOKEN}",
+    response = client.post(f"/dashboard/a1/block?token={TEST_TOKEN}",
                            data={"reason": "Real problem, needs an allowlist."}, follow_redirects=False)
     assert response.status_code == 303
-    assert calls == [("a1", False)]
+    assert calls == [("a1", "block")]
+
+
+@pytest.mark.parametrize("old_route", ["approve", "reject"])
+def test_the_old_decision_routes_are_gone(monkeypatch, old_route):
+    calls = []
+    _wire_resolvable(monkeypatch, calls)
+    response = client.post(f"/dashboard/a1/{old_route}?token={TEST_TOKEN}", data={"reason": "x"}, follow_redirects=False)
+    assert response.status_code in (404, 405) and calls == []
 
 
 def test_decision_writes_back_to_the_pull_request(monkeypatch):
@@ -88,13 +96,13 @@ def test_decision_writes_back_to_the_pull_request(monkeypatch):
     # the merge stays blocked no matter what the reviewer decided here.
     calls = []
     posted, synced = _wire_resolvable(monkeypatch, calls)
-    client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+    client.post(f"/dashboard/a1/allow?token={TEST_TOKEN}",
                 data={"reason": "Fixture data only, tracked as LOAN-812."}, follow_redirects=False)
 
     assert len(posted) == 1
     repo, pr_number, body = posted[0][0]
     assert repo == "pandayv/micro-finance" and pr_number == 1
-    assert "Risk accepted" in body
+    assert body.startswith("### Allowed by the SHIP reviewer: risk accepted")
     assert "Fixture data only, tracked as LOAN-812." in body
 
     assert synced == [(("pandayv/micro-finance", 1, "abc123sha"), {})]
@@ -105,24 +113,24 @@ def test_decision_without_a_reason_is_refused(monkeypatch):
     # must not resolve the alert at all.
     calls = []
     _wire_resolvable(monkeypatch, calls)
-    response = client.post(f"/dashboard/a1/approve?token={TEST_TOKEN}",
+    response = client.post(f"/dashboard/a1/allow?token={TEST_TOKEN}",
                            data={"reason": "   "}, follow_redirects=False)
     assert response.status_code == 400
     assert calls == []
 
 
-def test_approve_conflict_returns_409(monkeypatch):
+def test_deciding_a_finding_that_was_already_decided_returns_409(monkeypatch):
     # review finding #3/#4: resolving a bogus or already-resolved alert_id
     # used to either silently create a ghost row or silently overwrite a
     # prior decision — now it's a real 409, not a silent success.
     calls = []
     _wire_resolvable(monkeypatch, calls)
 
-    def _raise(alert_id, approved, reason="", resolved_by=""):
+    def _raise(alert_id, decision, reason="", resolved_by=""):
         raise dashboard_module.alert_store.AlertNotFoundOrAlreadyResolved(alert_id)
 
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert", _raise)
-    response = client.post(f"/dashboard/nonexistent/approve?token={TEST_TOKEN}",
+    response = client.post(f"/dashboard/nonexistent/allow?token={TEST_TOKEN}",
                            data={"reason": "already handled"}, follow_redirects=False)
     assert response.status_code == 409
 
@@ -130,7 +138,7 @@ def test_approve_conflict_returns_409(monkeypatch):
 def test_unknown_alert_returns_404(monkeypatch):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     monkeypatch.setattr(dashboard_module.alert_store, "get_alert", lambda alert_id: None)
-    response = client.post(f"/dashboard/ghost/approve?token={TEST_TOKEN}",
+    response = client.post(f"/dashboard/ghost/allow?token={TEST_TOKEN}",
                            data={"reason": "n/a"}, follow_redirects=False)
     assert response.status_code == 404
 
@@ -222,12 +230,13 @@ def test_wrong_token_rejected(monkeypatch):
     assert response.headers["location"].startswith("/dashboard/login")
 
 
-def test_approve_without_token_rejected(monkeypatch):
+@pytest.mark.parametrize("route", ["allow", "block"])
+def test_deciding_without_a_token_is_rejected(monkeypatch, route):
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     calls = []
     monkeypatch.setattr(dashboard_module.alert_store, "resolve_alert",
-                        lambda alert_id, approved, reason="", resolved_by="": calls.append((alert_id, approved)))
-    response = client.post("/dashboard/a1/approve", data={"reason": "x"}, follow_redirects=False)
+                        lambda alert_id, decision, reason="", resolved_by="": calls.append((alert_id, decision)))
+    response = client.post(f"/dashboard/a1/{route}", data={"reason": "x"}, follow_redirects=False)
     assert response.status_code == 401
     assert calls == []  # the actual resolution must never have been attempted
 
@@ -270,7 +279,7 @@ def test_dashboard_auth_env_var_is_independent_of_the_webhook_signature_flag():
 # --- History (dispositions) ---
 
 
-def _sample_resolved_alert(alert_id="a1", resolution="approved"):
+def _sample_resolved_alert(alert_id="a1", resolution="allowed"):
     return Alert(
         alert_id=alert_id, repo="pandayv/micro-finance", pr_number=1, file="loans/ai_underwriting.py",
         taxonomy_id="PIIE-001", risk_score=9.1, plain_english_summary="Raw applicant PII sent to an external LLM.",
@@ -294,7 +303,8 @@ def test_history_renders_the_disposition(monkeypatch):
     monkeypatch.setattr(dashboard_module.alert_store, "list_resolved_alerts", lambda: [_sample_resolved_alert()])
     response = client.get(f"/dashboard/history?token={TEST_TOKEN}")
     assert response.status_code == 200
-    assert "approved" in response.text
+    assert "Allowed" in response.text and 'class="tag allowed"' in response.text
+    assert "approved" not in response.text
     assert "Fixture data only, tracked as LOAN-812." in response.text
     assert "the SHIP reviewer" in response.text
 
@@ -396,19 +406,48 @@ def test_wrong_token_uses_constant_time_comparison(monkeypatch):
     assert response.headers["location"].startswith("/dashboard/login")
 
 
-def test_history_says_a_rejected_finding_still_blocks_until_the_code_changes(monkeypatch):
+def test_history_says_a_blocked_finding_still_blocks_until_the_code_changes(monkeypatch):
     held = _sample_resolved_alert()
-    held.resolution, held.fragment_key = "rejected", "k"
+    held.resolution, held.fragment_key = "blocked", "k"
     cleared = _sample_resolved_alert()
-    cleared.alert_id, cleared.resolution, cleared.fragment_key, cleared.unblocked_at = "a2", "rejected", "k2", "2026-10-17T00:00:00+00:00"
+    cleared.alert_id, cleared.resolution, cleared.fragment_key, cleared.unblocked_at = "a2", "blocked", "k2", "2026-10-17T00:00:00+00:00"
     monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
     monkeypatch.setattr(dashboard_module.alert_store, "list_resolved_alerts", lambda: [held, cleared])
     text = client.get(f"/dashboard/history?token={TEST_TOKEN}").text
     assert text.count("Still blocking the merge") == 1
+    assert text.count('class="tag blocked"') == 2 and "Blocked" in text and "rejected" not in text.lower()
 
 
-def test_a_gate_rejection_posts_the_status_through_the_shared_function(monkeypatch):
+def test_a_gate_block_posts_the_status_through_the_shared_function(monkeypatch):
     calls = []
-    _, synced = _wire_resolvable(monkeypatch, calls)
-    client.post(f"/dashboard/a1/reject?token={TEST_TOKEN}", data={"reason": "real problem"}, follow_redirects=False)
-    assert calls == [("a1", False)] and synced[0][0] == ("pandayv/micro-finance", 1, "abc123sha")
+    posted, synced = _wire_resolvable(monkeypatch, calls)
+    client.post(f"/dashboard/a1/block?token={TEST_TOKEN}", data={"reason": "real problem"}, follow_redirects=False)
+    assert calls == [("a1", "block")] and synced[0][0] == ("pandayv/micro-finance", 1, "abc123sha")
+    assert posted[0][0][2].startswith("### Blocked by the SHIP reviewer: this needs a code fix")
+
+
+# --- the console says what each button does to the pull request ---
+
+
+def _console_text(monkeypatch, severity="blocking"):
+    alert = _sample_alert()
+    alert.severity = severity
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_active_alerts", lambda: [alert])
+    return client.get(f"/dashboard?token={TEST_TOKEN}").text
+
+
+def test_the_console_buttons_post_to_the_allow_and_block_routes_and_say_what_happens_to_the_merge(monkeypatch):
+    text = _console_text(monkeypatch)
+    assert 'action="/dashboard/a1/allow"' in text and 'formaction="/dashboard/a1/block"' in text
+    assert 'class="allow"' in text and 'class="block"' in text
+    assert "Allow merge" in text and "Keep blocked" in text
+    assert "/approve" not in text and "/reject" not in text and "approve" not in text.lower() and "reject" not in text.lower()
+    assert "Allow</strong> accepts the risk" in text and "Block</strong> confirms it is real" in text
+
+
+def test_a_review_only_finding_gets_buttons_that_fit_a_merge_that_was_never_blocked(monkeypatch):
+    text = _console_text(monkeypatch, severity="review")
+    assert "Allow (clear the flag)" in text and "Block the merge" in text
+    assert "Keep blocked" not in text and "Allow merge" not in text
+

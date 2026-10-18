@@ -61,8 +61,8 @@ because a required check can only be satisfied by one and absence must never pas
   error      a review that could not run: the diff could not be read, the allowlist could
              not be checked, a fragment was too large to queue. Logged at ERROR too
 
-A rejected finding keeps the PR failing until a later commit no longer contains its
-flagged code (alert_store.release_fixed_rejections, called from _reconcile()). What is not
+A blocked finding keeps the PR failing until a later commit no longer contains its
+flagged code (alert_store.release_fixed_blocks, called from _reconcile()). What is not
 covered without new infrastructure: a fragment whose SQS message exhausts its retries
 (the check stays pending, which is the safe direction) needs a dead-letter consumer or a
 reconciler to turn that into an explicit error status.
@@ -112,7 +112,7 @@ from src.api.github_client import extract_head_sha, extract_pr_ref, fetch_pr_dif
 from src.api.github_writeback import comment_for_finding, post_commit_status, post_pr_comment, sync_pr_check
 from src.api.alexa_notify import notify_new_finding
 from src.storage.alert_store import (SEVERITY_BLOCKING, SEVERITY_REVIEW, claim_step, complete_step, fragment_key_for,
-                                     put_alert, release_fixed_rejections, release_step)
+                                     put_alert, release_fixed_blocks, release_step)
 from src.storage.repo_store import is_watched, mark_event_seen, mark_reviewed, watch_state
 from src.storage.review_ledger import begin_review, fragment_reported
 from src.storage.status_store import refresh_summary
@@ -309,20 +309,20 @@ def _escalate(code_diff: str) -> tuple[int, list[dict]]:
 
 
 def _reconcile(repo_full_name: str, pr_number: int, escalated: list[dict]) -> None:
-    """A rejected finding keeps the PR blocked until its code is gone. This commit's
+    """A blocked finding keeps the PR blocked until its code is gone. This commit's
     flagged fragments are the evidence: any held finding whose fragment is not among
-    them is released (alert_store.release_fixed_rejections). Fails closed: if this
-    cannot run, the rejected findings simply keep blocking."""
+    them is released (alert_store.release_fixed_blocks). Fails closed: if this
+    cannot run, the blocked findings simply keep blocking."""
     if repo_full_name == "local-test":
         return
     try:
-        released = release_fixed_rejections(repo_full_name, pr_number, {e["fragment_key"] for e in escalated})
+        released = release_fixed_blocks(repo_full_name, pr_number, {e["fragment_key"] for e in escalated})
         if released:
-            log.info("released %d rejected finding(s) whose code is gone: repo=%s pr=%s",
+            log.info("released %d blocked finding(s) whose code is gone: repo=%s pr=%s",
                      released, repo_full_name, pr_number)
             refresh_summary()
     except Exception:
-        log.exception("could not release rejected findings, they keep blocking: repo=%s pr=%s",
+        log.exception("could not release blocked findings, they keep blocking: repo=%s pr=%s",
                       repo_full_name, pr_number)
 
 
@@ -530,7 +530,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     if not scan(code_diff).matched:
         # Report the pass on the PR too, replacing the pending status: a required check
         # that never reports blocks the merge just as effectively as a failing one. Any
-        # rejected finding whose code is gone is released first.
+        # blocked finding whose code is gone is released first.
         _reconcile(repo_full_name, pr_number, [])
         sync_pr_check(repo_full_name, pr_number, head_sha)
         mark_reviewed(repo_full_name)

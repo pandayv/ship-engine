@@ -10,9 +10,9 @@ add-on would hand to Alexa+.
 The model proposes; this code decides. The model is a translator, never an
 authority, so everything that matters is checked here in plain code:
 
-  * It only ever sees four tools. The one-step "accept this risk" tool is NOT
-    among them: in testing the model mapped "reject the first one" onto it,
-    which would have approved the finding. Every decision goes through
+  * It only ever sees four tools. The one-step "allow this finding" tool is NOT
+    among them: the model could map "reject the first one" onto it, which would
+    allow the finding instead of blocking it. Every decision goes through
     stage_decisions, then proceed.
   * A turn may stage a decision or proceed with one, never both. The person
     sees what was staged on their screen and says "proceed" in a later turn.
@@ -27,7 +27,7 @@ authority, so everything that matters is checked here in plain code:
   * A screen is used only if the person named it or used it last. A model that
     guesses "laptop" is stopped and asked "Which screen?".
   * What is spoken is the server's own sentence, not the model's paraphrase, so
-    the model cannot claim an approval that Relay refused. The model's own words
+    the model cannot claim an allow that Relay refused. The model's own words
     are spoken only when it used no tool (a question back, or a polite no).
 
 The voice gate itself (the person must have seen the finding on a screen, and
@@ -90,11 +90,19 @@ ASK_REASON_EACH = "What's the reason for each one?"
 CONFIRM_OR_DROP = "Say yes to apply what's staged, or no to drop it."
 NOTHING_STAGED = "There is nothing staged to apply."
 SAME_TWICE = "You mentioned the same finding twice. Which decision did you mean?"
-# Words that are the command itself, not a reason for it. "approve everything" is not a reason.
-COMMAND_WORDS = {"approve", "approved", "accept", "reject", "rejected", "dismiss", "clear", "ignore", "allow", "confirm",
-                 "block", "everything", "all", "any", "these", "those", "findings", "finding", "first", "second", "third",
+# The two decisions, as Relay spells them. This folder is zipped on its own and cannot import
+# src/, so tests/test_alexa_orchestrator.py checks these match src/storage/alert_store.py.
+DECISION_ALLOW = "allow"
+DECISION_BLOCK = "block"
+DECISIONS = (DECISION_ALLOW, DECISION_BLOCK)
+DECISION_UNCLEAR = "I couldn't tell whether to allow or block that. Which was it?"
+
+# Words that are the command itself, not a reason for it. "allow everything" is not a reason.
+# Both the canonical words and the older or looser ones a person may still say are here.
+COMMAND_WORDS = {"allow", "allowed", "block", "blocked", "approve", "approved", "accept", "reject", "rejected", "dismiss",
+                 "clear", "ignore", "confirm", "everything", "all", "any", "these", "those", "findings", "finding", "first", "second", "third",
                  "fourth", "fifth", "sixth", "1st", "2nd", "3rd", "pull", "request", "number", "on", "please", "go", "ahead",
-                 "let", "through", "yes", "okay", "ok", "do", "set", "mark", "keep", "blocked", "two", "three", "both"}
+                 "let", "through", "yes", "okay", "ok", "do", "set", "mark", "keep", "two", "three", "both"}
 # Also not reasons: where the finding is ("the first one on the laptop"), how to point at it, and
 # the names of the things being operated.
 POINTER_WORDS = {"seventh", "eighth", "ninth", "tenth", "last", "next", "other", "another", "item", "items", "ones",
@@ -115,11 +123,11 @@ What to do:
 - If the findings are already on the screen (see below), do not show them again; carry on with what was asked.
 
 Decisions. Two outcomes exist:
-  approve = accept the risk, so the merge is unblocked (also: accept, clear, dismiss, ignore, false positive, let it through).
-  reject = confirm the finding is real, so the pull request stays blocked until the code is fixed (also: confirm, real problem, needs a fix, keep it blocked).
+  allow = accept the risk, so the merge is unblocked (also: approve, accept, clear, dismiss, ignore, false positive, let it through).
+  block = confirm the finding is real, so the pull request stays blocked until the code is fixed (also: reject, confirm, real problem, needs a fix, keep it blocked).
 - A decision needs two things: the person has seen the findings on a screen, and they gave a reason in their own words. If they have not seen them, say you need them to look first and offer to show them. If they gave no reason, ask for the reason. Ask before calling any decision tool; never call one with an empty or invented reason.
 - Findings are referred to by the numbers on the screen, within a pull request. Speech recognition garbles numbers: "the 1st 1" means "the first one". A note after the person's words says what they have already seen on a screen. Trust that note: if it says they have seen the findings, do not ask them to look again, go on to the decision.
-- Every decision, one finding or several, approve or reject, goes through stage_decisions with each finding's number (position), approved true or false, and its own reason. Nothing is applied by stage_decisions: the person confirms next. Do not call proceed yourself: when the person says yes to a staged decision, the system applies it.
+- Every decision, one finding or several, allow or block, goes through stage_decisions with each finding's number (position), decision exactly "allow" or "block", and its own reason. Nothing is applied by stage_decisions: the person confirms next. Do not call proceed yourself: when the person says yes to a staged decision, the system applies it.
 - You only help with SHIP's release status and findings. For anything else, say so in one sentence.
 - A tool's spoken_response is what the person will hear; never contradict it."""
 
@@ -173,7 +181,7 @@ def _tokens(text):
 def reason_is_theirs(reason, said_texts, screen_names=()):
     """True if a reason is built from words the person actually said (this turn or
     earlier ones), so a model cannot make one up on their behalf, and has real content
-    of its own. The command ("approve the first one"), a number, and the name of a
+    of its own. The command ("allow the first one"), a number, and the name of a
     screen ("on the laptop", including whatever name a screen registered under) are not
     a reason, so they do not count toward having one."""
     not_content = FILLER_WORDS | COMMAND_WORDS | POINTER_WORDS | SCREEN_STOP | {"screen"}
@@ -188,32 +196,29 @@ def reason_is_theirs(reason, said_texts, screen_names=()):
     return len(words & said) / len(words) >= 0.6
 
 
-def strict_bool(value):
-    """True or False only for a real boolean or the words true/false. Anything else is
-    None. Relay would read the string "false" as true, so a spoken reject could approve."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-        return value.strip().lower() == "true"
-    return None
+def strict_decision(value):
+    """"allow" or "block" only, exactly as written. Anything else is None: a boolean, a
+    synonym ("approve"), a different case, surrounding spaces. A decision is never
+    coerced, so a spoken block can never turn into an allow by being misread."""
+    return value if isinstance(value, str) and value in DECISIONS else None
 
 
 def clean_decisions(decisions):
     """The model's decisions with every field forced to its proper type, or None if any
-    cannot be. Only position, approved and reason are kept: a finding id the model may
+    cannot be. Only position, decision and reason are kept: a finding id the model may
     have added is dropped, ids come from what Relay recorded (see stage_target)."""
     cleaned = []
     for d in decisions or []:
         if not isinstance(d, dict):
             return None
-        approved = strict_bool(d.get("approved"))
+        decision = strict_decision(d.get("decision"))
         try:
             position = int(d.get("position"))
         except (TypeError, ValueError):
             return None
-        if approved is None:
+        if decision is None:
             return None
-        cleaned.append({"position": position, "approved": approved, "reason": str(d.get("reason", "")).strip()})
+        cleaned.append({"position": position, "decision": decision, "reason": str(d.get("reason", "")).strip()})
     return cleaned
 
 
@@ -245,7 +250,7 @@ def decisions_by_id(routing_pr, decisions):
         if alert_id is None:
             return None, (f"I don't have a finding number {d['position']} that you've looked at on that pull request. "
                           "Which one did you mean?")
-        mapped.append({"alert_id": alert_id, "position": d["position"], "approved": d["approved"], "reason": d["reason"]})
+        mapped.append({"alert_id": alert_id, "position": d["position"], "decision": d["decision"], "reason": d["reason"]})
     if len({m["alert_id"] for m in mapped}) != len(mapped):
         return None, SAME_TWICE
     return mapped, None
@@ -287,14 +292,16 @@ MODEL_DECISIONS_SCHEMA = {
     "description": "One entry per finding being decided.",
     "items": {"type": "object", "properties": {
         "position": {"type": "integer", "description": "The number shown on the screen, within the pull request."},
-        "approved": {"type": "boolean", "description": "true to approve (accept the risk), false to reject (the finding is real)."},
+        "decision": {"type": "string", "enum": list(DECISIONS),
+                     "description": "allow to accept the risk (the merge is unblocked), block to confirm the finding is real "
+                                    "(the pull request stays blocked until the code is fixed)."},
         "reason": {"type": "string", "description": "The person's own reason, in their words."},
-    }, "required": ["position", "approved", "reason"]},
+    }, "required": ["position", "decision", "reason"]},
 }
 MODEL_DESCRIPTIONS = {
     "stage_decisions": (
         "Record a decision for one or more findings of ONE pull request, by the number each has on the screen. "
-        "Approve accepts the risk; reject confirms the problem and keeps the pull request blocked. Needs the "
+        "Allow accepts the risk; block confirms the problem and keeps the pull request blocked. Needs the "
         "person's own reason for each. Nothing is applied yet: the person confirms in their next turn."),
 }
 
@@ -499,8 +506,12 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
             if shown is None:
                 speech = LOOK_FIRST
                 continue
-            # Only with reasons in the person's own words.
+            # Each decision must be exactly allow or block: anything else is asked about, not sent.
             decisions = clean_decisions(args.get("decisions"))
+            if decisions is None:
+                speech = DECISION_UNCLEAR
+                continue
+            # Only with reasons in the person's own words.
             said = [utterance] + [earlier for earlier, _ in session.get("history", [])]
             if not decisions or any(not reason_is_theirs(d["reason"], said, connected) for d in decisions):
                 speech = ASK_REASON_EACH if decisions and len(decisions) > 1 else ASK_REASON

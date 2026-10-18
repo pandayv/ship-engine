@@ -73,7 +73,7 @@ def test_list_active_alerts_stops_after_a_single_page_when_no_more_data(monkeypa
 
 def _resolved_item(n: int, resolved_at: str) -> dict:
     item = _raw_item(n)
-    item.update(status="resolved", resolution="approved", resolved_at=resolved_at,
+    item.update(status="resolved", resolution="allowed", resolved_at=resolved_at,
                 resolution_reason="fine", resolved_by="the SHIP reviewer")
     return item
 
@@ -93,7 +93,7 @@ def test_list_resolved_alerts_tolerates_rows_predating_the_reason_fields(monkeyp
     # Rows resolved before resolution_reason/resolved_by existed - the
     # reason went only to the PR comment at the time, not to this table.
     legacy = _raw_item(1)
-    legacy.update(status="resolved", resolution="approved", resolved_at="2026-09-04T00:00:00+00:00")
+    legacy.update(status="resolved", resolution="allowed", resolved_at="2026-09-04T00:00:00+00:00")
     fake_table = _FakePaginatedTable([[legacy]])
     monkeypatch.setattr(alert_store, "_table", lambda: fake_table)
 

@@ -13,7 +13,7 @@
   --border: #e2e5ea; --border-strong: #cbd1da;
   --accent: #1c3a5e; --accent-tint: #e8eef5;
   --blocking: #b3392c; --blocking-tint: #fbeae6;
-  --approved: #1e8f5f; --approved-tint: #e5f4ed;
+  --allowed: #1e8f5f; --allowed-tint: #e5f4ed;
   --review: #b8720f; --review-tint: #f8eede;
   --shadow: 0 1px 2px rgba(18,22,28,0.04), 0 4px 12px rgba(18,22,28,0.05);
 }
@@ -23,7 +23,7 @@
     --border: #2a3138; --border-strong: #3a434c;
     --accent: #86aed8; --accent-tint: #1c2a3a;
     --blocking: #e2735c; --blocking-tint: #3a1f18;
-    --approved: #4fc98a; --approved-tint: #163425;
+    --allowed: #4fc98a; --allowed-tint: #163425;
     --review: #e0a052; --review-tint: #3a2a12;
     --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
     color-scheme: dark;
@@ -34,7 +34,7 @@
   --border: #2a3138; --border-strong: #3a434c;
   --accent: #86aed8; --accent-tint: #1c2a3a;
   --blocking: #e2735c; --blocking-tint: #3a1f18;
-  --approved: #4fc98a; --approved-tint: #163425;
+  --allowed: #4fc98a; --allowed-tint: #163425;
   --review: #e0a052; --review-tint: #3a2a12;
   --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
   color-scheme: dark;
@@ -110,10 +110,11 @@ pre { background: var(--bg); border: 1px solid var(--border); color: var(--ink);
 button { padding: 8px 15px; border-radius: 7px; border: 1px solid transparent; cursor: pointer;
          font-size: 0.86rem; font-weight: 600; font-family: inherit; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.approve { background: var(--approved); color: white; }
-.approve:hover { filter: brightness(1.08); }
-.reject { background: var(--surface); color: var(--blocking); border-color: var(--blocking); }
-.reject:hover { background: var(--blocking-tint); }
+.allow { background: var(--allowed); color: white; }
+.allow:hover { filter: brightness(1.08); }
+.block { background: var(--surface); color: var(--blocking); border-color: var(--blocking); }
+.block:hover { background: var(--blocking-tint); }
+.choice-note { margin: 10px 0 0; font-size: 0.8rem; color: var(--ink-soft); }
 
 .empty { color: var(--ink-soft); padding: 60px 0; text-align: center; font-size: 0.95rem; }
 </style>
@@ -157,20 +158,22 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
           </div>
           <div class="summary">{{ alert.plain_english_summary }}</div>
           {% if alert.remediation_patch %}<pre>{{ alert.remediation_patch }}</pre>{% endif %}
-          <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/approve">
+          <form class="actions" method="post" action="/dashboard/{{ alert.alert_id }}/allow">
             <label for="reason-{{ alert.alert_id }}">Your reason
               <span class="hint">Posted on the pull request as the record of this decision.</span></label>
             <textarea id="reason-{{ alert.alert_id }}" name="reason" required
                       placeholder="e.g. Fixture data only, never runs against production — tracked as LOAN-812."></textarea>
             <div class="btn-row">
-              <button class="approve" type="submit">
-                {% if alert.severity == "blocking" %}Accept risk &amp; merge{% else %}Dismiss — not an issue{% endif %}
+              <button class="allow" type="submit">
+                {% if alert.severity == "blocking" %}Allow merge{% else %}Allow (clear the flag){% endif %}
               </button>
-              <button class="reject" type="submit"
-                      formaction="/dashboard/{{ alert.alert_id }}/reject">
-                {% if alert.severity == "blocking" %}Confirm — needs a fix{% else %}Confirm — block this{% endif %}
+              <button class="block" type="submit"
+                      formaction="/dashboard/{{ alert.alert_id }}/block">
+                {% if alert.severity == "blocking" %}Keep blocked{% else %}Block the merge{% endif %}
               </button>
             </div>
+            <p class="choice-note"><strong>Allow</strong> accepts the risk, so this finding stops blocking.
+              <strong>Block</strong> confirms it is real, so the pull request stays blocked until a commit changes this code.</p>
           </form>
         </div>
         {% endfor %}

@@ -9,7 +9,7 @@ version of this store shipped and silently never worked.
 
 The two properties that matter: an unshown alert never reads as shown,
 and a datastore error fails CLOSED (reads as not-reviewed) — the unsafe
-failure direction here is a blind approval slipping through, not an
+failure direction here is a blind decision slipping through, not an
 unnecessary redirect to Gate, same standard as repo_store.is_watched().
 """
 

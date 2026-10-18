@@ -54,9 +54,9 @@ def test_re_detecting_a_finding_that_is_still_open_is_not_new_and_keeps_its_book
 
 def test_re_detecting_a_finding_a_person_already_resolved_changes_nothing(table):
     first = _put()
-    alert_store.resolve_alert(first.alert_id, approved=True, reason="fixture", resolved_by="x")
+    alert_store.resolve_alert(first.alert_id, "allow", reason="fixture", resolved_by="x")
     again = _put(risk_score=2.0)
-    assert again.newly_written is False and again.status == "resolved" and again.resolution == "approved"
+    assert again.newly_written is False and again.status == "resolved" and again.resolution == "allowed"
     assert table.rows[first.alert_id]["risk_score"] != 2.0
 
 
@@ -144,7 +144,7 @@ def test_a_second_push_that_re_detects_the_finding_neither_comments_nor_chimes_a
 
 def test_a_finding_a_person_already_decided_is_not_commented_or_announced_again(pipeline, table):
     first = run()
-    alert_store.resolve_alert(first["alert_id"], approved=True, reason="fixture", resolved_by="x")
+    alert_store.resolve_alert(first["alert_id"], "allow", reason="fixture", resolved_by="x")
     run("sha2")
     assert len(pipeline["comments"]) == 1 and len(pipeline["notes"]) == 1
 

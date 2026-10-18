@@ -15,12 +15,13 @@ than left to code review:
      finding having been shown on a screen recently, never without a reason
      in the person's own words, and never on a finding the person did not
      point at": see src/relay/server.py's module docstring. The tests for it
-     assert what actually happens (a refusal changes nothing; an approval
-     clears the PR's status; a rejection keeps it failing), not which tool
+     assert what actually happens (a refusal changes nothing; an allow
+     clears the PR's status; a block keeps it failing), not which tool
      names exist.
 """
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -28,7 +29,8 @@ import src.relay.server as relay
 from src.relay.modality import SPEECH_CHAR_BUDGET, ModalityViolation, Spoken
 from src.relay.readmodel import ReleaseStatus, _group
 from src.storage import pending_store, session_store
-from src.storage.alert_store import Alert, AlertNotFoundOrAlreadyResolved, is_held, is_open
+from src.storage.alert_store import (DECISION_ALLOW, DECISION_BLOCK, RESOLUTION_ALLOWED, RESOLUTION_BLOCKED, Alert,
+                                     AlertNotFoundOrAlreadyResolved, is_held, is_open)
 from src.storage.status_store import PullRequestCounts, ReleaseSummary, SummaryUnavailable
 
 
@@ -254,7 +256,7 @@ def test_screen_tools_carry_the_detail_voice_withholds(one_blocking):
 # --- property 2: a finding cannot be decided blind ---
 #
 # These assert what happens, not which tool names exist: a refusal changes nothing, an
-# approval clears the PR's commit status, a rejection keeps it failing.
+# allow clears the PR's commit status, a block keeps it failing.
 
 
 async def mcp_tools():
@@ -274,12 +276,14 @@ class LiveDB:
     def get(self, alert_id):
         return self.alerts.get(alert_id)
 
-    def resolve(self, alert_id, approved, reason, resolved_by):
+    def resolve(self, alert_id, decision, reason, resolved_by):
         self.resolve_calls.append(alert_id)
         alert = self.alerts.get(alert_id)
         if alert is None or alert.status == "resolved":
             raise AlertNotFoundOrAlreadyResolved(alert_id)
-        alert.status, alert.resolution = "resolved", "approved" if approved else "rejected"
+        assert decision in (DECISION_ALLOW, DECISION_BLOCK), decision
+        alert.status = "resolved"
+        alert.resolution = RESOLUTION_ALLOWED if decision == DECISION_ALLOW else RESOLUTION_BLOCKED
 
     def gate(self):
         return [a for a in self.alerts.values() if is_open(a) or is_held(a)]
@@ -330,7 +334,7 @@ def test_blind_acceptance_never_performs_it(one_blocking, session_table):
 def test_an_unseen_finding_cannot_be_decided_by_any_path_and_nothing_changes(live):
     one = relay.request_risk_acceptance("a1", reason="it is only test data")
     staged = relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"alert_id": "a1", "approved": True, "reason": "it is only test data"}])
+        {"alert_id": "a1", "decision": "allow", "reason": "it is only test data"}])
     assert one["performed"] == 0 and staged["performed"] == 0 and "staged" not in staged
     assert live.resolve_calls == [] and live.statuses == []
     assert pending_store.get_pending("pandayv/micro-finance", 2) is None
@@ -352,7 +356,7 @@ def test_reviewed_then_confirmed_with_a_reason_actually_performs_it(live):
     result = relay.request_risk_acceptance("a1", reason="known internal test fixture")
 
     assert result["performed"] == 1 and type(result["performed"]) is int
-    assert live.alerts["a1"].resolution == "approved"
+    assert live.alerts["a1"].resolution == "allowed"
     assert "known internal" not in result["spoken_response"]     # the reason is recorded, not echoed
 
 
@@ -414,19 +418,19 @@ def test_an_already_decided_finding_is_reported_not_decided_again(live):
 # --- what a decision does to the pull request ---
 
 
-def test_approving_clears_the_status_and_rejecting_keeps_it_failing(live):
+def test_allowing_clears_the_status_and_blocking_keeps_it_failing(live):
     relay.blocked_pull_requests()
     relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"alert_id": "a1", "approved": True, "reason": "known internal test fixture"},
-        {"alert_id": "a2", "approved": False, "reason": "it really does leak a phone number"}])
+        {"alert_id": "a1", "decision": "allow", "reason": "known internal test fixture"},
+        {"alert_id": "a2", "decision": "block", "reason": "it really does leak a phone number"}])
     relay.proceed("pandayv/micro-finance", 2)
 
     sha, state, description = live.statuses[-1]
-    assert state == "failure" and "rejected" in description     # a2 is real: the PR stays blocked
+    assert state == "failure" and "blocked by a reviewer" in description     # a2 is real: the PR stays blocked
 
-    # Approving the other one on its own clears the block.
+    # Allowing the other one on its own clears the block.
     db2 = live
-    db2.alerts["a2"].resolution, db2.alerts["a2"].status = "approved", "resolved"
+    db2.alerts["a2"].resolution, db2.alerts["a2"].status = "allowed", "resolved"
     relay.finding_detail("a1")
     relay._write_back([db2.alerts["a1"]])
     assert live.statuses[-1][1] == "success"
@@ -439,19 +443,29 @@ def test_the_status_goes_to_the_current_head_not_the_one_stored_on_the_alert(liv
     assert all(sha == "currenthead" for sha, _, _ in live.statuses) and live.statuses
 
 
-def test_a_rejection_by_voice_says_the_pr_stays_blocked_on_the_pr_comment(live):
+def test_a_block_by_voice_says_the_pr_stays_blocked_on_the_pr_comment(live):
     relay.blocked_pull_requests()
     relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"alert_id": "a1", "approved": False, "reason": "it really does leak a phone number"}])
+        {"alert_id": "a1", "decision": "block", "reason": "it really does leak a phone number"}])
     relay.proceed("pandayv/micro-finance", 2)
-    assert any("stays blocked" in c or "stays failing" in c for c in live.comments)
+    comment = next(c for c in live.comments if "Blocked by voice" in c)
+    assert "stays blocked" in comment and "it really does leak a phone number" in comment
 
 
-def test_a_rejected_finding_is_decided_so_it_is_not_asked_about_again_but_still_counts_as_blocking(live):
+def test_an_allow_by_voice_says_the_risk_was_accepted_on_the_pr_comment(live):
     relay.blocked_pull_requests()
     relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"alert_id": "a1", "approved": False, "reason": "it really does leak a phone number"},
-        {"alert_id": "a2", "approved": False, "reason": "this one leaks an email as well"}])
+        {"alert_id": "a1", "decision": "allow", "reason": "known internal test fixture"}])
+    relay.proceed("pandayv/micro-finance", 2)
+    comment = next(c for c in live.comments if "Allowed by voice" in c)
+    assert "accepted the risk" in comment and "known internal test fixture" in comment
+
+
+def test_a_blocked_finding_is_decided_so_it_is_not_asked_about_again_but_still_counts_as_blocking(live):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"alert_id": "a1", "decision": "block", "reason": "it really does leak a phone number"},
+        {"alert_id": "a2", "decision": "block", "reason": "this one leaks an email as well"}])
     relay.proceed("pandayv/micro-finance", 2)
 
     assert relay.blocked_pull_requests()["pull_requests"] == []              # nothing left to review
@@ -463,12 +477,12 @@ def test_a_rejected_finding_is_decided_so_it_is_not_asked_about_again_but_still_
 # --- staging and batch resolution (docs/voice-resolution-workflow.md) ---
 
 
-def _decision(alert_id, approved=True, reason="it is only test data", **extra):
-    return {"alert_id": alert_id, "approved": approved, "reason": reason, **extra}
+def _decision(alert_id, decision="allow", reason="it is only test data", **extra):
+    return {"alert_id": alert_id, "decision": decision, "reason": reason, **extra}
 
 
 def test_stage_without_a_recent_review_refuses(two_blocking, session_table):
-    # Same rule as single-item approval, checked per finding in a batch.
+    # Same rule as the single-finding allow, checked per finding in a batch.
     result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", position=1)])
     assert result["performed"] == 0
     assert "screen" in result["spoken_response"].lower()
@@ -480,7 +494,7 @@ def test_stage_by_an_id_that_is_not_an_open_finding_refuses_the_whole_batch(two_
 
     result = relay.stage_decisions("pandayv/micro-finance", 2, [
         _decision("a1"),
-        _decision("gone-finding", False, "needs a fix", position=5),
+        _decision("gone-finding", "block", "needs a fix", position=5),
     ])
 
     assert result["performed"] == 0 and result["refusal"] == "not_found"
@@ -489,7 +503,7 @@ def test_stage_by_an_id_that_is_not_an_open_finding_refuses_the_whole_batch(two_
 
 def test_a_finding_decided_in_the_console_since_the_screen_was_drawn_refuses_honestly(live):
     relay.blocked_pull_requests()
-    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "approved"      # someone else decided it
+    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "allowed"      # someone else decided it
 
     result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1"), _decision("a2", position=2)])
 
@@ -517,21 +531,55 @@ def test_a_decision_names_the_finding_not_the_position(live):
 def test_a_decision_without_an_id_is_refused_not_guessed_from_a_position(two_blocking, session_table):
     relay.blocked_pull_requests()
     result = relay.stage_decisions("pandayv/micro-finance", 2,
-                                   [{"position": 1, "approved": True, "reason": "it is only test data"}])
+                                   [{"position": 1, "decision": "allow", "reason": "it is only test data"}])
     assert result["performed"] == 0 and result["refusal"] == "missing_alert_id"
 
 
 def test_the_same_finding_twice_in_one_batch_is_refused(two_blocking, session_table):
     relay.blocked_pull_requests()
-    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1"), _decision("a1", False)])
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1"), _decision("a1", "block")])
     assert result["refusal"] == "duplicate"
 
 
-def test_an_approved_value_that_is_not_a_real_boolean_is_refused(two_blocking, session_table):
+@pytest.mark.parametrize("bad", [True, False, "true", "false", 1, 0, None, "", "Allow", "BLOCK", " allow", "allow ", "approve",
+                                 "reject", "approved", "allowed", "blocked", ["allow"], {"decision": "allow"}])
+def test_a_decision_that_is_not_exactly_allow_or_block_is_refused_and_nothing_is_staged(two_blocking, session_table, bad):
     relay.blocked_pull_requests()
-    for bad in ("false", "true", 1, None):
-        result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", approved=bad)])
-        assert result["refusal"] == "approved_unclear", bad
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", decision=bad)])
+    assert result["performed"] == 0 and result["refusal"] == "decision_unclear"
+    assert "allow or block" in result["spoken_response"] and len(result["spoken_response"]) <= SPEECH_CHAR_BUDGET
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_a_missing_decision_is_refused(two_blocking, session_table):
+    relay.blocked_pull_requests()
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [{"alert_id": "a1", "reason": "it is only test data"}])
+    assert result["refusal"] == "decision_unclear" and pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+@pytest.mark.parametrize("item", [
+    {"alert_id": "a1", "approved": True, "reason": "it is only test data"},
+    {"alert_id": "a1", "approved": False, "reason": "it is only test data"},
+    {"alert_id": "a1", "approved": "false", "reason": "it is only test data"},
+    {"alert_id": "a1", "approved": False, "decision": "allow", "reason": "it is only test data"},      # conflicting: never resolved by guessing
+])
+def test_the_old_approved_argument_is_refused_with_a_clear_sentence(two_blocking, session_table, monkeypatch, item):
+    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
+    relay.blocked_pull_requests()
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [item])
+    assert result["performed"] == 0 and result["refusal"] == "approved_argument_retired"
+    spoken = result["spoken_response"]
+    assert '"allow"' in spoken and '"block"' in spoken and len(spoken) <= SPEECH_CHAR_BUDGET
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_the_unclear_decision_refusal_leaves_an_audit_code_without_the_reason(two_blocking, session_table, caplog):
+    import logging
+    relay.blocked_pull_requests()
+    with caplog.at_level(logging.INFO, logger="ship.relay.audit"):
+        relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", decision="maybe", reason="secret words")])
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "why=decision_unclear" in text and "approved_unclear" not in text and "secret words" not in text
 
 
 def test_stage_missing_reason_refuses(two_blocking, session_table):
@@ -546,13 +594,14 @@ def test_stage_valid_batch_captures_but_does_not_resolve(two_blocking, session_t
     relay.blocked_pull_requests()
 
     result = relay.stage_decisions("pandayv/micro-finance", 2, [
-        _decision("a1", True, "non-issue", position=1),
-        _decision("a2", False, "needs a fix", position=2),
+        _decision("a1", "allow", "non-issue", position=1),
+        _decision("a2", "block", "needs a fix", position=2),
     ])
 
     assert result["staged"] == 2 and result["performed"] == 0
     staged = pending_store.get_pending("pandayv/micro-finance", 2)
-    assert {d["alert_id"]: d["approved"] for d in staged} == {"a1": True, "a2": False}
+    assert {d["alert_id"]: d["decision"] for d in staged} == {"a1": "allow", "a2": "block"}
+    assert all("approved" not in d for d in staged)
 
 
 def test_proceed_with_nothing_staged_says_so(two_blocking, session_table):
@@ -561,10 +610,10 @@ def test_proceed_with_nothing_staged_says_so(two_blocking, session_table):
     assert "nothing" in result["spoken_response"].lower()
 
 
-def _stage_both(approve_first=True):
+def _stage_both(first="allow"):
     relay.blocked_pull_requests()
     return relay.stage_decisions("pandayv/micro-finance", 2, [
-        _decision("a1", approve_first, "non-issue"), _decision("a2", False, "needs a fix")])
+        _decision("a1", first, "non-issue"), _decision("a2", "block", "needs a fix")])
 
 
 def test_proceed_commits_every_staged_decision_and_clears_pending(live):
@@ -581,7 +630,7 @@ def test_proceed_commits_every_staged_decision_and_clears_pending(live):
 def test_proceed_rechecks_staleness_at_commit_time_not_just_at_staging(live, session_table):
     # The review window could lapse between "I've reviewed these" and "proceed".
     relay.blocked_pull_requests()
-    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", "allow", "fine and dandy")])
 
     session_table.rows["a1"]["shown_at"] -= session_store.RECENT_WINDOW_SECONDS + 1
     result = relay.proceed("pandayv/micro-finance", 2)
@@ -593,7 +642,7 @@ def test_proceed_rechecks_staleness_at_commit_time_not_just_at_staging(live, ses
 
 def test_proceed_says_what_it_did_when_some_are_gone_or_already_decided(live):
     _stage_both()
-    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "approved"      # decided in the console
+    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "allowed"      # decided in the console
     result = relay.proceed("pandayv/micro-finance", 2)
 
     assert result["performed"] == 1
@@ -613,10 +662,10 @@ def test_a_race_lost_at_the_database_is_reported_per_item_and_does_not_abort_the
     _stage_both()
     original = live.resolve
 
-    def lose_the_first(alert_id, approved, reason, resolved_by):
+    def lose_the_first(alert_id, decision, reason, resolved_by):
         if alert_id == "a1":
             raise AlertNotFoundOrAlreadyResolved(alert_id)
-        return original(alert_id, approved, reason, resolved_by)
+        return original(alert_id, decision, reason, resolved_by)
 
     monkeypatch.setattr(relay, "resolve_alert", lose_the_first)
     result = relay.proceed("pandayv/micro-finance", 2)
@@ -628,10 +677,10 @@ def test_a_temporary_failure_keeps_the_decision_staged_so_proceed_can_be_repeate
     original = live.resolve
     broken = {"on": True}
 
-    def flaky(alert_id, approved, reason, resolved_by):
+    def flaky(alert_id, decision, reason, resolved_by):
         if broken["on"]:
             raise RuntimeError("throttled")
-        return original(alert_id, approved, reason, resolved_by)
+        return original(alert_id, decision, reason, resolved_by)
 
     monkeypatch.setattr(relay, "resolve_alert", flaky)
     first = relay.proceed("pandayv/micro-finance", 2)
@@ -650,8 +699,8 @@ def test_a_temporary_failure_keeps_the_decision_staged_so_proceed_can_be_repeate
 def test_part_applied_part_failed_keeps_only_the_failed_one_staged(live, monkeypatch):
     _stage_both()
     original = live.resolve
-    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, approved, reason, resolved_by: (
-        (_ for _ in ()).throw(RuntimeError("throttled")) if alert_id == "a2" else original(alert_id, approved, reason, resolved_by)))
+    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, decision, reason, resolved_by: (
+        (_ for _ in ()).throw(RuntimeError("throttled")) if alert_id == "a2" else original(alert_id, decision, reason, resolved_by)))
     result = relay.proceed("pandayv/micro-finance", 2)
 
     assert result["performed"] == 1 and result["pending_remaining"] == 1
@@ -661,7 +710,7 @@ def test_part_applied_part_failed_keeps_only_the_failed_one_staged(live, monkeyp
 
 def test_every_proceed_sentence_fits_the_speech_cap_even_with_a_big_mixed_batch():
     outcomes = ([{"outcome": "applied"}] * 10 + [{"outcome": "skipped_not_seen"}] * 10 + [{"outcome": "already_resolved"}] * 10
-                + [{"outcome": "not_found"}] * 10 + [{"outcome": "error"}] * 10)
+                + [{"outcome": "not_found"}] * 10 + [{"outcome": "unreadable"}] * 10 + [{"outcome": "error"}] * 10)
     assert len(relay._proceed_sentence(outcomes)) <= SPEECH_CHAR_BUDGET
 
 
@@ -695,11 +744,12 @@ def test_a_closed_summary_read_is_not_all_clear(monkeypatch):
     assert "move ahead" not in spoken and "no blocking" not in spoken.lower()
 
 
-def test_rejected_findings_that_still_block_are_never_called_all_clear(monkeypatch):
+def test_blocked_findings_that_still_hold_the_merge_are_never_called_all_clear(monkeypatch):
     summary = ReleaseSummary(held=2, pull_requests=[PullRequestCounts("a/b", 3, 0, 0, "2026-09-24", held=2)])
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: summary)
     spoken = relay.release_status()
-    assert "move ahead" not in spoken and "2 rejected findings still block" in spoken
+    assert "move ahead" not in spoken
+    assert spoken == "Nothing needs a decision, but 2 findings that were blocked still hold the merge until the code is fixed."
 
 
 def test_the_status_offer_names_only_screens_that_exist(one_blocking, monkeypatch):
@@ -977,7 +1027,7 @@ def test_preflight_options_request_succeeds(monkeypatch):
 
 def test_a_screen_that_is_not_connected_does_not_count_as_having_shown_anything(one_blocking, session_table, monkeypatch):
     # The failure this guards: "show it on the fridge" (not connected) used to
-    # record the findings as seen, so "approve it because..." then went through
+    # record the findings as seen, so "allow it because..." then went through
     # although no screen had displayed a thing.
     monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": [], "not_connected": True})
     monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
@@ -1037,7 +1087,7 @@ def test_cancel_pending_drops_the_staged_decisions_without_resolving_anything(tw
 
 def test_a_staged_confirmation_that_has_gone_stale_is_not_acted_on(live, pending_table):
     relay.blocked_pull_requests()
-    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", "allow", "fine and dandy")])
     pending_table.rows["pandayv/micro-finance#2"]["staged_at"] -= pending_store.STALE_AFTER_SECONDS + 1
 
     result = relay.proceed("pandayv/micro-finance", 2)
@@ -1048,7 +1098,7 @@ def test_a_staged_confirmation_that_has_gone_stale_is_not_acted_on(live, pending
 
 def test_a_pending_read_failure_reads_as_nothing_pending_and_resolves_nothing(live, monkeypatch):
     relay.blocked_pull_requests()
-    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", "allow", "fine and dandy")])
     monkeypatch.setattr(pending_store, "_table", lambda: (_ for _ in ()).throw(RuntimeError("down")))
     assert relay.proceed("pandayv/micro-finance", 2)["performed"] == 0 and live.resolve_calls == []
 
@@ -1059,3 +1109,150 @@ def test_a_failed_session_read_fails_closed_for_every_decision_path(live, monkey
     assert relay.request_risk_acceptance("a1", reason="known internal test fixture")["performed"] == 0
     assert relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1")])["performed"] == 0
     assert live.resolve_calls == []
+
+
+# --- the decision is a word, and an unreadable staged row is never applied ---
+
+
+def _stage_old_row(pending_table, **overrides):
+    """A row in ship-pending-dispositions as code that stored the decision another way left it."""
+    import time
+    row = {"alert_id": "a1", "position": 1, "approved": True, "reason": "it is only test data"}
+    row.update(overrides)
+    pending_table.rows["pandayv/micro-finance#2"] = {
+        "pr_key": "pandayv/micro-finance#2", "staged_at": int(time.time()), "expires_at": 0, "decisions": [row]}
+
+
+def test_proceed_never_applies_a_staged_row_that_has_no_decision(live, pending_table):
+    relay.blocked_pull_requests()
+    _stage_old_row(pending_table)
+
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 0 and live.resolve_calls == [] and live.alerts["a1"].status == "frozen"
+    assert result["outcomes"] == [{"alert_id": "a1", "outcome": "unreadable"}]
+    assert result["spoken_response"] == "I couldn't read what was staged, so I applied nothing. Please say your decisions again."
+    assert len(result["spoken_response"]) <= SPEECH_CHAR_BUDGET
+    assert result["pending_remaining"] == 0 and pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+@pytest.mark.parametrize("bad", ["Allow", "approve", True, None, "", "allowed"])
+def test_proceed_never_applies_a_staged_row_whose_decision_is_not_exactly_allow_or_block(live, pending_table, bad):
+    relay.blocked_pull_requests()
+    _stage_old_row(pending_table, decision=bad)
+    result = relay.proceed("pandayv/micro-finance", 2)
+    assert result["performed"] == 0 and live.resolve_calls == []
+    assert [o["outcome"] for o in result["outcomes"]] == ["unreadable"]
+
+
+def test_proceed_with_a_row_that_is_not_even_a_record_does_not_crash(live, pending_table):
+    import time
+    pending_table.rows["pandayv/micro-finance#2"] = {
+        "pr_key": "pandayv/micro-finance#2", "staged_at": int(time.time()), "expires_at": 0, "decisions": ["a1", {"reason": "x"}]}
+    result = relay.proceed("pandayv/micro-finance", 2)
+    assert result["performed"] == 0 and live.resolve_calls == []
+    assert [o["outcome"] for o in result["outcomes"]] == ["unreadable", "unreadable"]
+
+
+def test_a_readable_row_is_still_applied_next_to_an_unreadable_one_and_the_sentence_says_so(live, pending_table):
+    import time
+    relay.blocked_pull_requests()
+    pending_table.rows["pandayv/micro-finance#2"] = {
+        "pr_key": "pandayv/micro-finance#2", "staged_at": int(time.time()), "expires_at": 0,
+        "decisions": [{"alert_id": "a1", "position": 1, "decision": "block", "reason": "it leaks a phone number"},
+                      {"alert_id": "a2", "position": 2, "approved": True, "reason": "it is only test data"}]}
+
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert {o["alert_id"]: o["outcome"] for o in result["outcomes"]} == {"a1": "applied", "a2": "unreadable"}
+    assert live.alerts["a1"].resolution == "blocked" and live.alerts["a2"].status == "frozen"
+    assert result["spoken_response"] == "Applied 1 of 2. 1 couldn't be read, say it again."
+
+
+def test_a_staged_row_without_a_readable_decision_is_not_shown_as_pending_on_a_screen(live, pending_table):
+    _stage_old_row(pending_table)
+    findings = {f["alert_id"]: f for f in relay.blocked_pull_requests()["pull_requests"][0]["findings"]}
+    assert findings["a1"]["pending"] is None
+
+
+def test_a_staged_row_that_is_not_a_record_cannot_break_the_screen_payload(live, pending_table):
+    import time
+    pending_table.rows["pandayv/micro-finance#2"] = {
+        "pr_key": "pandayv/micro-finance#2", "staged_at": int(time.time()), "expires_at": 0, "decisions": ["a1", {"reason": "x"}]}
+    findings = relay.blocked_pull_requests()["pull_requests"][0]["findings"]
+    assert [f["pending"] for f in findings] == [None, None]
+
+
+def test_a_staged_decision_reaches_the_screen_as_decision_and_reason(live):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        _decision("a1", "allow", "known internal test fixture"), _decision("a2", "block", "it leaks a phone number")])
+    findings = {f["alert_id"]: f for f in relay.blocked_pull_requests()["pull_requests"][0]["findings"]}
+    assert findings["a1"]["pending"] == {"decision": "allow", "reason": "known internal test fixture"}
+    assert findings["a2"]["pending"] == {"decision": "block", "reason": "it leaks a phone number"}
+    assert "approved" not in str(findings)
+
+
+def test_the_stored_resolution_is_allowed_or_blocked(live):
+    _stage_both()
+    relay.proceed("pandayv/micro-finance", 2)
+    assert live.alerts["a1"].resolution == "allowed" and live.alerts["a2"].resolution == "blocked"
+
+
+def test_the_one_step_tool_allows_and_says_so(live):
+    relay.finding_detail("a1")
+    result = relay.request_risk_acceptance("a1", reason="known internal test fixture")
+    assert result["spoken_response"] == "Done. Allowed, on the record."
+    assert any("Allowed by voice" in c for c in live.comments)
+
+
+# --- the words Relay speaks and shows ---
+
+
+@pytest.mark.parametrize("held,expected", [
+    (1, "Nothing needs a decision, but 1 finding that was blocked still holds the merge until the code is fixed."),
+    (2, "Nothing needs a decision, but 2 findings that were blocked still hold the merge until the code is fixed."),
+    (12, "Nothing needs a decision, but 12 findings that were blocked still hold the merge until the code is fixed."),
+])
+def test_the_held_count_sentence_uses_the_new_vocabulary_and_fits_the_cap(monkeypatch, held, expected):
+    summary = ReleaseSummary(held=held, pull_requests=[PullRequestCounts("a/b", 3, 0, 0, "2026-09-24", held=held)])
+    monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: summary)
+    spoken = relay.release_status()
+    assert spoken == expected and len(spoken) <= SPEECH_CHAR_BUDGET
+    assert "reject" not in spoken.lower()
+
+
+@pytest.mark.parametrize("held,expected_tail", [(1, "1 blocked finding still holds the merge."),
+                                                (3, "3 blocked findings still hold the merge.")])
+def test_the_held_count_next_to_review_only_findings_reads_naturally(held, expected_tail):
+    grouped = _group([_alert(severity="review", score=6.0)])
+    status = ReleaseStatus([replace(grouped[0], held=held)])
+    spoken = status.to_spoken().to_text()
+    assert spoken == f"1 issue found. {expected_tail}" and len(spoken) <= SPEECH_CHAR_BUDGET
+
+
+def test_every_new_refusal_sentence_fits_the_speech_cap():
+    from src.relay.modality import Spoken as _Spoken
+    for sentence in ("I couldn't tell whether to allow or block that. Which was it?",
+                     'Decisions no longer take "approved". Send decision as "allow" or "block".',
+                     "I couldn't read what was staged, so I applied nothing. Please say your decisions again.",
+                     "Done. Allowed, on the record."):
+        assert len(_Spoken(sentence).to_text()) <= SPEECH_CHAR_BUDGET
+
+
+def test_tool_descriptions_stay_inside_the_900_characters_the_model_is_given():
+    # The skill hands the model description[:900]. Python before 3.13 keeps the docstring's indentation,
+    # which the Lambda runtime (3.12) does, so measure with it put back.
+    import inspect
+    for tool in relay.TOOLS:
+        text = "\n".join(("    " + line if line else line) for line in inspect.getdoc(tool).splitlines())
+        assert len(text) < 900, tool.__name__
+
+
+def test_the_tool_descriptions_teach_allow_and_block_and_not_approve_or_reject():
+    import inspect
+    text = " ".join(inspect.getdoc(t) for t in (relay.stage_decisions, relay.request_risk_acceptance, relay.proceed))
+    text += relay.INSTRUCTIONS
+    assert '"allow"' in text and '"block"' in text
+    for old in ("approved (", "approve ", "reject ", "rejects", "approves"):
+        assert old not in text.lower(), old

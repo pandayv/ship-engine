@@ -13,7 +13,7 @@
   --border: #e2e5ea; --border-strong: #cbd1da;
   --accent: #1c3a5e; --accent-tint: #e8eef5;
   --blocking: #b3392c; --blocking-tint: #fbeae6;
-  --approved: #1e8f5f; --approved-tint: #e5f4ed;
+  --allowed: #1e8f5f; --allowed-tint: #e5f4ed;
   --review: #b8720f; --review-tint: #f8eede;
   --shadow: 0 1px 2px rgba(18,22,28,0.04), 0 4px 12px rgba(18,22,28,0.05);
 }
@@ -23,7 +23,7 @@
     --border: #2a3138; --border-strong: #3a434c;
     --accent: #86aed8; --accent-tint: #1c2a3a;
     --blocking: #e2735c; --blocking-tint: #3a1f18;
-    --approved: #4fc98a; --approved-tint: #163425;
+    --allowed: #4fc98a; --allowed-tint: #163425;
     --review: #e0a052; --review-tint: #3a2a12;
     --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
     color-scheme: dark;
@@ -34,7 +34,7 @@
   --border: #2a3138; --border-strong: #3a434c;
   --accent: #86aed8; --accent-tint: #1c2a3a;
   --blocking: #e2735c; --blocking-tint: #3a1f18;
-  --approved: #4fc98a; --approved-tint: #163425;
+  --allowed: #4fc98a; --allowed-tint: #163425;
   --review: #e0a052; --review-tint: #3a2a12;
   --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 16px rgba(0,0,0,0.3);
   color-scheme: dark;
@@ -58,15 +58,15 @@ h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5re
 
 .alert { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
          padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
-.alert.approved { border-left: 3px solid var(--approved); }
-.alert.rejected { border-left: 3px solid var(--blocking); }
+.alert.allowed { border-left: 3px solid var(--allowed); }
+.alert.blocked { border-left: 3px solid var(--blocking); }
 
 .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700;
        letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 9px 3px 8px; border-radius: 999px;
        margin-bottom: 10px; }
 .tag .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.tag.approved { background: var(--approved-tint); color: var(--approved); }
-.tag.rejected { background: var(--blocking-tint); color: var(--blocking); }
+.tag.allowed { background: var(--allowed-tint); color: var(--allowed); }
+.tag.blocked { background: var(--blocking-tint); color: var(--blocking); }
 
 .meta { color: var(--ink-soft); font-size: 0.82rem; margin-bottom: 10px; display: flex;
         flex-wrap: wrap; gap: 4px 10px; align-items: center; }
@@ -96,7 +96,7 @@ h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5re
     {% if alerts %}
       {% for alert in alerts %}
       <div class="alert {{ alert.resolution }}">
-        <div class="tag {{ alert.resolution }}"><span class="dot"></span>{{ alert.resolution }}</div>
+        <div class="tag {{ alert.resolution }}"><span class="dot"></span>{{ alert.resolution|capitalize }}</div>
         <div class="meta">
           <span>{{ alert.repo }} #{{ alert.pr_number }}</span>
           <span class="file">{{ alert.file }}</span>
@@ -106,7 +106,7 @@ h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5re
         </div>
         <div>{{ alert.plain_english_summary }}</div>
         {% if alert.alert_id in held %}
-        <div class="reason"><strong>Still blocking the merge.</strong> Rejected findings hold the pull request until a commit removes this code.</div>
+        <div class="reason"><strong>Still blocking the merge.</strong> A blocked finding holds the pull request until a commit changes this code.</div>
         {% endif %}
         {% if alert.resolution_reason %}
         <div class="reason">

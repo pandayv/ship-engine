@@ -208,7 +208,7 @@ footer a { color: inherit; }
     <div class="presets">
       <button class="preset" data-q="Alexa, what's up?">"What's up?"</button>
       <button class="preset" data-q="Alexa, can we ship today?">"Can we ship today?"</button>
-      <button class="preset" data-q="Alexa, approve it.">"Approve it." (see why it needs more than that)</button>
+      <button class="preset" data-q="Alexa, allow it.">"Allow it." (see why it needs more than that)</button>
     </div>
 
     <div class="surface-offer" id="surfaceOffer" aria-label="Screens"></div>
@@ -314,10 +314,11 @@ async function ask() {
   addBubble("user", esc(q));
   const thinking = addBubble("thinking", "listening…");
 
-  const wantsApprove = /\bapprove\b|\baccept\b|\bclear\b|\boverride\b/i.test(q);
+  // The words for a decision: allow and block, and the looser ones people still say.
+  const wantsDecision = /\ballow\b|\bblock\b|\bapprove\b|\baccept\b|\breject\b|\bclear\b|\boverride\b/i.test(q);
 
   try {
-    if (wantsApprove) {
+    if (wantsDecision) {
       // Nothing is sent to Relay: a real decision is stage_decisions with finding ids and a reason, then
       // proceed once confirmed, and this page has neither the person's reason nor their confirmation.
       thinking.remove();

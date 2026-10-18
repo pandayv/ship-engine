@@ -49,7 +49,7 @@ def hook(monkeypatch):
     monkeypatch.setattr(main_module, "post_commit_status", lambda repo, pr, state, desc, sha="", trust_head=False:
                         log["statuses"].append((state, desc, sha, trust_head)) or True)
     monkeypatch.setattr(main_module, "sync_pr_check", lambda *a, **k: log["syncs"].append(a) or True)
-    monkeypatch.setattr(main_module, "release_fixed_rejections", lambda repo, pr, keys: log["released"].append(set(keys)) or 0)
+    monkeypatch.setattr(main_module, "release_fixed_blocks", lambda repo, pr, keys: log["released"].append(set(keys)) or 0)
     monkeypatch.setattr(main_module, "_dispatch_fragments",
                         lambda repo, pr, diff, sha: log["dispatched"].append((repo, pr, sha)) or {"action": "accepted"})
     log["diff"] = FLAGGED_DIFF
@@ -73,7 +73,7 @@ def test_a_commit_with_nothing_flagged_replaces_the_pending_status_with_the_verd
     hook["diff"] = CLEAN_DIFF
     assert send(hook).json()["action"] == "pass"
     assert len(hook["syncs"]) == 1 and hook["dispatched"] == []
-    assert hook["released"] == [set()]       # nothing flagged any more: rejected findings may be released
+    assert hook["released"] == [set()]       # nothing flagged any more: blocked findings may be released
 
 
 def test_an_empty_diff_also_ends_in_a_status(hook):

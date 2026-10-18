@@ -72,10 +72,10 @@ def test_flagged_only_finding_stays_green(monkeypatch, posted):
     assert "flagged for review" in posted[0]["body"]["description"]
 
 
-def test_approved_blocking_finding_turns_the_status_green(monkeypatch, posted):
+def test_allowed_blocking_finding_turns_the_status_green(monkeypatch, posted):
     # This is the human decision closing the loop: the same function that
     # turned the check red is what turns it green again.
-    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="approved", fragment_key="k")])
+    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="allowed", fragment_key="k")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
 
     assert posted[0]["body"]["state"] == "success"
@@ -143,38 +143,38 @@ def test_github_failure_is_soft_and_does_not_raise(monkeypatch):
 # --- what a decision means for the commit status ---
 
 
-def test_a_rejected_finding_keeps_the_status_failing(monkeypatch, posted):
-    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="rejected", fragment_key="k")])
+def test_a_blocked_finding_keeps_the_status_failing(monkeypatch, posted):
+    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="blocked", fragment_key="k")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
     assert posted[0]["body"]["state"] == "failure"
-    assert "rejected" in posted[0]["body"]["description"]
+    assert posted[0]["body"]["description"] == "1 finding blocked by a reviewer, fix the code"
 
 
-def test_a_rejected_review_only_finding_also_keeps_the_status_failing(monkeypatch, posted):
-    # Reject says the PR is not good enough, whatever severity Triage gave it.
-    _stub_alerts(monkeypatch, [_alert(severity=SEVERITY_REVIEW, status="resolved", resolution="rejected", fragment_key="k")])
+def test_a_blocked_review_only_finding_also_keeps_the_status_failing(monkeypatch, posted):
+    # Block says the PR is not good enough, whatever severity Triage gave it.
+    _stub_alerts(monkeypatch, [_alert(severity=SEVERITY_REVIEW, status="resolved", resolution="blocked", fragment_key="k")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
     assert posted[0]["body"]["state"] == "failure"
 
 
-def test_a_rejected_finding_whose_code_is_gone_no_longer_blocks(monkeypatch, posted):
-    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="rejected", fragment_key="k", unblocked_at="2026-10-17T00:00:00+00:00")])
+def test_a_blocked_finding_whose_code_is_gone_no_longer_blocks(monkeypatch, posted):
+    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="blocked", fragment_key="k", unblocked_at="2026-10-17T00:00:00+00:00")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
     assert posted[0]["body"]["state"] == "success"
 
 
-def test_a_rejection_recorded_before_fragment_keys_existed_stays_cleared(monkeypatch, posted):
-    # The old rule cleared every resolved finding. Rows from that time have nothing to compare a
+def test_a_block_recorded_before_fragment_keys_existed_stays_cleared(monkeypatch, posted):
+    # The earlier rule cleared every resolved finding. Rows from that time have nothing to compare a
     # later commit against, so they must not start blocking retroactively.
-    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="rejected", fragment_key="")])
+    _stub_alerts(monkeypatch, [_alert(status="resolved", resolution="blocked", fragment_key="")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
     assert posted[0]["body"]["state"] == "success"
 
 
-def test_waiting_and_rejected_findings_are_both_counted(monkeypatch, posted):
-    _stub_alerts(monkeypatch, [_alert("w"), _alert("r", status="resolved", resolution="rejected", fragment_key="k")])
+def test_waiting_and_blocked_findings_are_both_counted(monkeypatch, posted):
+    _stub_alerts(monkeypatch, [_alert("w"), _alert("r", status="resolved", resolution="blocked", fragment_key="k")])
     wb.sync_pr_check("pandayv/micro-finance", 7, "abc123")
-    assert posted[0]["body"]["description"] == "1 finding needs a decision; 1 finding rejected, fix the code"
+    assert posted[0]["body"]["description"] == "1 finding needs a decision; 1 finding blocked by a reviewer, fix the code"
 
 
 def test_derive_commit_status_is_one_function_for_every_caller():
@@ -265,16 +265,32 @@ def test_finding_comment_does_not_repeat_the_summary_in_its_heading():
 
 def test_decision_comment_records_who_decided_and_why():
     body = wb.comment_for_decision(
-        _alert(), accepted=True, reason="Fixture data only, tracked as LOAN-812.", who="Vipul")
-    assert "Risk accepted" in body
+        _alert(), "allow", reason="Fixture data only, tracked as LOAN-812.", who="Vipul")
+    assert body.startswith("### Allowed by Vipul: risk accepted")
     assert "Vipul" in body
     assert "Fixture data only, tracked as LOAN-812." in body
     assert "no longer blocks the merge" in body and "nothing else is blocking" in body
     assert "set to passing" not in body        # other findings may still block
+    assert "Blocked by" not in body and "approve" not in body.lower() and "reject" not in body.lower()
 
 
-def test_rejecting_a_finding_says_the_pr_stays_blocked_until_the_code_is_fixed():
+def test_blocking_a_finding_says_the_pr_stays_blocked_until_the_code_is_fixed():
     body = wb.comment_for_decision(
-        _alert(), accepted=False, reason="Real problem, allowlist landing this sprint.", who="Vipul")
-    assert "Rejected" in body and "code fix" in body
-    assert "stays failing" in body and "merge stays blocked until a commit fixes this code" in body
+        _alert(), "block", reason="Real problem, allowlist landing this sprint.", who="Vipul")
+    assert body.startswith("### Blocked by Vipul: this needs a code fix")
+    assert "Real problem, allowlist landing this sprint." in body
+    assert "stays failing" in body and "merge stays blocked until a commit changes this code" in body
+    assert "Allowed by" not in body and "approve" not in body.lower() and "reject" not in body.lower()
+
+
+@pytest.mark.parametrize("bad", [True, False, None, "", "Allow", "approve", "reject", "approved", "allowed"])
+def test_a_comment_is_never_written_for_something_that_is_not_a_decision(bad):
+    with pytest.raises(ValueError):
+        wb.comment_for_decision(_alert(), bad, reason="whatever", who="Vipul")
+
+
+def test_the_finding_comment_points_at_allow_and_block_in_the_console(monkeypatch):
+    monkeypatch.setattr(wb, "DASHBOARD_URL", "https://ship.example/dashboard")
+    body = wb.comment_for_finding(_alert())
+    assert "allow this (accept the risk) or block it (confirm it is real)" in body
+    assert "[review console](https://ship.example/dashboard)" in body

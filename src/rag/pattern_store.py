@@ -1,15 +1,15 @@
 """
-Learned patterns extracted from the findings reviewers okayed — Detector's
+Learned patterns extracted from the findings reviewers allowed — Detector's
 self-improvement loop.
 
 WHY PATTERNS, NOT EXAMPLES. The first design considered here was few-shot:
-feed Detector the raw text of recent dismissed findings directly. That
-doesn't survive real usage — after a month or two of dismissals there are
+feed Detector the raw text of recently allowed findings directly. That
+doesn't survive real usage — after a month or two of allowed findings there are
 too many raw examples to fit in a prompt, and picking a recent subset is
 arbitrary. Instead, a periodic batch job (scripts/pattern_miner.py, same
 shape as scripts/healing_loop.py: scheduled, off Detector's hot path)
 extracts a small, bounded set of GENERALIZED patterns from accumulated
-dismissals, merging new evidence into existing patterns rather than
+allowed findings, merging new evidence into existing patterns rather than
 appending — the set stays small regardless of how much history exists.
 
 WHY NO HUMAN APPROVAL GATE ON EACH PATTERN. Considered and rejected
@@ -19,7 +19,7 @@ human can confidently judge in isolation, and asking for sign-off on every
 one would be real, recurring toil for no real safety gain. Two guarards
 replace it instead, both automatic:
   - MIN_SUPPORT — a pattern only becomes retrieval-eligible once
-    reinforced by independent dismissals (not one person's one-off call).
+    reinforced by independent allow decisions (not one person's one-off call).
   - Retrieved as CONTEXT, never a rule. Detector's grounded,
     regulation-citation judgment still runs on every fragment regardless
     of what a pattern says — see retrieve_prior_determinations() in
@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 TABLE_NAME = "ship-learned-patterns"
 
-# A pattern seen in only one dismissal is one person's one-off call, not a
+# A pattern seen in only one allowed finding is one person's one-off call, not a
 # durable rule — see module docstring. 3 independent reinforcements is the
 # bar before a pattern is allowed to influence a future judgment.
 MIN_SUPPORT = 3

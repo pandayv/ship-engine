@@ -28,7 +28,7 @@ write and buys two things worth more than the saving:
     self-healing by construction.
 
 WHAT THE SUMMARY COUNTS. Findings waiting for a decision (blocking, review) and
-`held`: rejected findings whose code is still in the PR. A held finding is decided,
+`held`: blocked findings whose code is still in the PR. A held finding is decided,
 so it is not asked about again, but it still blocks the merge, so voice must not say
 "good to move ahead" while any exist.
 
@@ -72,7 +72,7 @@ class PullRequestCounts:
     blocking: int
     review: int
     oldest_finding_at: str
-    held: int = 0       # rejected findings whose code is still in the PR
+    held: int = 0       # blocked findings whose code is still in the PR
 
 
 @dataclass

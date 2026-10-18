@@ -65,13 +65,15 @@ def test_what_the_orchestrator_sends_for_a_decision_is_what_relays_schema_accept
     routing = [{"repo": "r", "pr_number": 1, "findings": [{"position": 1, "alert_id": "x", "blocks_merge": True}]}]
     sent = []
     use = {"toolUse": {"toolUseId": "1", "name": "stage_decisions", "input": {
-        "repo": "r", "pr_number": 1, "decisions": [{"position": 1, "approved": True, "reason": "only test data"}]}}}
-    o.run_turn("approve the first one only test data", {"screen": "tv", "routing": routing}, relay_tool_defs(),
+        "repo": "r", "pr_number": 1, "decisions": [{"position": 1, "decision": "allow", "reason": "only test data"}]}}}
+    o.run_turn("allow the first one only test data", {"screen": "tv", "routing": routing}, relay_tool_defs(),
                lambda name, args: sent.append((name, args)) or {"spoken_response": "ok"},
                lambda *a: {"output": {"message": {"content": [use]}}}, __import__("time").time() + 6)
     name, args = sent[0]
     assert set(args) <= set(real["properties"]) and set(real["required"]) <= set(args)
-    assert set(args["decisions"][0]) == {"alert_id", "position", "approved", "reason"}
+    assert set(args["decisions"][0]) == {"alert_id", "position", "decision", "reason"}
+    assert args["decisions"][0]["decision"] in ("allow", "block")
+    assert "approved" not in str(args)
 
 
 def test_relays_model_facing_descriptions_stay_within_what_the_model_is_given():
@@ -130,7 +132,7 @@ def world(monkeypatch):
     monkeypatch.setattr(relay, "list_gate_alerts", lambda: alerts)
     monkeypatch.setattr(relay, "get_alert", lambda aid: next((a for a in alerts if a.alert_id == aid), None))
     resolved = []
-    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, approved, reason, resolved_by: resolved.append((alert_id, approved)))
+    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, decision, reason, resolved_by: resolved.append((alert_id, decision)))
     monkeypatch.setattr(relay, "refresh_summary", lambda *a, **k: None)
     monkeypatch.setattr(relay, "sync_pr_check", lambda *a, **k: True)
     monkeypatch.setattr(relay, "post_pr_comment", lambda *a, **k: True)
@@ -151,8 +153,8 @@ def world(monkeypatch):
     return alerts, resolved, skill, call_tool
 
 
-def say(text, call_tool, session, positions_and_reasons, approved=True):
-    decisions = [{"position": p, "approved": approved, "reason": r} for p, r in positions_and_reasons]
+def say(text, call_tool, session, positions_and_reasons, decision="allow"):
+    decisions = [{"position": p, "decision": decision, "reason": r} for p, r in positions_and_reasons]
     use = {"toolUse": {"toolUseId": "1", "name": "stage_decisions", "input": {
         "repo": "pandayv/micro-finance", "pr_number": 2, "decisions": decisions}}}
     return o.run_turn(text, session, relay_tool_defs(), call_tool,
@@ -170,14 +172,14 @@ def test_a_finding_that_arrives_after_the_screen_cannot_shift_what_the_second_on
     session["routing"] = skill.seen_routing()      # what the next turn does first
     assert {f["position"]: f["alert_id"] for f in session["routing"][0]["findings"]} == {1: "a1", 2: "a2"}
 
-    reply = say("approve the second one because it is only test data", call_tool, session, [(2, "it is only test data")])
+    reply = say("allow the second one because it is only test data", call_tool, session, [(2, "it is only test data")])
     assert session["pending"] == {"repo": "pandayv/micro-finance", "pr_number": 2}
     staged = pending_store.get_pending("pandayv/micro-finance", 2)
     assert [d["alert_id"] for d in staged] == ["a2"]                       # not a1, which is "second" in the live list
 
     o.run_turn("yes", session, relay_tool_defs(), call_tool, lambda *a: pytest.fail("no model for a yes"),
                __import__("time").time() + 6, connected=["tv"])
-    assert resolved == [("a2", True)]
+    assert resolved == [("a2", "allow")]
 
 
 def test_a_finding_that_arrived_after_the_screen_cannot_be_decided_by_pointing_at_it(world):
@@ -186,7 +188,7 @@ def test_a_finding_that_arrived_after_the_screen_cannot_be_decided_by_pointing_a
     alerts.insert(0, finding("a0", 9.9))
     session = {"screen": "tv", "routing": skill.seen_routing()}
 
-    reply = say("approve the third one because it is only test data", call_tool, session, [(3, "it is only test data")])
+    reply = say("allow the third one because it is only test data", call_tool, session, [(3, "it is only test data")])
 
     assert "number 3" in reply.speech and resolved == [] and "pending" not in session
 
@@ -197,7 +199,7 @@ def test_a_finding_decided_elsewhere_between_the_screen_and_the_sentence_is_refu
     session = {"screen": "tv", "routing": skill.seen_routing()}
     alerts.pop()                                    # a2 was decided in the console after the screen was drawn
 
-    reply = say("approve the second one because it is only test data", call_tool, session, [(2, "it is only test data")])
+    reply = say("allow the second one because it is only test data", call_tool, session, [(2, "it is only test data")])
 
     assert resolved == [] and pending_store.get_pending("pandayv/micro-finance", 2) is None
     assert "second" not in reply.speech and ("no longer" in reply.speech or "finding 2" in reply.speech)
@@ -286,17 +288,60 @@ class TestScreenRendersRelaysPayload:
         html = render(payload)["html"]
         assert html.index("Pull request #6") < html.index("Pull request #5")            # the page puts the blocker first
         pr6 = html[html.index("Pull request #6"):html.index("Pull request #5")]
-        assert pr6.index("Merge blocked") < pr6.index("Flagged")
+        assert pr6.index("Needs a decision") < pr6.index("Flagged")
 
     def test_the_header_counts_blocking_and_flagged(self):
         html = render(relay_payload([make("b1", 6), make("b2", 6, severity="review", score=6.0)]))["html"]
         assert "<b>1</b> blocking &middot; <b>1</b> flagged" in html
 
-    def test_a_staged_decision_shows_on_its_row(self):
-        pending = {("a/one", 1): [{"alert_id": "x1", "approved": False, "reason": "it leaks a phone number"}]}
+    def test_a_staged_block_shows_on_its_row(self):
+        pending = {("a/one", 1): [{"alert_id": "x1", "decision": "block", "reason": "it leaks a phone number"}]}
         html = render(relay_payload([make("x1", 1), make("x2", 1, score=8)], pending=pending))["html"]
-        assert 'Pending: reject &mdash; it leaks a phone number' in html
+        assert 'Pending: block &mdash; it leaks a phone number' in html
         assert html.count("Pending:") == 1
+
+    def test_a_staged_allow_shows_on_its_row(self):
+        pending = {("a/one", 1): [{"alert_id": "x2", "decision": "allow", "reason": "it is only test data"}]}
+        html = render(relay_payload([make("x1", 1), make("x2", 1, score=8)], pending=pending))["html"]
+        assert 'Pending: allow &mdash; it is only test data' in html
+        assert html.count("Pending:") == 1
+
+    def test_the_payload_carries_decision_and_reason_for_a_staged_row(self):
+        pending = {("a/one", 1): [{"alert_id": "x1", "decision": "allow", "reason": "it is only test data"}]}
+        payload = relay_payload([make("x1", 1), make("x2", 1, score=8)], pending=pending)
+        by_id = {f["alert_id"]: f for f in payload["pull_requests"][0]["findings"]}
+        assert by_id["x1"]["pending"] == {"decision": "allow", "reason": "it is only test data"}
+        assert by_id["x2"]["pending"] is None
+
+    @pytest.mark.parametrize("bad", ["approve", "Allow", True, None, "", "approved"])
+    def test_the_page_shows_no_pending_note_for_a_decision_that_is_not_allow_or_block(self, bad):
+        payload = relay_payload([make("x1", 1)])
+        payload["pull_requests"][0]["findings"][0]["pending"] = {"decision": bad, "reason": "whatever"}
+        assert "Pending" not in render(payload)["html"]
+
+    def test_a_pending_note_in_the_old_shape_shows_nothing(self):
+        payload = relay_payload([make("x1", 1)])
+        payload["pull_requests"][0]["findings"][0]["pending"] = {"approved": True, "reason": "whatever"}
+        assert "Pending" not in render(payload)["html"]
+
+    def test_an_open_blocking_finding_reads_needs_a_decision_so_it_is_not_mistaken_for_a_block(self):
+        html = render(relay_payload([make("b1", 1)]))["html"]
+        assert 'class="ship-chip blocking">Needs a decision</span>' in html
+        assert "Merge blocked" not in html and "Flagged" not in html
+
+    def test_a_non_blocking_finding_reads_flagged(self):
+        html = render(relay_payload([make("r1", 1, severity="review", score=6.0)]))["html"]
+        assert 'class="ship-chip review">Flagged</span>' in html
+        assert "Needs a decision" not in html and "Merge blocked" not in html
+
+    def test_the_chip_keeps_the_severity_classes_the_page_styles_depend_on(self):
+        html = render(relay_payload([make("b1", 1), make("r1", 1, severity="review", score=6.0)]))["html"]
+        assert '<tr class="blocking">' in html and '<tr class="review">' in html
+
+    def test_the_hint_teaches_allow(self):
+        html = render(relay_payload([make("x1", 1)]))["html"]
+        assert "allow the first one on pull request 1 because it&rsquo;s test data" in html
+        assert "approve" not in html.lower() and "reject" not in html.lower()
 
     def test_text_from_a_finding_cannot_inject_markup(self):
         nasty = make("x1", 1, summary='<img src=x onerror="alert(1)"> it\'s & "quoted"', file="a'b\"<c>.py")
@@ -312,10 +357,12 @@ class TestScreenRendersRelaysPayload:
         out = render(relay_payload([]))
         assert "Nothing blocked" in out["html"]
 
-    def test_rejected_findings_that_still_block_are_not_called_all_clear(self):
+    def test_blocked_findings_that_still_hold_the_merge_are_not_called_all_clear(self):
         from src.relay.readmodel import PullRequestFindings
         out = render(relay_payload([], held=[PullRequestFindings("a/one", 3, 0, 0, [], held=2)]))
-        assert "Nothing blocked" not in out["html"] and "still block the merge" in out["html"] and "a/one #3 (2)" in out["html"]
+        assert "Nothing blocked" not in out["html"] and "a/one #3 (2)" in out["html"]
+        assert "Findings that were blocked still hold the merge until the code is fixed" in out["html"]
+        assert "reject" not in out["html"].lower()
 
     def test_the_console_link_is_used_only_when_it_is_a_real_web_address(self):
         payload = relay_payload([make("x1", 1)])

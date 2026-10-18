@@ -28,7 +28,7 @@ Each line was checked against the call in the code, after the changes in this br
 
 | Table or resource | Actions | Where |
 |---|---|---|
-| `ship-alerts` | GetItem, Scan, UpdateItem (Relay, webhook/Gate) | `alert_store.get_alert`, `_scan_all` (Scan, with `ConsistentRead`), `resolve_alert`, `release_fixed_rejections` |
+| `ship-alerts` | GetItem, Scan, UpdateItem (Relay, webhook/Gate) | `alert_store.get_alert`, `_scan_all` (Scan, with `ConsistentRead`), `resolve_alert`, `release_fixed_blocks` |
 | `ship-alerts` | + PutItem (fragment processor) | `alert_store.put_alert` creates the row; refresh and delivery steps are UpdateItem |
 | `ship-status` | GetItem, PutItem (Relay) | `status_store.read_summary`, `refresh_summary` (conditional PutItem) |
 | `ship-status` | + UpdateItem (webhook, fragment processor) | `review_ledger.fragment_reported` (UpdateItem `ADD`), `begin_review` (PutItem) |

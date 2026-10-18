@@ -2,8 +2,8 @@
 Staged, not-yet-committed voice resolutions for one PR at a time — see
 docs/voice-resolution-workflow.md for the full design.
 
-A multi-finding voice turn ("first one's a non-issue, second one's an
-actual blocker") doesn't resolve anything immediately. It writes what was
+A multi-finding voice turn ("first one's a non-issue, second one's a
+real problem") doesn't resolve anything immediately. It writes what was
 captured here, pushes it to the screen as pending, and waits for an
 explicit "proceed" before anything in ship-alerts actually changes. This
 is what makes the design safe without a spoken read-back and without an
@@ -63,8 +63,8 @@ def create_table_if_not_exists() -> None:
 
 
 def stage(repo: str, pr_number: int, decisions: list[dict], staged_at: int | None = None) -> None:
-    """decisions: list of {"alert_id": str, "approved": bool, "reason": str,
-    "position": int (display hint)}. Overwrites any previously staged set for this
+    """decisions: list of {"alert_id": str, "decision": "allow" | "block" (see
+    alert_store.DECISIONS), "reason": str, "position": int (display hint)}. Overwrites any previously staged set for this
     PR — there's one pending batch per PR, not an accumulating queue.
     `staged_at` is passed only to re-stage the part of a batch that could not be
     applied, so retrying does not extend how long the original confirmation counts."""

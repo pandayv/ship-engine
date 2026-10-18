@@ -1,10 +1,10 @@
 """
 Tracks when an alert was last shown on a screen — the signal
 request_risk_acceptance needs to tell "reviewed, then confirmed" apart
-from "blind approval," without which voice confirmation would be
+from a blind decision, without which voice confirmation would be
 indistinguishable from a rubber stamp. See src/relay/server.py's module
 docstring for the full design reasoning behind why that distinction, not
-"voice can never approve anything," is the actual rule.
+"voice can never decide anything," is the actual rule.
 
 WHY THIS IS KEYED BY ALERT, NOT BY SESSION — a real correction, not the
 original design. The first version of this module keyed on the MCP
@@ -103,7 +103,7 @@ def recent_view(alert_id: str) -> dict | None:
     """{"shown_at": int, "position": int | None} if this alert was shown within the
     window, else None. Fails closed, same reasoning as repo_store.is_watched()'s
     SECURITY NOTE: a datastore error here must read as "not reviewed," never as
-    "reviewed" — the failure mode that matters is a blind approval slipping
+    "reviewed" — the failure mode that matters is a blind decision slipping
     through, not an extra trip to Gate. The read is strongly consistent: a view
     recorded a moment ago must count."""
     try:

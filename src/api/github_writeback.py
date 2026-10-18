@@ -35,10 +35,10 @@ it red.
 WHAT A DECISION DOES TO THE STATUS. derive_commit_status() is the one place
 that maps stored alerts to a state:
   - a finding waiting for a decision blocks if its severity is blocking
-  - approve: the person accepted the risk, the finding stops blocking
-  - reject: the finding is real, the PR stays blocked (failure) until a later
+  - allow: the person accepted the risk, the finding stops blocking
+  - block: the finding is real, the PR stays blocked (failure) until a later
     commit no longer contains the flagged fragment (alert_store.is_held and
-    release_fixed_rejections)
+    release_fixed_blocks)
 Only the lifecycle statuses (pending while a review runs, error when one could
 not run) are posted by post_commit_status() directly; they carry no verdict.
 
@@ -63,7 +63,8 @@ from dataclasses import dataclass
 
 import requests
 
-from src.storage.alert_store import SEVERITY_BLOCKING, is_held, is_open, list_alerts_for_pr
+from src.storage.alert_store import (DECISION_ALLOW, DECISION_BLOCK, SEVERITY_BLOCKING, is_decision, is_held, is_open,
+                                     list_alerts_for_pr)
 
 log = logging.getLogger(__name__)
 
@@ -160,27 +161,33 @@ def comment_for_finding(alert) -> str:
                   "```python", alert.remediation_patch, "```", "", "</details>"]
     parts += ["", "---", ""]
     if DASHBOARD_URL:
-        parts.append(f"Found by SHIP. A person can accept this risk or confirm it in the "
-                     f"[review console]({DASHBOARD_URL}).")
+        parts.append(f"Found by SHIP. A person can allow this (accept the risk) or block it (confirm it is real) "
+                     f"in the [review console]({DASHBOARD_URL}).")
     else:
         parts.append("Found by SHIP. A person reviews this before it can be resolved.")
     return "\n".join(parts)
 
 
-def comment_for_decision(alert, accepted: bool, reason: str, who: str) -> str:
-    """accepted=True is "approve": the risk is accepted. accepted=False is
-    "reject": the finding is real and the PR stays blocked until the code is fixed.
-    Whether anything ELSE still blocks is the status's business, so the approve
-    wording is conditional ("if nothing else is blocking")."""
-    heading = ("### Risk accepted" if accepted
-               else "### Rejected — this needs a code fix")
-    outcome = ("This finding no longer blocks the merge. SHIP's check passes once nothing else is blocking."
-               if accepted else
-               "SHIP's check stays failing and the merge stays blocked until a commit fixes this code.")
+def comment_for_decision(alert, decision: str, reason: str, who: str) -> str:
+    """decision is DECISION_ALLOW (the risk is accepted) or DECISION_BLOCK (the finding is
+    real and the PR stays blocked until the code is fixed). Anything else raises: a comment
+    must never record a decision nobody made. Whether anything ELSE still blocks is the
+    status's business, so the allow wording is conditional ("once nothing else is blocking")."""
+    if not is_decision(decision):
+        raise ValueError(f"decision must be {DECISION_ALLOW!r} or {DECISION_BLOCK!r}, got {decision!r}")
+    where = f"the finding in `{alert.file}` ({alert.citation}, risk {alert.risk_score})"
+    if decision == DECISION_ALLOW:
+        heading = f"### Allowed by {who}: risk accepted"
+        lead = f"**{who}** reviewed {where} and accepted the risk. It no longer blocks the merge."
+        outcome = "SHIP's check passes once nothing else is blocking."
+    else:
+        heading = f"### Blocked by {who}: this needs a code fix"
+        lead = f"**{who}** reviewed {where} and confirmed it is a real problem."
+        outcome = "SHIP's check stays failing and the merge stays blocked until a commit changes this code."
     return "\n".join([
         heading,
         "",
-        f"**{who}** decided this on the finding in `{alert.file}` ({alert.citation}, risk {alert.risk_score}).",
+        lead,
         "",
         f"> {reason}",
         "",
@@ -214,9 +221,9 @@ def derive_commit_status(alerts) -> CommitStatus:
     decisions), so none of them can drift on what a decision means:
 
       waiting for a decision, blocking severity   -> failure
-      rejected, flagged code still in the PR       -> failure
+      blocked, flagged code still in the PR        -> failure
       waiting for a decision, review severity      -> success (flagged, not blocking)
-      approved (risk accepted), or nothing         -> success
+      allowed (risk accepted), or nothing          -> success
     """
     waiting = [a for a in alerts if is_open(a) and a.severity == SEVERITY_BLOCKING]
     held = [a for a in alerts if is_held(a)]
@@ -227,7 +234,7 @@ def derive_commit_status(alerts) -> CommitStatus:
         if waiting:
             parts.append(f"{_plural(len(waiting))} {'needs' if len(waiting) == 1 else 'need'} a decision")
         if held:
-            parts.append(f"{_plural(len(held))} rejected, fix the code")
+            parts.append(f"{_plural(len(held))} blocked by a reviewer, fix the code")
         return CommitStatus("failure", "; ".join(parts))
     if flagged:
         # Deliberately green: a flagged finding never stopped the merge, so

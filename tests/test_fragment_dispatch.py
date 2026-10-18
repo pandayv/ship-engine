@@ -37,7 +37,7 @@ diff --git a/loans/clean.py b/loans/clean.py
 
 class Lifecycle:
     """Everything the webhook leg does besides queueing: the statuses it posts, the review it
-    records, the rejected findings it releases."""
+    records, the blocked findings it releases."""
 
     def __init__(self):
         self.statuses, self.syncs, self.ledgers, self.released = [], [], [], []
@@ -50,7 +50,7 @@ def lifecycle(monkeypatch):
                         seen.statuses.append((state, desc)) or True)
     monkeypatch.setattr(main_module, "sync_pr_check", lambda *a, **k: seen.syncs.append((a, k)) or True)
     monkeypatch.setattr(main_module, "begin_review", lambda repo, pr, sha, keys: seen.ledgers.append((sha, list(keys))) or True)
-    monkeypatch.setattr(main_module, "release_fixed_rejections",
+    monkeypatch.setattr(main_module, "release_fixed_blocks",
                         lambda repo, pr, keys: seen.released.append(set(keys)) or 0)
     monkeypatch.setattr(main_module, "refresh_summary", lambda *a, **k: None)
     return seen
@@ -108,10 +108,10 @@ def test_no_escalated_fragments_sends_nothing_and_reports_the_pass(monkeypatch, 
     mock_client.send_message.assert_not_called()
     assert result["action"] == "pass"
     assert len(lifecycle.syncs) == 1 and lifecycle.ledgers == []      # the pending status is replaced
-    assert lifecycle.released == [set()]                                 # nothing flagged: rejected findings may be released
+    assert lifecycle.released == [set()]                                 # nothing flagged: blocked findings may be released
 
 
-def test_a_rejected_finding_is_released_only_when_its_code_is_gone(monkeypatch, lifecycle):
+def test_a_blocked_finding_is_released_only_when_its_code_is_gone(monkeypatch, lifecycle):
     monkeypatch.setattr(main_module, "FRAGMENT_QUEUE_URL", "https://sqs.us-west-2.amazonaws.com/123/fragment-queue")
     with patch("boto3.client", return_value=MagicMock()):
         _dispatch_fragments("pandayv/micro-finance", 1, CODE_DIFF, "sha1")
@@ -157,12 +157,12 @@ def test_a_queueing_failure_is_reported_on_the_pull_request_and_surfaces_as_an_e
     assert caught.value.status_code == 502 and lifecycle.statuses[0][0] == "error"
 
 
-def test_a_failure_to_release_rejected_findings_never_fails_the_review(monkeypatch, lifecycle):
+def test_a_failure_to_release_blocked_findings_never_fails_the_review(monkeypatch, lifecycle):
     monkeypatch.setattr(main_module, "FRAGMENT_QUEUE_URL", "https://sqs.us-west-2.amazonaws.com/123/fragment-queue")
 
     def broken(repo, pr, keys):
         raise RuntimeError("table down")
 
-    monkeypatch.setattr(main_module, "release_fixed_rejections", broken)
+    monkeypatch.setattr(main_module, "release_fixed_blocks", broken)
     with patch("boto3.client", return_value=MagicMock()):
         assert _dispatch_fragments("pandayv/micro-finance", 1, CODE_DIFF, "sha1")["action"] == "accepted"

@@ -1,5 +1,5 @@
 """
-The storage rules the gate relies on: what keeps a pull request blocked after a rejection and
+The storage rules the gate relies on: what keeps a pull request blocked after a block decision and
 what releases it, the review ledger that stops a check going green early, the summary that must
 never read an unreadable store as "all clear", and the screen registry that must not list dead
 connections.
@@ -28,43 +28,74 @@ def put(file="a.py", text="frag", pr=3, severity="blocking"):
                                  remediation_patch="p", severity=severity, head_sha="sha")
 
 
-# --- a rejection holds the PR until the code changes ---
+# --- a block holds the PR until the code changes ---
 
 
-def test_a_rejected_finding_is_decided_so_it_is_not_in_the_review_queue_but_still_blocks(alerts):
+def test_a_blocked_finding_is_decided_so_it_is_not_in_the_review_queue_but_still_blocks(alerts):
     a = put()
-    alert_store.resolve_alert(a.alert_id, approved=False, reason="real", resolved_by="x")
+    alert_store.resolve_alert(a.alert_id, "block", reason="real", resolved_by="x")
     assert alert_store.list_active_alerts() == [] or all(x.status == "frozen" for x in alert_store.list_active_alerts())
     gate = alert_store.list_gate_alerts()
     assert [g.alert_id for g in gate] == [a.alert_id] and alert_store.is_held(gate[0]) and not alert_store.is_open(gate[0])
 
 
-def test_an_approved_finding_is_neither_open_nor_held(alerts):
+def test_an_allowed_finding_is_neither_open_nor_held(alerts):
     a = put()
-    alert_store.resolve_alert(a.alert_id, approved=True, reason="fixture", resolved_by="x")
+    alert_store.resolve_alert(a.alert_id, "allow", reason="fixture", resolved_by="x")
     assert alert_store.list_gate_alerts() == []
 
 
 def test_the_gate_list_holds_waiting_findings_and_held_ones_together(alerts):
-    waiting, rejected = put(text="one"), put(text="two")
-    alert_store.resolve_alert(rejected.alert_id, approved=False, reason="real", resolved_by="x")
+    waiting, blocked = put(text="one"), put(text="two")
+    alert_store.resolve_alert(blocked.alert_id, "block", reason="real", resolved_by="x")
     gate = {g.alert_id: g for g in alert_store.list_gate_alerts()}
-    assert alert_store.is_open(gate[waiting.alert_id]) and alert_store.is_held(gate[rejected.alert_id])
+    assert alert_store.is_open(gate[waiting.alert_id]) and alert_store.is_held(gate[blocked.alert_id])
 
 
-def test_a_commit_without_the_flagged_code_releases_the_rejected_finding(alerts):
+def test_a_commit_without_the_flagged_code_releases_the_blocked_finding(alerts):
     a = put()
-    alert_store.resolve_alert(a.alert_id, approved=False, reason="real", resolved_by="x")
-    released = alert_store.release_fixed_rejections("pandayv/micro-finance", 3, present_fragment_keys=set())
+    alert_store.resolve_alert(a.alert_id, "block", reason="real", resolved_by="x")
+    released = alert_store.release_fixed_blocks("pandayv/micro-finance", 3, present_fragment_keys=set())
     assert released == 1 and alert_store.list_gate_alerts() == []
     assert alerts.rows[a.alert_id]["unblocked_at"]
 
 
 def test_a_commit_that_still_contains_the_flagged_code_keeps_it_blocked(alerts):
     a = put()
-    alert_store.resolve_alert(a.alert_id, approved=False, reason="real", resolved_by="x")
-    released = alert_store.release_fixed_rejections("pandayv/micro-finance", 3, {a.fragment_key})
+    alert_store.resolve_alert(a.alert_id, "block", reason="real", resolved_by="x")
+    released = alert_store.release_fixed_blocks("pandayv/micro-finance", 3, {a.fragment_key})
     assert released == 0 and len(alert_store.list_gate_alerts()) == 1
+
+
+def test_a_decision_is_stored_as_allowed_or_blocked_with_who_and_why(alerts):
+    a, b = put(text="one"), put(text="two")
+    alert_store.resolve_alert(a.alert_id, alert_store.DECISION_ALLOW, reason="fixture", resolved_by="the SHIP reviewer")
+    alert_store.resolve_alert(b.alert_id, alert_store.DECISION_BLOCK, reason="real", resolved_by="voice")
+    rows = alerts.rows
+    assert (rows[a.alert_id]["status"], rows[a.alert_id]["resolution"]) == ("resolved", "allowed")
+    assert (rows[b.alert_id]["status"], rows[b.alert_id]["resolution"]) == ("resolved", "blocked")
+    assert rows[b.alert_id]["resolution_reason"] == "real" and rows[b.alert_id]["resolved_by"] == "voice"
+    assert (alert_store.RESOLUTION_ALLOWED, alert_store.RESOLUTION_BLOCKED) == ("allowed", "blocked")
+
+
+@pytest.mark.parametrize("bad", [True, False, None, "", "Allow", "BLOCK", " allow", "approve", "reject", "approved", "allowed", 1])
+def test_resolve_alert_refuses_anything_that_is_not_allow_or_block_and_writes_nothing(alerts, bad):
+    a = put()
+    with pytest.raises(ValueError):
+        alert_store.resolve_alert(a.alert_id, bad, reason="whatever", resolved_by="x")
+    assert alerts.rows[a.alert_id]["status"] == "frozen" and not alerts.rows[a.alert_id].get("resolution")
+
+
+def test_the_old_approved_keyword_is_no_longer_accepted(alerts):
+    a = put()
+    with pytest.raises(TypeError):
+        alert_store.resolve_alert(a.alert_id, approved=True, reason="fixture", resolved_by="x")
+
+
+def test_is_decision_is_exactly_the_two_words():
+    assert alert_store.DECISIONS == ("allow", "block")
+    assert alert_store.is_decision("allow") and alert_store.is_decision("block")
+    assert not any(alert_store.is_decision(v) for v in (True, None, "Allow", "approve", "allowed", ""))
 
 
 def test_changed_code_gets_a_new_key_and_a_new_finding(alerts):
@@ -76,15 +107,15 @@ def test_changed_code_gets_a_new_key_and_a_new_finding(alerts):
 def test_releasing_one_pr_never_touches_another(alerts):
     a, other = put(pr=3), put(pr=4)
     for x in (a, other):
-        alert_store.resolve_alert(x.alert_id, approved=False, reason="real", resolved_by="x")
-    alert_store.release_fixed_rejections("pandayv/micro-finance", 3, set())
+        alert_store.resolve_alert(x.alert_id, "block", reason="real", resolved_by="x")
+    alert_store.release_fixed_blocks("pandayv/micro-finance", 3, set())
     assert [g.alert_id for g in alert_store.list_gate_alerts()] == [other.alert_id]
 
 
-def test_a_finding_rejected_before_fragment_keys_existed_is_not_held(alerts):
+def test_a_finding_blocked_before_fragment_keys_existed_is_not_held(alerts):
     a = put()
     row = alerts.rows[a.alert_id]
-    row.update(status="resolved", resolution="rejected")
+    row.update(status="resolved", resolution="blocked")
     row.pop("fragment_key")
     assert alert_store.list_gate_alerts() == []
 
@@ -176,8 +207,8 @@ def test_a_stored_zero_is_genuinely_zero(ledger, alerts):
 
 
 def test_the_summary_counts_held_findings_separately_from_ones_to_decide(ledger, alerts):
-    waiting, rejected = put(text="one"), put(text="two")
-    alert_store.resolve_alert(rejected.alert_id, approved=False, reason="real", resolved_by="x")
+    waiting, blocked = put(text="one"), put(text="two")
+    alert_store.resolve_alert(blocked.alert_id, "block", reason="real", resolved_by="x")
     summary = status_store.refresh_summary(alert_store.list_gate_alerts())
     assert (summary.blocking, summary.held) == (1, 1) and summary.pull_requests[0].held == 1
     assert status_store.read_summary().held == 1

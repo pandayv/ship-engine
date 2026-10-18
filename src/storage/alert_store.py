@@ -10,22 +10,22 @@ decisions during a hackathon sprint):
   - Attributes: repo, pr_number, file, taxonomy_id, risk_score,
     plain_english_summary, citation, remediation_patch, status
     ("frozen" | "resolved"), severity ("blocking" | "review"), resolution
-    ("approved" | "rejected" | None), created_at, resolved_at (ISO 8601
+    ("allowed" | "blocked" | None), created_at, resolved_at (ISO 8601
     strings), plus the bookkeeping attributes described below.
 
 What a decision means for the pull request (one rule, used by every reader):
-  - approved  the person accepted the risk. The finding stops blocking.
-  - rejected  the finding is real. The PR stays blocked (commit status
-              failure) until a later commit no longer contains the flagged
-              fragment. `fragment_key` identifies the fragment independent of
-              the detector verdict; the webhook calls release_fixed_rejections()
-              with the keys still present in the PR, and any rejected finding
-              whose fragment is gone gets `unblocked_at`. A rejected row written
-              before `fragment_key` existed has nothing to compare against, so it
-              is NOT held (it was cleared by the old rule and stays cleared).
-  A rejected finding is decided, so it never reappears as something to review:
+  - allow  the person accepted the risk. The finding stops blocking.
+  - block  the finding is real. The PR stays blocked (commit status
+           failure) until a later commit no longer contains the flagged
+           fragment. `fragment_key` identifies the fragment independent of
+           the detector verdict; the webhook calls release_fixed_blocks()
+           with the keys still present in the PR, and any blocked finding
+           whose fragment is gone gets `unblocked_at`. A blocked row written
+           before `fragment_key` existed has nothing to compare against, so it
+           is NOT held (it was cleared by the earlier rule and stays cleared).
+  A blocked finding is decided, so it never reappears as something to review:
   list_active_alerts() (what a person still has to decide) returns only frozen
-  rows, while list_gate_alerts() also returns the rejected rows still holding a
+  rows, while list_gate_alerts() also returns the blocked rows still holding a
   merge, for the status and the summary.
 
 Delivery bookkeeping: `commented_at` / `notified_at` record that the PR comment
@@ -54,6 +54,24 @@ TABLE_NAME = "ship-alerts"
 
 SEVERITY_BLOCKING = "blocking"  # Triage froze the build; merge should not proceed
 SEVERITY_REVIEW = "review"      # flagged for a human, but the build was not stopped
+
+# The two decisions a person can make about a finding. DECISION_* is the word the tools,
+# the API and the screens use; RESOLUTION_* is what is stored on the row once it is decided.
+# Every caller imports these rather than spelling the strings, and a decision is always
+# one of the two words, never a boolean (see is_decision()).
+DECISION_ALLOW = "allow"    # accept the risk: the finding stops blocking
+DECISION_BLOCK = "block"    # confirm the finding is real: the PR stays blocked until the code changes
+DECISIONS = (DECISION_ALLOW, DECISION_BLOCK)
+RESOLUTION_ALLOWED = "allowed"
+RESOLUTION_BLOCKED = "blocked"
+_RESOLUTION_FOR = {DECISION_ALLOW: RESOLUTION_ALLOWED, DECISION_BLOCK: RESOLUTION_BLOCKED}
+
+
+def is_decision(value) -> bool:
+    """True only for exactly "allow" or "block". Nothing is coerced: a boolean, a
+    different case, a synonym or surrounding whitespace is not a decision, because
+    guessing what someone meant is how a block turns into an allow."""
+    return isinstance(value, str) and value in DECISIONS
 
 # Groups the six detectors into the four themes "Last line of defense" in
 # the README names: a person's data leaving unseen, a decision landing
@@ -97,7 +115,7 @@ class Alert:
     remediation_patch: str
     status: str  # "frozen" | "resolved"
     created_at: str
-    resolution: str | None = None  # "approved" | "rejected"
+    resolution: str | None = None  # RESOLUTION_ALLOWED | RESOLUTION_BLOCKED
     resolved_at: str | None = None
     # The dispositions history needs these two to mean anything — before
     # this, the reason a human gave lived ONLY in the PR comment
@@ -122,8 +140,8 @@ class Alert:
     # detector's verdict, so a later commit can tell "this fragment is still
     # here" from "it was fixed". Empty for rows written before it existed.
     fragment_key: str = ""
-    # When a rejected finding stopped holding the merge because the commit no
-    # longer contains its fragment (release_fixed_rejections()).
+    # When a blocked finding stopped holding the merge because the commit no
+    # longer contains its fragment (release_fixed_blocks()).
     unblocked_at: str | None = None
     # Delivery bookkeeping, see claim_step(). The *_claimed_at values are epoch
     # seconds of a lease; 0 means unclaimed.
@@ -393,10 +411,10 @@ def is_open(alert: Alert) -> bool:
 
 
 def is_held(alert: Alert) -> bool:
-    """Decided "reject" and the flagged code is still in the PR: the merge stays
-    blocked until a commit removes it (see release_fixed_rejections). Not something
+    """Decided "block" and the flagged code is still in the PR: the merge stays
+    blocked until a commit removes it (see release_fixed_blocks). Not something
     left to review: the person already decided."""
-    return (alert.status == "resolved" and alert.resolution == "rejected"
+    return (alert.status == "resolved" and alert.resolution == RESOLUTION_BLOCKED
             and bool(alert.fragment_key) and not alert.unblocked_at)
 
 
@@ -412,13 +430,13 @@ def list_active_alerts() -> list[Alert]:
 
 def list_gate_alerts() -> list[Alert]:
     """Everything that can block a merge right now, in one scan: findings waiting
-    for a decision plus rejected findings whose code is still in the PR. Split them
+    for a decision plus blocked findings whose code is still in the PR. Split them
     with is_open() / is_held()."""
     items = _scan_all(
-        FilterExpression="#s = :frozen OR (#s = :resolved AND #res = :rejected AND attribute_exists(#fk) "
+        FilterExpression="#s = :frozen OR (#s = :resolved AND #res = :blocked AND attribute_exists(#fk) "
                          "AND attribute_not_exists(#ub))",
         ExpressionAttributeNames={"#s": "status", "#res": "resolution", "#fk": "fragment_key", "#ub": "unblocked_at"},
-        ExpressionAttributeValues={":frozen": "frozen", ":resolved": "resolved", ":rejected": "rejected"},
+        ExpressionAttributeValues={":frozen": "frozen", ":resolved": "resolved", ":blocked": RESOLUTION_BLOCKED},
     )
     return [a for a in (_row_to_alert(i) for i in items) if is_open(a) or is_held(a)]
 
@@ -470,11 +488,15 @@ class AlertNotFoundOrAlreadyResolved(Exception):
     update_item upserts by default with no existence check, so a bogus or
     stale alert_id used to silently create a malformed ghost row instead of
     404ing, and an already-resolved alert could be silently re-resolved
-    (overwriting a prior rejection with an approval, or vice versa) with no
+    (overwriting a prior block with an allow, or vice versa) with no
     conflict detection and no record the first decision ever happened."""
 
 
-def resolve_alert(alert_id: str, approved: bool, reason: str = "", resolved_by: str = "") -> None:
+def resolve_alert(alert_id: str, decision: str, reason: str = "", resolved_by: str = "") -> None:
+    """Records a person's decision (DECISION_ALLOW or DECISION_BLOCK) on a finding that is
+    still frozen. Anything else raises ValueError before the table is touched."""
+    if not is_decision(decision):
+        raise ValueError(f"decision must be {DECISION_ALLOW!r} or {DECISION_BLOCK!r}, got {decision!r}")
     try:
         _table().update_item(
             Key={"alert_id": alert_id},
@@ -486,7 +508,7 @@ def resolve_alert(alert_id: str, approved: bool, reason: str = "", resolved_by: 
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":status": "resolved",
-                ":resolution": "approved" if approved else "rejected",
+                ":resolution": _RESOLUTION_FOR[decision],
                 ":resolved_at": datetime.now(timezone.utc).isoformat(),
                 ":reason": reason,
                 ":resolved_by": resolved_by,
@@ -501,8 +523,8 @@ def resolve_alert(alert_id: str, approved: bool, reason: str = "", resolved_by: 
         raise
 
 
-def release_fixed_rejections(repo: str, pr_number: int, present_fragment_keys: set[str]) -> int:
-    """A rejected finding holds the merge until the code changes. Called when a
+def release_fixed_blocks(repo: str, pr_number: int, present_fragment_keys: set[str]) -> int:
+    """A blocked finding holds the merge until the code changes. Called when a
     commit is processed with the fragment keys the PR still contains: every
     held finding for this PR whose fragment is no longer among them stops
     blocking. Returns how many were released.
@@ -520,9 +542,9 @@ def release_fixed_rejections(repo: str, pr_number: int, present_fragment_keys: s
             _table().update_item(
                 Key={"alert_id": alert.alert_id},
                 UpdateExpression="SET unblocked_at = :now",
-                ConditionExpression="#res = :rejected AND attribute_not_exists(unblocked_at)",
+                ConditionExpression="#res = :blocked AND attribute_not_exists(unblocked_at)",
                 ExpressionAttributeNames={"#res": "resolution"},
-                ExpressionAttributeValues={":now": datetime.now(timezone.utc).isoformat(), ":rejected": "rejected"},
+                ExpressionAttributeValues={":now": datetime.now(timezone.utc).isoformat(), ":blocked": RESOLUTION_BLOCKED},
             )
             released += 1
         except Exception as e:
@@ -597,5 +619,5 @@ if __name__ == "__main__":
     )
     print("Wrote alert:", alert)
     print("Active alerts:", list_active_alerts())
-    resolve_alert(alert.alert_id, approved=True)
+    resolve_alert(alert.alert_id, DECISION_ALLOW)
     print("Resolved. Active alerts now:", list_active_alerts())

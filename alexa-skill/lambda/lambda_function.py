@@ -63,8 +63,8 @@ REPROMPT = object()
 FREE_TEXT_INTENTS = {
     "AskIntent": "",
     "ShowFreeIntent": "show ",
-    "ApproveIntent": "approve ",
-    "RejectIntent": "reject ",
+    "AllowIntent": "allow ",
+    "BlockIntent": "block ",
     "MarkIntent": "mark ",
     "WhatIntent": "what is ",
 }
@@ -212,7 +212,7 @@ def next_step(session):
     names a screen that is not set up."""
     session = session or {}
     if session.get("routing"):
-        return "Say approve or reject, with the number and a reason."
+        return "Say allow or block, with the number and a reason."
     screens = session.get("screens")
     if screens:
         return f"You can ask what's up, or say show it on the {' or '.join(screens[:2])}."
@@ -363,7 +363,7 @@ def show_reply(slots, session):
     sentence = result.get("spoken_response", "Okay.")
     orchestrator.remember(session, f"show it on the {screen}", sentence)
     if result.get("delivered"):
-        sentence += " Say approve or reject, with the number and a reason."
+        sentence += " Say allow or block, with the number and a reason."
     return speak(sentence, reprompt=REPROMPT, session=session)
 
 
@@ -430,7 +430,8 @@ def on_intent(request, session):
         if spoken:
             # Alexa gives us only the slot. For the verb intents the verb was the
             # carrier phrase, so put it back or "reject the first one" would
-            # reach the model as "the first one".
+            # reach the model as "the first one". The canonical verb is restored, so
+            # "approve" and "dismiss" reach the model as "allow", and "reject" as "block".
             return free_text_reply(f"{FREE_TEXT_INTENTS[name]}{spoken}", session)
         return speak("What would you like to do?", reprompt=REPROMPT, session=session)
     if name == "AlertsIntent":
@@ -442,7 +443,7 @@ def on_intent(request, session):
     if name == "AMAZON.HelpIntent":
         return speak(
             "I tell you whether anything is blocked, and I put the detail on a screen. "
-            "You can also say what you want in your own words, like approve the first one because it's a false positive. "
+            "You can also say what you want in your own words, like allow the first one because it's a false positive. "
             "Say turn on alerts to be told when something is found.",
             reprompt=REPROMPT, session=session,
         )

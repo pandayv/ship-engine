@@ -150,10 +150,9 @@ def view_dashboard(request: Request, token: str | None = Query(default=None)):
     return resp
 
 
-def _resolve(alert_id: str, request: Request, token: str | None, approved: bool, reason: str) -> RedirectResponse:
-    # finding #37: approve()/reject() used to be a near-duplicate pair
-    # differing only in this boolean — factored out so the write-back to
-    # GitHub below only needed writing once, not twice.
+def _resolve(alert_id: str, request: Request, token: str | None, decision: str, reason: str) -> RedirectResponse:
+    # finding #37: allow() and block() are a pair differing only in the decision,
+    # so the write-back to GitHub below is written once, not twice.
     if not _authenticated(request, token):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
@@ -168,7 +167,7 @@ def _resolve(alert_id: str, request: Request, token: str | None, approved: bool,
         raise HTTPException(status_code=404, detail=f"alert_id {alert_id!r} not found")
 
     try:
-        alert_store.resolve_alert(alert_id, approved=approved, reason=reason, resolved_by=_reviewer_name())
+        alert_store.resolve_alert(alert_id, decision, reason=reason, resolved_by=_reviewer_name())
     except alert_store.AlertNotFoundOrAlreadyResolved as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
@@ -178,12 +177,12 @@ def _resolve(alert_id: str, request: Request, token: str | None, approved: bool,
     # converges on the next sync rather than the decision being lost.
     post_pr_comment(
         alert.repo, alert.pr_number,
-        comment_for_decision(alert, accepted=approved, reason=reason, who=_reviewer_name()),
+        comment_for_decision(alert, decision, reason=reason, who=_reviewer_name()),
     )
     sync_pr_check(alert.repo, alert.pr_number, alert.head_sha)
     # A decided finding changes what Relay should say next time it is
-    # asked (an approval stops blocking; a rejection stops being a question but
-    # still holds the merge), so the summary is refreshed here too.
+    # asked (an allow stops blocking; a block stops being a question but still
+    # holds the merge), so the summary is refreshed here too.
     refresh_summary()
 
     resp = RedirectResponse(url="/dashboard", status_code=303)
@@ -191,14 +190,14 @@ def _resolve(alert_id: str, request: Request, token: str | None, approved: bool,
     return resp
 
 
-@router.post("/dashboard/{alert_id}/approve")
-def approve(alert_id: str, request: Request, token: str | None = Query(default=None), reason: str = Form(default="")):
-    return _resolve(alert_id, request, token, approved=True, reason=reason)
+@router.post("/dashboard/{alert_id}/allow")
+def allow(alert_id: str, request: Request, token: str | None = Query(default=None), reason: str = Form(default="")):
+    return _resolve(alert_id, request, token, alert_store.DECISION_ALLOW, reason=reason)
 
 
-@router.post("/dashboard/{alert_id}/reject")
-def reject(alert_id: str, request: Request, token: str | None = Query(default=None), reason: str = Form(default="")):
-    return _resolve(alert_id, request, token, approved=False, reason=reason)
+@router.post("/dashboard/{alert_id}/block")
+def block(alert_id: str, request: Request, token: str | None = Query(default=None), reason: str = Form(default="")):
+    return _resolve(alert_id, request, token, alert_store.DECISION_BLOCK, reason=reason)
 
 
 @router.get("/dashboard/history", response_class=HTMLResponse)
@@ -211,7 +210,7 @@ def view_history(request: Request, token: str | None = Query(default=None)):
     if not _authenticated(request, token):
         return RedirectResponse(url="/dashboard/login?next=/dashboard/history", status_code=303)
     alerts = alert_store.list_resolved_alerts()
-    # A rejected finding keeps its pull request blocked until the code changes; say so on
+    # A blocked finding keeps its pull request blocked until the code changes; say so on
     # the row instead of leaving it to read like a closed item.
     held = {a.alert_id for a in alerts if alert_store.is_held(a)}
     resp = templates.TemplateResponse(request, "gate_history.html", {"alerts": alerts, "held": held})
