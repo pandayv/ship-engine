@@ -27,8 +27,9 @@ class _FakeTable:
         if self.raises:
             raise self.raises
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kw):
         self._boom()
+        self.consistent = kw.get("ConsistentRead")
         row = self.rows.get(Key["alert_id"])
         return {"Item": row} if row else {}
 
@@ -87,3 +88,22 @@ def test_was_shown_recently_fails_closed_on_a_datastore_error(monkeypatch):
 def test_mark_shown_never_raises_even_if_the_datastore_is_down(monkeypatch):
     monkeypatch.setattr(session_store, "_table", lambda: _FakeTable(raises=RuntimeError("dynamodb down")))
     session_store.mark_shown("a1")  # must not raise
+
+
+def test_the_number_a_finding_had_on_screen_is_kept_with_it(table):
+    session_store.mark_shown("a1", position=3)
+    session_store.mark_shown("a2")
+    assert session_store.recent_view("a1")["position"] == 3
+    assert session_store.recent_view("a2")["position"] is None
+    assert session_store.recent_view("never") is None
+
+
+def test_the_check_reads_consistently_so_a_view_recorded_a_moment_ago_counts(table):
+    session_store.mark_shown("a1")
+    session_store.was_shown_recently("a1")
+    assert table.consistent is True
+
+
+def test_rows_carry_an_expiry_for_a_future_ttl(table):
+    session_store.mark_shown("a1")
+    assert table.rows["a1"]["expires_at"] > table.rows["a1"]["shown_at"]

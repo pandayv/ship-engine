@@ -103,12 +103,21 @@
 
   // Returns { text, payload }. A dict-returning tool arrives as JSON text,
   // so payload is the parsed object; a plain-string tool leaves payload as text.
+  // Throws (with toolError set) when the tool itself failed.
   ShipMcpClient.prototype.callTool = async function (name, args) {
     await this.connect();
     if (this.tools.indexOf(name) === -1) throw new Error("Relay does not list a tool named " + name);
     var result = await this._request("tools/call", { name: name, arguments: args || {} });
     var first = result && result.content && result.content[0];
     var text = first && first.text;
+    if (result && result.isError) {
+      // A tool that threw comes back as text like "Error executing tool ...". That is an exception
+      // message for the logs, not something to show a person; keep it on the error, out of the message.
+      var failure = new Error("Relay could not do that just now");
+      failure.toolError = true;
+      failure.detail = text;
+      throw failure;
+    }
     var payload;
     try { payload = JSON.parse(text); } catch (e) { payload = text; }
     return { text: text, payload: payload };

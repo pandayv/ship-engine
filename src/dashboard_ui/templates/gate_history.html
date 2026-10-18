@@ -105,6 +105,9 @@ h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.5re
           <span class="citation">{{ alert.citation }}</span>
         </div>
         <div>{{ alert.plain_english_summary }}</div>
+        {% if alert.alert_id in held %}
+        <div class="reason"><strong>Still blocking the merge.</strong> Rejected findings hold the pull request until a commit removes this code.</div>
+        {% endif %}
         {% if alert.resolution_reason %}
         <div class="reason">
           {{ alert.resolution_reason }}

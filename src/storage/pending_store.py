@@ -62,13 +62,17 @@ def create_table_if_not_exists() -> None:
     client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
 
 
-def stage(repo: str, pr_number: int, decisions: list[dict]) -> None:
-    """decisions: list of {"position": int, "alert_id": str, "approved":
-    bool, "reason": str}. Overwrites any previously staged set for this
-    PR — there's one pending batch per PR, not an accumulating queue."""
+def stage(repo: str, pr_number: int, decisions: list[dict], staged_at: int | None = None) -> None:
+    """decisions: list of {"alert_id": str, "approved": bool, "reason": str,
+    "position": int (display hint)}. Overwrites any previously staged set for this
+    PR — there's one pending batch per PR, not an accumulating queue.
+    `staged_at` is passed only to re-stage the part of a batch that could not be
+    applied, so retrying does not extend how long the original confirmation counts."""
+    staged_at = int(time.time()) if staged_at is None else int(staged_at)
     _table().put_item(Item={
         "pr_key": _key(repo, pr_number),
-        "staged_at": int(time.time()),
+        "staged_at": staged_at,
+        "expires_at": staged_at + 3600,     # for a future DynamoDB TTL; STALE_AFTER_SECONDS is what is enforced
         "decisions": decisions,
     })
 
@@ -80,15 +84,21 @@ def get_pending(repo: str, pr_number: int) -> list[dict] | None:
     reasoning as session_store.was_shown_recently(): a datastore error
     must read as "nothing pending," never silently resolve something
     that was never actually confirmed."""
+    got = get_pending_with_age(repo, pr_number)
+    return got[0] if got else None
+
+
+def get_pending_with_age(repo: str, pr_number: int) -> tuple[list[dict], int] | None:
+    """(decisions, staged_at), or None under the same conditions as get_pending()."""
     try:
-        item = _table().get_item(Key={"pr_key": _key(repo, pr_number)}).get("Item")
+        item = _table().get_item(Key={"pr_key": _key(repo, pr_number)}, ConsistentRead=True).get("Item")
         if not item:
             return None
         if (int(time.time()) - int(item["staged_at"])) > STALE_AFTER_SECONDS:
             return None
-        return item["decisions"]
+        return item["decisions"], int(item["staged_at"])
     except Exception:
-        log.warning("could not read pending disposition for %s#%s", repo, pr_number)
+        log.warning("could not read pending disposition for %s#%s", repo, pr_number, exc_info=True)
         return None
 
 
@@ -99,4 +109,4 @@ def clear_pending(repo: str, pr_number: int) -> None:
     try:
         _table().delete_item(Key={"pr_key": _key(repo, pr_number)})
     except Exception:
-        log.warning("could not clear pending disposition for %s#%s", repo, pr_number)
+        log.warning("could not clear pending disposition for %s#%s", repo, pr_number, exc_info=True)

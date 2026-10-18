@@ -10,7 +10,17 @@
 // two that can disagree.
 
 function shipEsc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// A link target is used only if it is an absolute http(s) URL; anything else (a javascript: URL,
+// a relative path, garbage) becomes "#". The result is escaped for use inside an attribute.
+function shipSafeUrl(u) {
+  try {
+    const url = new URL(String(u));
+    if (url.protocol === "http:" || url.protocol === "https:") return shipEsc(url.href);
+  } catch (e) { /* not a URL */ }
+  return "#";
 }
 
 // The table styles travel with the renderer, so a page that uses it needs no extra CSS.
@@ -75,8 +85,17 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
   opts = opts || {};
   if (barEl) barEl.textContent = label;
 
+  const held = payload && Array.isArray(payload.held) ? payload.held : [];
+  const heldNote = held.length
+    ? '<p class="ship-hint">Rejected findings still block the merge until the code is fixed: ' +
+      held.map(h => shipEsc(h.repo) + " #" + shipEsc(h.pr_number) + " (" + shipEsc(h.count) + ")").join(", ") + ".</p>"
+    : "";
+
   if (!payload || !payload.pull_requests || !payload.pull_requests.length) {
-    bodyEl.innerHTML = '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
+    // Nothing is waiting for a decision. That is only "all clear" if no rejected finding still holds a merge.
+    bodyEl.innerHTML = held.length
+      ? '<div class="empty-state">Nothing is waiting for a decision.</div>' + heldNote
+      : '<div class="empty-state">Nothing blocked. Everything reviewed clean.</div>';
     return;
   }
   shipInstallStyles();
@@ -115,7 +134,7 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
   }
   const first = pulls[0];
   html += '<p class="ship-hint">Numbers restart in each pull request. Try: &ldquo;approve the first one on pull request ' +
-    shipEsc(first.pr_number) + " because it&rsquo;s test data.&rdquo;</p>";
+    shipEsc(first.pr_number) + " because it&rsquo;s test data.&rdquo;</p>" + heldNote;
   bodyEl.innerHTML = html;
 
   if (opts.consoleUrl !== undefined) {
@@ -124,7 +143,7 @@ function shipRenderFindings(barEl, bodyEl, label, payload, opts) {
     decisionBox.innerHTML =
       '<div class="decision-head">Making the call</div>' +
       '<div class="decision-body">Every decision needs a reason on the record. Say it by voice once you have seen the findings here, or type it in Gate.</div>' +
-      '<a class="console-link" href="' + (opts.consoleUrl || "#") + '" target="_blank" rel="noopener">Open the review console &rarr;</a>';
+      '<a class="console-link" href="' + shipSafeUrl(opts.consoleUrl) + '" target="_blank" rel="noopener">Open the review console &rarr;</a>';
     bodyEl.appendChild(decisionBox);
   }
 }

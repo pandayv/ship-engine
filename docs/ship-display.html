@@ -51,6 +51,9 @@ body {
 /* ---- ambient top bar: always visible, tells you this thing is alive ---- */
 .topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-stroke); flex-shrink: 0; transition: background .3s; }
+.dot.error { background: var(--review); box-shadow: 0 0 0 3px var(--review-tint); }
+.state-label { font-family: "JetBrains Mono", monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); }
+.name-error { color: var(--blocked); font-size: 13px; margin: 0 0 10px; min-height: 1em; }
 .dot.live { background: var(--agent); box-shadow: 0 0 0 3px var(--agent-tint); }
 .dot.alert { background: var(--blocked); box-shadow: 0 0 0 3px var(--blocked-tint); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
@@ -123,8 +126,9 @@ body {
 <body>
 <div class="page">
   <div class="topbar">
-    <div class="dot" id="dot"></div>
-    <div class="status-line" id="statusLine">connecting…</div>
+    <div class="dot" id="dot" aria-hidden="true"></div>
+    <span class="state-label" id="stateLabel">Not connected</span>
+    <div class="status-line" id="statusLine" role="status" aria-live="polite">connecting…</div>
     <button class="rename" id="renameBtn" hidden>rename</button>
   </div>
 
@@ -138,6 +142,7 @@ body {
       <button class="preset" data-name="laptop">Laptop</button>
       <button class="preset" data-name="fridge">Fridge</button>
     </div>
+    <p class="name-error" id="nameError" role="alert"></p>
     <button class="go" id="nameGo">Start watching</button>
   </div>
 
@@ -163,22 +168,31 @@ body {
 <script>
 "use strict";
 
-// No token, no auth — this is a DISPLAY-only surface. It can only
-// receive a push and render it; nothing here can resolve a finding or
-// touch Gate. Deliberately no "consoleUrl" passed to shipRenderFindings,
-// so the decision box never renders here — resolving a risk still
-// requires a person at Gate with a typed reason, never from a screen
-// nobody is necessarily standing in front of.
+// This page is a DISPLAY surface. It renders what Relay sends and nothing here can resolve a finding:
+// a decision needs a person's reason and a confirmation, given by voice or in Gate. Deliberately no
+// "consoleUrl" passed to shipRenderFindings, so no decision box is drawn here.
+//
+// It does take part in the gate in one way. When Relay holds findings for this screen (it sent a
+// notification because the page was closed), those findings count as seen only when this page says
+// it displayed them: the "ack" below. That is why the ack waits until the page is visible. Findings
+// pushed to an open page are recorded as seen by Relay at the moment of the push.
 const WS_URL = "wss://9vkr6eelzd.execute-api.us-west-2.amazonaws.com/prod";
 const STORAGE_KEY = "ship_display_device_name";
 // Public half of SHIP's push key. It identifies the sender to the browser and is safe to publish.
 const VAPID_PUBLIC_KEY = "BN01jnTPD-xPJl6369CEslizn_uqw2V2zN3vG-Es-YblR4HISRi1yHKoU-OnidSwYzoNbeHGCG41RrYBlj0dlqk";
+// API Gateway drops a WebSocket that is idle for 10 minutes. Registering again is idempotent
+// on the server, so it doubles as the keep-alive.
+const KEEPALIVE_MS = 5 * 60 * 1000;
+// Mirrors the gateway's rule for a screen name, so a bad name is caught here with a clear message.
+const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,29}$/;
 
 const dot = document.getElementById("dot");
+const stateLabel = document.getElementById("stateLabel");
 const statusLine = document.getElementById("statusLine");
 const renameBtn = document.getElementById("renameBtn");
 const namebox = document.getElementById("namebox");
 const nameInput = document.getElementById("nameInput");
+const nameError = document.getElementById("nameError");
 const idle = document.getElementById("idle");
 const idleName = document.getElementById("idleName");
 const screenWrap = document.getElementById("screenWrap");
@@ -190,24 +204,117 @@ const alertsNote = document.getElementById("alertsNote");
 let ws = null;
 let reconnectDelayMs = 1000;
 let deviceName = null;
+let unacked = null;      // findings on screen that Relay has not yet been told were displayed
+let findingsShown = false;   // the findings table is on screen (a keep-alive must not blank it)
+
+const STATE_LABELS = { live: "Connected", alert: "Needs a decision", error: "Problem", "": "Not connected" };
 
 function setStatus(text, cls) {
   statusLine.innerHTML = text;
+  setDot(cls);
+}
+
+// The dot is colour only; the label beside it says the same in words.
+function setDot(cls) {
   dot.className = "dot" + (cls ? " " + cls : "");
+  stateLabel.textContent = STATE_LABELS[cls || ""] || STATE_LABELS[""];
 }
 
 function showIdle() {
   namebox.hidden = true;
+  findingsShown = false;
   screenWrap.classList.remove("show");
   idle.hidden = false;
   idleName.textContent = deviceName;
 }
 
-function showNamePrompt() {
+function showNamePrompt(message) {
   idle.hidden = true;
+  findingsShown = false;
+  unacked = null;
   screenWrap.classList.remove("show");
   namebox.hidden = false;
+  nameError.textContent = message || "";
   nameInput.focus();
+}
+
+// What kind of message this is. The server names it in `type`; messages from before that existed are
+// recognised by their shape. Anything else is ignored rather than thrown on.
+function messageKind(msg) {
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return null;
+  if (typeof msg.type === "string") return msg.type;
+  if ("registered" in msg) return "registered";
+  if ("subscribed" in msg) return "subscribed";
+  if ("error" in msg) return "error";
+  if (Array.isArray(msg.pull_requests)) return "findings";
+  return null;
+}
+
+// A findings payload the renderer can trust: arrays where arrays are expected.
+function cleanFindings(msg) {
+  if (!Array.isArray(msg.pull_requests)) return null;
+  const pull_requests = [];
+  for (const pr of msg.pull_requests) {
+    if (!pr || typeof pr !== "object" || !Array.isArray(pr.findings)) return null;
+    pull_requests.push({ ...pr, findings: pr.findings.filter(f => f && typeof f === "object") });
+  }
+  return { ...msg, pull_requests, held: Array.isArray(msg.held) ? msg.held : [] };
+}
+
+function handleMessage(msg) {
+  const kind = messageKind(msg);
+  if (kind === "registered") {
+    // Also the answer to the periodic keep-alive: refresh the status line, but leave findings on screen.
+    setStatus("watching as <b>" + shipEsc(msg.registered) + "</b>", findingsShown && dot.className.includes("alert") ? "alert" : "live");
+    renameBtn.hidden = false;
+    if (!findingsShown) showIdle();
+    sendSubscription();   // keeps this browser's alert address filed under the current name
+  } else if (kind === "subscribed") {
+    showAlertState();
+  } else if (kind === "error") {
+    handleServerError(msg);
+  } else if (kind === "findings") {
+    const payload = cleanFindings(msg);
+    if (!payload) { console.warn("ignored a findings message with an unexpected shape"); return; }
+    showFindings(payload);
+  } else {
+    console.warn("ignored an unrecognised message");
+  }
+}
+
+function handleServerError(msg) {
+  const text = typeof msg.error === "string" ? msg.error : "SHIP could not do that.";
+  if (msg.action === "register") {
+    // The name was refused, so this connection is not watching. Say so and ask again; do not retry in a loop.
+    const old = ws;
+    ws = null;
+    if (old) old.close();
+    setStatus("not connected: " + shipEsc(text), "error");
+    renameBtn.hidden = true;
+    showNamePrompt(text);
+  } else if (msg.action === "subscribe") {
+    alertsNote.textContent = "Couldn't turn on alerts: " + text;
+  } else {
+    setStatus(shipEsc(text), "error");
+  }
+}
+
+// Same payload shape as blocked_pull_requests, rendered with the identical shared code
+// the simulator uses so the two surfaces can never disagree on how a finding looks.
+function showFindings(payload) {
+  idle.hidden = true;
+  findingsShown = true;
+  screenWrap.classList.add("show");
+  const anyBlocking = payload.pull_requests.some(pr => pr.findings.some(f => f.blocks_merge));
+  setDot(anyBlocking ? "alert" : "live");
+  try {
+    shipRenderFindings(screenBar, screenBody, "SHIP release status", payload);
+  } catch (err) {
+    console.error("could not render the findings", err);
+    screenBody.textContent = "These findings could not be displayed. Open the review console.";
+    return;      // not displayed, so not acknowledged
+  }
+  acknowledge(payload);
 }
 
 function connect() {
@@ -223,29 +330,7 @@ function connect() {
   sock.addEventListener("message", (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
-
-    if ("registered" in msg) {
-      setStatus("watching as <b>" + shipEsc(msg.registered) + "</b>", "live");
-      renameBtn.hidden = false;
-      showIdle();
-      sendSubscription();   // keeps this browser's alert address filed under the current name
-      return;
-    }
-    if ("subscribed" in msg) {
-      showAlertState();
-      return;
-    }
-
-    // Anything else is a real findings push — same payload shape as
-    // blocked_pull_requests, rendered with the identical shared code
-    // the simulator uses so the two surfaces can never disagree on how
-    // a finding looks.
-    idle.hidden = true;
-    screenWrap.classList.add("show");
-    const anyBlocking = (msg.pull_requests || []).some(pr => pr.findings.some(f => f.blocks_merge));
-    dot.className = "dot" + (anyBlocking ? " alert" : " live");
-    shipRenderFindings(screenBar, screenBody, "SHIP release status", msg);
-    acknowledge(msg);
+    try { handleMessage(msg); } catch (err) { console.error("could not handle a message", err); }
   });
 
   sock.addEventListener("close", () => {
@@ -258,7 +343,6 @@ function connect() {
     // hammer the API. A socket that was replaced on purpose (rename) stays closed.
     if (sock !== ws) return;
     setStatus("reconnecting…");
-    dot.className = "dot";
     setTimeout(() => { if (sock === ws) connect(); }, reconnectDelayMs);
     reconnectDelayMs = Math.min(reconnectDelayMs * 1.6, 15000);
   });
@@ -266,11 +350,26 @@ function connect() {
   sock.addEventListener("error", () => { sock.close(); });
 }
 
-// The findings now on screen count as seen only because this page says so. Relay
-// holds findings it notified about and marks them seen on this message, not before.
+// Registering again is idempotent on the server. Doing it every few minutes keeps the connection
+// inside API Gateway's idle timeout and keeps this screen listed as connected.
+setInterval(() => {
+  if (deviceName && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "register", device_name: deviceName }));
+  }
+}, KEEPALIVE_MS);
+
+// The findings now on screen count as seen only because this page says so, and only once a person
+// can see the page: a tab in the background or a screen asleep has displayed nothing to anyone.
 function acknowledge(payload) {
+  unacked = payload;
+  flushAck();
+}
+
+function flushAck() {
+  if (!unacked || document.visibilityState !== "visible") return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const ids = (payload.pull_requests || []).flatMap(pr => pr.findings.map(f => f.alert_id));
+  const ids = unacked.pull_requests.flatMap(pr => pr.findings.map(f => f.alert_id)).filter(Boolean);
+  unacked = null;
   if (ids.length) ws.send(JSON.stringify({ action: "ack", device_name: deviceName, alert_ids: ids }));
 }
 
@@ -293,7 +392,7 @@ async function currentSubscription() {
 }
 
 async function sendSubscription() {
-  if (Notification.permission !== "granted" || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!alertsSupported() || Notification.permission !== "granted" || !ws || ws.readyState !== WebSocket.OPEN) return;
   const sub = await currentSubscription();
   if (sub) ws.send(JSON.stringify({ action: "subscribe", device_name: deviceName, subscription: sub.toJSON() }));
 }
@@ -334,25 +433,39 @@ alertsBtn.addEventListener("click", async () => {
   showAlertState();
 });
 
-// Tapping a notification while this page is already open: collect what is waiting.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "ship-opened" && deviceName) {
+    const data = event.data || {};
+    // Tapping a notification while this page is already open: collect what is waiting.
+    if (data.type === "ship-opened" && deviceName) {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "register", device_name: deviceName }));
       else connect();
+    }
+    // The browser replaced this screen's alert address (see ship-sw.js): file the new one.
+    if (data.type === "ship-subscription-changed") {
+      sendSubscription();
+      showAlertState();
     }
   });
 }
 
-// A tab that was asleep in the background reconnects the moment it is looked at.
+// A tab that was asleep in the background reconnects the moment it is looked at, and findings that
+// arrived while it was hidden are acknowledged now that someone can see them.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && deviceName && (!ws || ws.readyState === WebSocket.CLOSED)) connect();
+  if (document.visibilityState !== "visible") return;
+  if (deviceName && (!ws || ws.readyState === WebSocket.CLOSED)) connect();
+  flushAck();
 });
 
 function startWatching(name) {
-  deviceName = name.trim();
-  if (!deviceName) return;
-  localStorage.setItem(STORAGE_KEY, deviceName);
+  const wanted = (name || "").trim();
+  if (!NAME_PATTERN.test(wanted)) {
+    showNamePrompt("Use 1 to 30 letters or digits, for example TV or Kitchen tablet.");
+    return;
+  }
+  deviceName = wanted;
+  try { localStorage.setItem(STORAGE_KEY, deviceName); } catch { /* the name is just not remembered */ }
+  nameError.textContent = "";
   connect();
 }
 
@@ -367,7 +480,7 @@ renameBtn.addEventListener("click", () => {
 });
 
 const saved = (() => { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } })();
-if (saved) startWatching(saved);
+if (saved && NAME_PATTERN.test(saved)) startWatching(saved);
 else showNamePrompt();
 showAlertState();
 </script>

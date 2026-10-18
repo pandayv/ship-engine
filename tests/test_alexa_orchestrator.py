@@ -148,11 +148,40 @@ def test_staging_and_proceeding_never_happen_in_the_same_turn():
     assert relay.names == ["stage_decisions"]
 
 
-def test_proceed_on_its_own_runs_and_clears_the_numbers_on_screen():
+def test_the_model_calling_proceed_on_its_own_is_refused_in_code():
+    # Applying a staged decision is the person's act. Whatever the model says, nothing is forwarded
+    # unless something is staged AND the person's words are a confirmation.
     relay = Relay({"proceed": {"performed": 1, "spoken_response": "Done."}})
-    speech, _, session = turn("yes proceed", model_says(use("proceed", repo="r", pr_number=1)), relay,
+    speech, _, session = turn("what about the second one", model_says(use("proceed", repo="r", pr_number=1)), relay,
                               {"screen": "tv", "routing": ROUTING})
-    assert relay.names == ["proceed"] and speech == "Done." and session["routing"] == []
+    assert relay.calls == [] and speech == o.NOTHING_STAGED and session["routing"] == ROUTING
+
+
+def test_the_model_calling_proceed_when_something_is_staged_but_nothing_was_confirmed_is_refused():
+    relay = Relay()
+    speech, _, session = turn("tell me more about it", model_says(use("proceed", repo="r", pr_number=1)), relay,
+                              {"screen": "tv", "pending": PENDING})
+    assert relay.calls == [] and speech == o.CONFIRM_OR_DROP and session["pending"] == PENDING
+
+
+def test_proceed_is_never_forwarded_with_the_models_own_arguments():
+    # The only repo and PR that can be confirmed are the ones staged; a model that names others gets nothing.
+    relay = Relay()
+    turn("yes but also the other repo", model_says(use("proceed", repo="evil/repo", pr_number=99)), relay,
+         {"pending": PENDING})
+    assert relay.calls == []
+
+
+def test_a_partly_applied_confirmation_keeps_the_rest_staged_for_a_retry():
+    relay = Relay({"proceed": {"performed": 1, "pending_remaining": 1, "spoken_response": "Applied 1 of 2. 1 could not be saved, say proceed to retry."}})
+    speech, _, session = turn("yes", model_says(), relay, {"screen": "tv", "routing": ROUTING, "pending": PENDING})
+    assert session["pending"] == PENDING and session["routing"] == [] and "Applied 1 of 2" in speech
+
+
+def test_a_fully_applied_confirmation_clears_what_was_staged():
+    relay = Relay({"proceed": {"performed": 2, "pending_remaining": 0, "spoken_response": "Done. Applied all 2."}})
+    _, _, session = turn("yes", model_says(), relay, {"screen": "tv", "routing": ROUTING, "pending": PENDING})
+    assert "pending" not in session
 
 
 def test_staged_decisions_appear_on_the_screen_the_person_is_looking_at():
@@ -160,6 +189,16 @@ def test_staged_decisions_appear_on_the_screen_the_person_is_looking_at():
     _, relay, _ = turn("approve the first one it is a false positive", model_says(
         use("stage_decisions", repo="pandayv/micro-finance", pr_number=1, decisions=decisions)), session={"screen": "ipad", "routing": ROUTING})
     assert relay.calls[0][1]["device"] == "ipad"
+
+
+def test_the_model_cannot_pick_the_device_and_extra_fields_never_reach_relay():
+    decisions = [{"position": 1, "approved": True, "reason": "it is a false positive", "alert_id": "invented"}]
+    _, relay, _ = turn("approve the first one it is a false positive", model_says(
+        use("stage_decisions", repo="pandayv/micro-finance", pr_number=1, decisions=decisions, device="fridge", sneaky="x")),
+        session={"screen": "tv", "routing": ROUTING})
+    name, args = relay.calls[0]
+    assert set(args) == {"repo", "pr_number", "decisions", "device"} and args["device"] == "tv"
+    assert args["decisions"] == [{"alert_id": "aaa", "position": 1, "approved": True, "reason": "it is a false positive"}]
 
 
 # ---------------------------------------------------------------- failure and time
@@ -425,3 +464,90 @@ def test_a_failure_to_clear_it_on_relay_does_not_change_the_answer():
     session = {"pending": {"repo": "r", "pr_number": 2}}
     speech, _, session = turn("cancel", model_says(), relay=Down(), session=session)
     assert speech == "Okay, I won't apply it." and "pending" not in session
+
+
+# ---------------------------------------------------------------- deciding by finding id, not by position
+
+def test_a_spoken_position_becomes_the_id_of_the_finding_the_screen_showed():
+    # The screen showed aaa as 1 and bbb as 2. Relay is sent ids only.
+    _, relay, _ = stage({"position": 2, "approved": False, "reason": "it leaks a phone number"},
+                        "reject the second one it leaks a phone number")
+    assert relay.calls[0][1]["decisions"] == [
+        {"alert_id": "bbb", "position": 2, "approved": False, "reason": "it leaks a phone number"}]
+
+
+def test_numbers_come_from_what_was_shown_not_from_how_the_findings_are_ordered_now():
+    # Only findings 2 and 5 were on the screen the person looked at (the others arrived later).
+    routing = [{"repo": "pandayv/micro-finance", "pr_number": 1, "findings": [
+        {"position": 5, "alert_id": "eee", "blocks_merge": True}, {"position": 2, "alert_id": "bbb", "blocks_merge": True}]}]
+    _, relay, _ = stage({"position": 5, "approved": True, "reason": "only test data"}, "approve the fifth one only test data",
+                        session={"screen": "tv", "routing": routing})
+    assert relay.calls[0][1]["decisions"][0]["alert_id"] == "eee"
+
+
+def test_a_number_that_was_not_shown_is_refused_with_a_plain_sentence_and_nothing_is_sent():
+    speech, relay, _ = stage({"position": 3, "approved": True, "reason": "only test data"}, "approve the third one only test data")
+    assert relay.calls == []
+    assert speech == "I don't have a finding number 3 that you've looked at on that pull request. Which one did you mean?"
+
+
+def test_one_unknown_number_refuses_the_whole_batch():
+    decisions = [{"position": 1, "approved": True, "reason": "only test data"},
+                 {"position": 9, "approved": False, "reason": "only test data"}]
+    speech, relay, _ = turn("approve the first and reject the ninth only test data", model_says(
+        use("stage_decisions", repo="pandayv/micro-finance", pr_number=1, decisions=decisions)),
+        session={"screen": "tv", "routing": ROUTING})
+    assert relay.calls == [] and "number 9" in speech
+
+
+def test_two_decisions_on_the_same_finding_are_refused():
+    decisions = [{"position": 1, "approved": True, "reason": "only test data"},
+                 {"position": 1, "approved": False, "reason": "only test data"}]
+    speech, relay, _ = turn("approve the first one only test data", model_says(
+        use("stage_decisions", repo="pandayv/micro-finance", pr_number=1, decisions=decisions)),
+        session={"screen": "tv", "routing": ROUTING})
+    assert relay.calls == [] and speech == o.SAME_TWICE
+
+
+def test_the_model_is_told_the_numbers_that_were_actually_shown():
+    routing = [{"repo": "r", "pr_number": 1, "findings": [{"position": 2, "alert_id": "x"}, {"position": 5, "alert_id": "y"}]}]
+    assert "numbered 2, 5" in o.context_note({"routing": routing, "screen": "tv"})
+
+
+def test_the_model_is_offered_positions_not_ids_and_no_device():
+    spec = next(t for t in o.tool_config(DEFS)["tools"] if t["toolSpec"]["name"] == "stage_decisions")["toolSpec"]
+    item = spec["inputSchema"]["json"]["properties"]["decisions"]["items"]
+    assert set(item["properties"]) == {"position", "approved", "reason"} and "alert_id" not in str(spec)
+    assert "device" not in spec["inputSchema"]["json"]["properties"]
+
+
+# ---------------------------------------------------------------- what counts as a reason
+
+@pytest.mark.parametrize("reason,said", [
+    ("laptop", "approve the first one on the laptop"),
+    ("the tablet", "reject the second one on the tablet"),
+    ("tv", "approve it on the tv"),
+    ("first one on laptop", "approve the first one on laptop"),
+    ("pull request 5", "approve pull request 5"),
+    ("proceed", "approve it and proceed"),
+    ("screen", "approve what is on the screen"),
+])
+def test_a_screen_name_or_command_words_alone_are_not_a_reason(reason, said):
+    assert not o.reason_is_theirs(reason, [said])
+
+
+def test_a_screen_name_registered_under_a_custom_name_is_not_a_reason_either():
+    assert not o.reason_is_theirs("kitchen display", ["approve the first one on the kitchen display"], ["kitchen display"])
+
+
+@pytest.mark.parametrize("reason", ["it's test data", "false positive", "only test data", "vendor confirmed it is anonymised"])
+def test_short_real_reasons_are_still_accepted(reason):
+    assert o.reason_is_theirs(reason, [f"approve the first one on the laptop because {reason}"], ["laptop"])
+
+
+def test_a_reason_that_borrows_a_screen_name_but_has_real_content_passes():
+    assert o.reason_is_theirs("laptop fixtures only", ["approve it, it is laptop fixtures only"])
+
+
+def test_a_reason_the_person_did_not_say_is_still_refused():
+    assert not o.reason_is_theirs("vendor confirmed anonymised", ["approve the first one"])

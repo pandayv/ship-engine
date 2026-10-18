@@ -8,14 +8,16 @@ than left to code review:
      list, no citation and no code. This is enforced by the server, so a
      future prompt or a well-meaning change cannot quietly turn Relay
      into a narrator.
-  2. No compliance risk can be accepted BLIND. SHIP flags exactly this
-     pattern in other people's code (TLGP-002 — an automated decision with
+  2. No compliance finding can be decided BLIND. SHIP flags exactly this
+     pattern in other people's code (TLGP-002 - an automated decision with
      no human checkpoint); doing it in its own interface would be the same
-     violation. Revised 2026-09-28: the rule isn't "never by voice," it's
-     "never without the finding having actually been shown on a screen in
-     this session first" — see src/relay/server.py's module docstring for
-     the full reasoning. What must still be impossible is a decision with
-     no review behind it at all, regardless of channel.
+     violation. The rule is not "never by voice", it is "never without the
+     finding having been shown on a screen recently, never without a reason
+     in the person's own words, and never on a finding the person did not
+     point at": see src/relay/server.py's module docstring. The tests for it
+     assert what actually happens (a refusal changes nothing; an approval
+     clears the PR's status; a rejection keeps it failing), not which tool
+     names exist.
 """
 
 import asyncio
@@ -26,8 +28,8 @@ import src.relay.server as relay
 from src.relay.modality import SPEECH_CHAR_BUDGET, ModalityViolation, Spoken
 from src.relay.readmodel import ReleaseStatus, _group
 from src.storage import pending_store, session_store
-from src.storage.alert_store import Alert
-from src.storage.status_store import PullRequestCounts, ReleaseSummary
+from src.storage.alert_store import Alert, AlertNotFoundOrAlreadyResolved, is_held, is_open
+from src.storage.status_store import PullRequestCounts, ReleaseSummary, SummaryUnavailable
 
 
 class _FakeSessionTable:
@@ -39,7 +41,7 @@ class _FakeSessionTable:
     def __init__(self):
         self.rows = {}
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kw):
         row = self.rows.get(Key["alert_id"])
         return {"Item": row} if row else {}
 
@@ -54,7 +56,7 @@ class _FakePendingTable:
     def __init__(self):
         self.rows = {}
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kw):
         row = self.rows.get(Key["pr_key"])
         return {"Item": row} if row else {}
 
@@ -93,7 +95,16 @@ def no_real_writeback(monkeypatch):
     (status_store.py's own docstring: best-effort, not opt-out). Faked
     here rather than relying on every test that exercises a resolve path
     to remember it individually."""
-    monkeypatch.setattr(relay, "refresh_summary", lambda: None)
+    monkeypatch.setattr(relay, "refresh_summary", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_screens(monkeypatch):
+    """Relay reads which screens exist (the status sentence's offer, connected_screens).
+    Nothing connected unless a test says otherwise."""
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [])
+    monkeypatch.setattr(relay.push_store, "subscribed_device_names", lambda: set())
+    monkeypatch.setattr(relay.push_store, "subscriptions_for_device", lambda name: [])
 
 
 @pytest.fixture(autouse=True)
@@ -152,10 +163,11 @@ def _summary_from(alerts) -> ReleaseSummary:
 def one_blocking(monkeypatch):
     """Wires BOTH read paths to the same underlying alert, so voice
     (release_status, backed by read_summary()) and screen
-    (blocked_pull_requests/finding_detail, backed by list_active_alerts())
+    (blocked_pull_requests/finding_detail, backed by list_gate_alerts())
     see consistent data — and neither ever reaches real AWS."""
     alerts = [_alert()]
-    monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: alerts)
+    monkeypatch.setattr("src.relay.readmodel.list_gate_alerts", lambda: alerts)
+    monkeypatch.setattr(relay, "list_gate_alerts", lambda: alerts)
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: _summary_from(alerts))
     monkeypatch.setattr(relay, "get_alert", lambda aid: alerts[0] if aid == "a1" else None)
     return alerts
@@ -166,7 +178,8 @@ def two_blocking(monkeypatch):
     """Two findings on the same PR, both blocking, same shape as
     one_blocking but for the multi-finding staging/proceed tools."""
     alerts = [_alert(alert_id="a1", score=9.0), _alert(alert_id="a2", score=8.0)]
-    monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: alerts)
+    monkeypatch.setattr("src.relay.readmodel.list_gate_alerts", lambda: alerts)
+    monkeypatch.setattr(relay, "list_gate_alerts", lambda: alerts)
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: _summary_from(alerts))
     monkeypatch.setattr(relay, "get_alert", lambda aid: next((a for a in alerts if a.alert_id == aid), None))
     return alerts
@@ -203,9 +216,9 @@ def test_a_long_list_cannot_be_spoken():
 
 def test_clean_state_is_reassuring_and_short(monkeypatch):
     # release_status() is the voice path and reads ONLY the pre-computed
-    # summary (src/storage/status_store.py) — never list_active_alerts, and
+    # summary (src/storage/status_store.py) — never list_gate_alerts, and
     # never real AWS. Mocking read_summary() is what actually isolates
-    # this test; mocking list_active_alerts() alone would silently fall
+    # this test; mocking list_gate_alerts() alone would silently fall
     # through to a real (and possibly non-empty) DynamoDB table.
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: ReleaseSummary())
     spoken = relay.release_status()
@@ -219,9 +232,9 @@ def test_release_status_never_reads_the_alerts_table_directly(monkeypatch):
     # ever falls back to list_active_alerts() or a live scan, this proves
     # it by making that path explode.
     def _must_not_be_called():
-        raise AssertionError("release_status() must not read list_active_alerts directly")
+        raise AssertionError("release_status() must not read list_gate_alerts directly")
 
-    monkeypatch.setattr("src.relay.readmodel.list_active_alerts", lambda: _must_not_be_called())
+    monkeypatch.setattr("src.relay.readmodel.list_gate_alerts", lambda: _must_not_be_called())
     monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: ReleaseSummary())
     assert "no blocking issues" in relay.release_status().lower()
 
@@ -238,26 +251,89 @@ def test_screen_tools_carry_the_detail_voice_withholds(one_blocking):
     assert "hash identifiers" in detail["suggested_remediation"]
 
 
-# --- property 2: voice cannot accept risk ---
-
-
-def test_no_tool_exists_that_accepts_a_risk():
-    names = {t.name for t in asyncio.run(mcp_tools())}
-    forbidden = {"accept_risk", "approve", "approve_finding", "resolve_alert",
-                 "override", "dismiss_finding", "unblock"}
-    assert not (names & forbidden), f"a risk-acceptance tool is exposed: {names & forbidden}"
+# --- property 2: a finding cannot be decided blind ---
+#
+# These assert what happens, not which tool names exist: a refusal changes nothing, an
+# approval clears the PR's commit status, a rejection keeps it failing.
 
 
 async def mcp_tools():
     return await relay.mcp.list_tools()
 
 
+class LiveDB:
+    """Alerts held in memory with the real rules for what blocks a merge, so a test can
+    decide a finding and then read back the status GitHub would be told."""
+
+    def __init__(self, alerts):
+        self.alerts = {a.alert_id: a for a in alerts}
+        self.statuses = []      # every commit status posted: (sha, state, description)
+        self.comments = []
+        self.resolve_calls = []
+
+    def get(self, alert_id):
+        return self.alerts.get(alert_id)
+
+    def resolve(self, alert_id, approved, reason, resolved_by):
+        self.resolve_calls.append(alert_id)
+        alert = self.alerts.get(alert_id)
+        if alert is None or alert.status == "resolved":
+            raise AlertNotFoundOrAlreadyResolved(alert_id)
+        alert.status, alert.resolution = "resolved", "approved" if approved else "rejected"
+
+    def gate(self):
+        return [a for a in self.alerts.values() if is_open(a) or is_held(a)]
+
+
+@pytest.fixture
+def live(monkeypatch):
+    """Two blocking findings, wired through the real status derivation. GitHub is faked at the
+    HTTP layer: the PR's current head is "currenthead", the alert's stored sha is the stale "abc123"."""
+    import src.api.github_writeback as wb
+
+    db = LiveDB([_alert(alert_id="a1", score=9.0), _alert(alert_id="a2", score=8.0)])
+    for a in db.alerts.values():
+        a.fragment_key = f"frag-{a.alert_id}"
+
+    class _Response:
+        def __init__(self, body=None):
+            self._body = body or {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._body
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(wb.requests, "get", lambda url, **k: _Response({"head": {"sha": "currenthead"}}))
+    monkeypatch.setattr(wb.requests, "post", lambda url, json=None, **k: (
+        db.statuses.append((url.rsplit("/", 1)[-1], json["state"], json["description"])) if "/statuses/" in url
+        else db.comments.append(json["body"])) or _Response())
+    monkeypatch.setattr("src.relay.readmodel.list_gate_alerts", db.gate)
+    monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: _summary_from(
+        [a for a in db.alerts.values() if is_open(a)]))
+    monkeypatch.setattr(relay, "list_gate_alerts", db.gate)
+    monkeypatch.setattr(relay, "get_alert", db.get)
+    monkeypatch.setattr(relay, "resolve_alert", db.resolve)
+    monkeypatch.setattr(wb, "list_alerts_for_pr", lambda repo, pr: db.gate())
+    return db
+
+
 def test_blind_acceptance_never_performs_it(one_blocking, session_table):
-    # No screen tool was ever called for this alert — the exact "ignore
-    # it, go ahead" shape that must still never work.
+    # No screen tool was ever called for this alert: the exact "ignore it, go ahead" shape.
     result = relay.request_risk_acceptance("a1", reason="looks fine")
-    assert result["performed"] is False
+    assert result["performed"] == 0
     assert result["reason"] == "requires_attested_human_decision"
+
+
+def test_an_unseen_finding_cannot_be_decided_by_any_path_and_nothing_changes(live):
+    one = relay.request_risk_acceptance("a1", reason="it is only test data")
+    staged = relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"alert_id": "a1", "approved": True, "reason": "it is only test data"}])
+    assert one["performed"] == 0 and staged["performed"] == 0 and "staged" not in staged
+    assert live.resolve_calls == [] and live.statuses == []
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
 
 
 def test_blind_refusal_is_short_enough_to_speak_and_names_the_real_gap(one_blocking, session_table):
@@ -271,32 +347,31 @@ def test_refusal_routes_to_a_surface_where_the_decision_can_be_made(one_blocking
     assert relay.request_risk_acceptance("a1")["console_url"].startswith("https://ship.example/dashboard")
 
 
-def test_reviewed_then_confirmed_with_a_reason_actually_performs_it(one_blocking, session_table, monkeypatch):
-    resolved = {}
-    monkeypatch.setattr(relay, "resolve_alert",
-                         lambda alert_id, approved, reason, resolved_by: resolved.update(
-                             alert_id=alert_id, approved=approved, reason=reason, resolved_by=resolved_by))
-
+def test_reviewed_then_confirmed_with_a_reason_actually_performs_it(live):
     relay.finding_detail("a1")  # the actual review
     result = relay.request_risk_acceptance("a1", reason="known internal test fixture")
 
-    assert result["performed"] is True
-    assert resolved == {"alert_id": "a1", "approved": True,
-                         "reason": "known internal test fixture", "resolved_by": "voice"}
+    assert result["performed"] == 1 and type(result["performed"]) is int
+    assert live.alerts["a1"].resolution == "approved"
+    assert "known internal" not in result["spoken_response"]     # the reason is recorded, not echoed
 
 
-def test_reviewed_but_no_reason_still_refuses(one_blocking, session_table, monkeypatch):
-    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve without a reason"))
+def test_a_long_reason_is_refused_before_anything_is_written(live):
+    relay.finding_detail("a1")
+    result = relay.request_risk_acceptance("a1", reason="because " * 200)
+    assert result["performed"] == 0 and live.resolve_calls == []
+    assert len(result["spoken_response"]) <= SPEECH_CHAR_BUDGET
 
+
+def test_reviewed_but_no_reason_still_refuses(live):
     relay.finding_detail("a1")
     result = relay.request_risk_acceptance("a1")  # no reason
 
-    assert result["performed"] is False
+    assert result["performed"] == 0 and live.resolve_calls == []
     assert "reason" in result["spoken_response"].lower()
 
 
-def test_a_stale_review_past_the_window_does_not_unlock_it(one_blocking, session_table, monkeypatch):
-    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
+def test_a_stale_review_past_the_window_does_not_unlock_it(live, session_table):
     relay.finding_detail("a1")
     # Simulate the review having happened outside the recent window,
     # rather than asserting against wall-clock timing.
@@ -304,80 +379,165 @@ def test_a_stale_review_past_the_window_does_not_unlock_it(one_blocking, session
 
     result = relay.request_risk_acceptance("a1", reason="go ahead")
 
-    assert result["performed"] is False
+    assert result["performed"] == 0 and live.resolve_calls == []
 
 
-def test_display_on_a_named_screen_also_counts_as_reviewed(one_blocking, session_table, monkeypatch):
+def test_display_on_a_named_screen_also_counts_as_reviewed(live, monkeypatch):
     # Asking Alexa to push to the TV and then saying "override it" in the
-    # same breath must work — the person asking is who'll plausibly say
+    # same breath must work: the person asking is who'll plausibly say
     # that next, regardless of which physical screen it renders on.
     monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": ["tv1"], "not_connected": False})
-    resolved = {}
-    monkeypatch.setattr(relay, "resolve_alert",
-                         lambda alert_id, approved, reason, resolved_by: resolved.update(performed=True))
 
     relay.display_on("tv")
     result = relay.request_risk_acceptance("a1", reason="reviewed on the tv")
 
-    assert result["performed"] is True
+    assert result["performed"] == 1
 
 
-def test_hearing_only_release_status_does_not_count_as_reviewed(one_blocking, session_table, monkeypatch):
-    # release_status is voice-only and never names a specific finding — it
+def test_hearing_only_release_status_does_not_count_as_reviewed(live):
+    # release_status is voice-only and never names a specific finding: it
     # must not be mistaken for having shown anything.
-    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve"))
-
     relay.release_status()  # never touches session_store at all
     result = relay.request_risk_acceptance("a1", reason="go ahead")
 
-    assert result["performed"] is False
+    assert result["performed"] == 0 and live.resolve_calls == []
 
 
-def test_single_reviewed_resolution_also_writes_back_to_the_pr(one_blocking, session_table, monkeypatch):
-    # finding #(2026-10-02): request_risk_acceptance used to only call
-    # resolve_alert() — durably recorded in ship-alerts, but never
-    # reached GitHub at all, unlike Gate's web path. _resolve_one() is
-    # the fix; this asserts both write-back calls actually happen now.
-    posted, synced = [], []
-    monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: None)
-    monkeypatch.setattr(relay, "post_pr_comment", lambda *a, **k: posted.append(a))
-    monkeypatch.setattr(relay, "sync_pr_check", lambda *a, **k: synced.append(a))
-
+def test_an_already_decided_finding_is_reported_not_decided_again(live):
     relay.finding_detail("a1")
     relay.request_risk_acceptance("a1", reason="known internal test fixture")
+    again = relay.request_risk_acceptance("a1", reason="a different reason")
+    assert again["performed"] == 0 and "already decided" in again["spoken_response"]
+    assert live.resolve_calls == ["a1"]
 
-    assert posted and synced
+
+# --- what a decision does to the pull request ---
+
+
+def test_approving_clears_the_status_and_rejecting_keeps_it_failing(live):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"alert_id": "a1", "approved": True, "reason": "known internal test fixture"},
+        {"alert_id": "a2", "approved": False, "reason": "it really does leak a phone number"}])
+    relay.proceed("pandayv/micro-finance", 2)
+
+    sha, state, description = live.statuses[-1]
+    assert state == "failure" and "rejected" in description     # a2 is real: the PR stays blocked
+
+    # Approving the other one on its own clears the block.
+    db2 = live
+    db2.alerts["a2"].resolution, db2.alerts["a2"].status = "approved", "resolved"
+    relay.finding_detail("a1")
+    relay._write_back([db2.alerts["a1"]])
+    assert live.statuses[-1][1] == "success"
+
+
+def test_the_status_goes_to_the_current_head_not_the_one_stored_on_the_alert(live):
+    relay.finding_detail("a1")
+    relay.request_risk_acceptance("a1", reason="known internal test fixture")
+    assert live.alerts["a1"].head_sha == "abc123"
+    assert all(sha == "currenthead" for sha, _, _ in live.statuses) and live.statuses
+
+
+def test_a_rejection_by_voice_says_the_pr_stays_blocked_on_the_pr_comment(live):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"alert_id": "a1", "approved": False, "reason": "it really does leak a phone number"}])
+    relay.proceed("pandayv/micro-finance", 2)
+    assert any("stays blocked" in c or "stays failing" in c for c in live.comments)
+
+
+def test_a_rejected_finding_is_decided_so_it_is_not_asked_about_again_but_still_counts_as_blocking(live):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [
+        {"alert_id": "a1", "approved": False, "reason": "it really does leak a phone number"},
+        {"alert_id": "a2", "approved": False, "reason": "this one leaks an email as well"}])
+    relay.proceed("pandayv/micro-finance", 2)
+
+    assert relay.blocked_pull_requests()["pull_requests"] == []              # nothing left to review
+    payload = relay.blocked_pull_requests()
+    assert payload["summary"]["held"] == 2 and payload["held"][0]["pr_number"] == 2
+    assert live.statuses[-1][1] == "failure"
 
 
 # --- staging and batch resolution (docs/voice-resolution-workflow.md) ---
 
 
+def _decision(alert_id, approved=True, reason="it is only test data", **extra):
+    return {"alert_id": alert_id, "approved": approved, "reason": reason, **extra}
+
+
 def test_stage_without_a_recent_review_refuses(two_blocking, session_table):
     # Same rule as single-item approval, checked per finding in a batch.
-    result = relay.stage_decisions("pandayv/micro-finance", 2,
-                                    [{"position": 1, "approved": True, "reason": "fine"}])
-    assert result["performed"] is False
-    assert "screen" in result["spoken_response"].lower() or "shown" in result["spoken_response"].lower()
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", position=1)])
+    assert result["performed"] == 0
+    assert "screen" in result["spoken_response"].lower()
 
 
-def test_stage_out_of_range_position_refuses_the_whole_batch(two_blocking, session_table, monkeypatch):
+def test_stage_by_an_id_that_is_not_an_open_finding_refuses_the_whole_batch(two_blocking, session_table, monkeypatch):
     monkeypatch.setattr(relay, "resolve_alert", lambda *a, **k: pytest.fail("must not resolve anything"))
     relay.blocked_pull_requests()  # reviews both findings
 
     result = relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"position": 1, "approved": True, "reason": "fine"},
-        {"position": 5, "approved": False, "reason": "needs a fix"},  # only 2 exist
+        _decision("a1"),
+        _decision("gone-finding", False, "needs a fix", position=5),
     ])
 
-    assert result["performed"] is False
+    assert result["performed"] == 0 and result["refusal"] == "not_found"
     assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_a_finding_decided_in_the_console_since_the_screen_was_drawn_refuses_honestly(live):
+    relay.blocked_pull_requests()
+    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "approved"      # someone else decided it
+
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1"), _decision("a2", position=2)])
+
+    assert result["performed"] == 0 and result["refusal"] == "already_resolved"
+    assert "finding 2" in result["spoken_response"].lower() and "console" in result["spoken_response"]
+    assert pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_a_decision_names_the_finding_not_the_position(live):
+    # The person looked at a screen where a2 was number 2. A higher-risk finding then arrived
+    # and took number 1, so the live "second one" is a1. The decision carries a2's id, so it
+    # lands on a2 whatever number it has now.
+    relay.blocked_pull_requests()
+    newcomer = _alert(alert_id="a0", score=9.9)
+    newcomer.fragment_key = "frag-a0"
+    live.alerts["a0"] = newcomer
+    session_store.mark_shown("a0")      # seen now, so only the pointing differs
+
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a2", position=2)])
+
+    staged = pending_store.get_pending("pandayv/micro-finance", 2)
+    assert result["staged"] == 1 and [d["alert_id"] for d in staged] == ["a2"]
+
+
+def test_a_decision_without_an_id_is_refused_not_guessed_from_a_position(two_blocking, session_table):
+    relay.blocked_pull_requests()
+    result = relay.stage_decisions("pandayv/micro-finance", 2,
+                                   [{"position": 1, "approved": True, "reason": "it is only test data"}])
+    assert result["performed"] == 0 and result["refusal"] == "missing_alert_id"
+
+
+def test_the_same_finding_twice_in_one_batch_is_refused(two_blocking, session_table):
+    relay.blocked_pull_requests()
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1"), _decision("a1", False)])
+    assert result["refusal"] == "duplicate"
+
+
+def test_an_approved_value_that_is_not_a_real_boolean_is_refused(two_blocking, session_table):
+    relay.blocked_pull_requests()
+    for bad in ("false", "true", 1, None):
+        result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", approved=bad)])
+        assert result["refusal"] == "approved_unclear", bad
 
 
 def test_stage_missing_reason_refuses(two_blocking, session_table):
     relay.blocked_pull_requests()
-    result = relay.stage_decisions("pandayv/micro-finance", 2,
-                                    [{"position": 1, "approved": True, "reason": ""}])
-    assert result["performed"] is False
+    result = relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", reason="", position=1)])
+    assert result["performed"] == 0
     assert "reason" in result["spoken_response"].lower()
 
 
@@ -386,58 +546,194 @@ def test_stage_valid_batch_captures_but_does_not_resolve(two_blocking, session_t
     relay.blocked_pull_requests()
 
     result = relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"position": 1, "approved": True, "reason": "non-issue"},
-        {"position": 2, "approved": False, "reason": "needs a fix"},
+        _decision("a1", True, "non-issue", position=1),
+        _decision("a2", False, "needs a fix", position=2),
     ])
 
-    assert result["staged"] == 2
+    assert result["staged"] == 2 and result["performed"] == 0
     staged = pending_store.get_pending("pandayv/micro-finance", 2)
     assert {d["alert_id"]: d["approved"] for d in staged} == {"a1": True, "a2": False}
 
 
 def test_proceed_with_nothing_staged_says_so(two_blocking, session_table):
     result = relay.proceed("pandayv/micro-finance", 2)
-    assert result["performed"] == 0
+    assert result["performed"] == 0 and result["outcomes"] == []
     assert "nothing" in result["spoken_response"].lower()
 
 
-def test_proceed_commits_every_staged_decision_and_clears_pending(two_blocking, session_table, monkeypatch):
-    resolved = []
-    monkeypatch.setattr(relay, "resolve_alert",
-                         lambda alert_id, approved, reason, resolved_by: resolved.append((alert_id, approved, reason)))
+def _stage_both(approve_first=True):
     relay.blocked_pull_requests()
-    relay.stage_decisions("pandayv/micro-finance", 2, [
-        {"position": 1, "approved": True, "reason": "non-issue"},
-        {"position": 2, "approved": False, "reason": "needs a fix"},
-    ])
+    return relay.stage_decisions("pandayv/micro-finance", 2, [
+        _decision("a1", approve_first, "non-issue"), _decision("a2", False, "needs a fix")])
 
+
+def test_proceed_commits_every_staged_decision_and_clears_pending(live):
+    _stage_both()
     result = relay.proceed("pandayv/micro-finance", 2)
 
-    assert result["performed"] == 2
-    assert set(resolved) == {("a1", True, "non-issue"), ("a2", False, "needs a fix")}
+    assert result["performed"] == 2 and type(result["performed"]) is int
+    assert [o["outcome"] for o in result["outcomes"]] == ["applied", "applied"]
+    assert result["spoken_response"] == "Done. Applied all 2."
+    assert set(live.resolve_calls) == {"a1", "a2"}
     assert pending_store.get_pending("pandayv/micro-finance", 2) is None
 
 
-def test_proceed_rechecks_staleness_at_commit_time_not_just_at_staging(two_blocking, session_table, monkeypatch):
-    # The review window could lapse between "I've reviewed these" and
-    # "proceed" — proceed() must not trust a stage-time check that's gone
-    # stale by the time it actually commits.
-    resolved = []
-    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, **k: resolved.append(alert_id))
+def test_proceed_rechecks_staleness_at_commit_time_not_just_at_staging(live, session_table):
+    # The review window could lapse between "I've reviewed these" and "proceed".
     relay.blocked_pull_requests()
-    relay.stage_decisions("pandayv/micro-finance", 2,
-                           [{"position": 1, "approved": True, "reason": "fine"}])
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
 
     session_table.rows["a1"]["shown_at"] -= session_store.RECENT_WINDOW_SECONDS + 1
     result = relay.proceed("pandayv/micro-finance", 2)
 
-    assert result["performed"] == 0
-    assert resolved == []
+    assert result["performed"] == 0 and live.resolve_calls == []
+    assert result["outcomes"] == [{"alert_id": "a1", "outcome": "skipped_not_seen"}]
+    assert "shown on a screen" in result["spoken_response"] and result["spoken_response"] != "Done."
+
+
+def test_proceed_says_what_it_did_when_some_are_gone_or_already_decided(live):
+    _stage_both()
+    live.alerts["a2"].status, live.alerts["a2"].resolution = "resolved", "approved"      # decided in the console
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 1
+    assert {o["alert_id"]: o["outcome"] for o in result["outcomes"]} == {"a1": "applied", "a2": "already_resolved"}
+    assert result["spoken_response"] == "Applied 1 of 2. 1 already decided in the console."
+
+
+def test_proceed_reports_a_finding_that_no_longer_exists(live):
+    _stage_both()
+    del live.alerts["a2"]
+    result = relay.proceed("pandayv/micro-finance", 2)
+    assert {o["alert_id"]: o["outcome"] for o in result["outcomes"]}["a2"] == "not_found"
+    assert result["spoken_response"] == "Applied 1 of 2. 1 no longer exists."
+
+
+def test_a_race_lost_at_the_database_is_reported_per_item_and_does_not_abort_the_batch(live, monkeypatch):
+    _stage_both()
+    original = live.resolve
+
+    def lose_the_first(alert_id, approved, reason, resolved_by):
+        if alert_id == "a1":
+            raise AlertNotFoundOrAlreadyResolved(alert_id)
+        return original(alert_id, approved, reason, resolved_by)
+
+    monkeypatch.setattr(relay, "resolve_alert", lose_the_first)
+    result = relay.proceed("pandayv/micro-finance", 2)
+    assert {o["alert_id"]: o["outcome"] for o in result["outcomes"]} == {"a1": "already_resolved", "a2": "applied"}
+
+
+def test_a_temporary_failure_keeps_the_decision_staged_so_proceed_can_be_repeated(live, monkeypatch):
+    _stage_both()
+    original = live.resolve
+    broken = {"on": True}
+
+    def flaky(alert_id, approved, reason, resolved_by):
+        if broken["on"]:
+            raise RuntimeError("throttled")
+        return original(alert_id, approved, reason, resolved_by)
+
+    monkeypatch.setattr(relay, "resolve_alert", flaky)
+    first = relay.proceed("pandayv/micro-finance", 2)
+
+    # Nothing was applied because of a transient problem: nothing is cleared.
+    assert first["performed"] == 0 and first["pending_remaining"] == 2
+    assert {o["outcome"] for o in first["outcomes"]} == {"error"}
+    assert first["spoken_response"] == "I couldn't save that just now. Say proceed to try again."
+    assert len(pending_store.get_pending("pandayv/micro-finance", 2)) == 2
+
+    broken["on"] = False
+    second = relay.proceed("pandayv/micro-finance", 2)
+    assert second["performed"] == 2 and pending_store.get_pending("pandayv/micro-finance", 2) is None
+
+
+def test_part_applied_part_failed_keeps_only_the_failed_one_staged(live, monkeypatch):
+    _stage_both()
+    original = live.resolve
+    monkeypatch.setattr(relay, "resolve_alert", lambda alert_id, approved, reason, resolved_by: (
+        (_ for _ in ()).throw(RuntimeError("throttled")) if alert_id == "a2" else original(alert_id, approved, reason, resolved_by)))
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 1 and result["pending_remaining"] == 1
+    assert [d["alert_id"] for d in pending_store.get_pending("pandayv/micro-finance", 2)] == ["a2"]
+    assert result["spoken_response"] == "Applied 1 of 2. 1 could not be saved, say proceed to retry."
+
+
+def test_every_proceed_sentence_fits_the_speech_cap_even_with_a_big_mixed_batch():
+    outcomes = ([{"outcome": "applied"}] * 10 + [{"outcome": "skipped_not_seen"}] * 10 + [{"outcome": "already_resolved"}] * 10
+                + [{"outcome": "not_found"}] * 10 + [{"outcome": "error"}] * 10)
+    assert len(relay._proceed_sentence(outcomes)) <= SPEECH_CHAR_BUDGET
+
+
+def test_performed_is_an_integer_in_every_tool_that_reports_it(live):
+    results = [relay.request_risk_acceptance("a1"), relay.stage_decisions("pandayv/micro-finance", 2, []),
+               relay.proceed("pandayv/micro-finance", 2), relay.cancel_pending("pandayv/micro-finance", 2)]
+    assert all(type(r["performed"]) is int for r in results)
 
 
 def test_proceed_is_the_tool_name_exposed_alongside_stage(two_blocking):
     names = {t.name for t in asyncio.run(mcp_tools())}
     assert {"stage_decisions", "proceed"} <= names
+
+
+def test_findings_routing_reports_the_number_each_finding_had_when_it_was_shown(live):
+    relay.blocked_pull_requests()
+    newcomer = _alert(alert_id="a0", score=9.9)
+    live.alerts["a0"] = newcomer       # arrives after the screen: live number 1, never shown
+
+    findings = {f["alert_id"]: f for f in relay.findings_routing()["pull_requests"][0]["findings"]}
+    assert findings["a2"]["position"] == 3 and findings["a2"]["shown_position"] == 2     # the number the person saw
+    assert findings["a0"]["seen"] is False and findings["a0"]["shown_position"] is None
+
+
+def test_a_closed_summary_read_is_not_all_clear(monkeypatch):
+    def unreadable():
+        raise SummaryUnavailable("down")
+    monkeypatch.setattr("src.relay.readmodel.read_summary", unreadable)
+    spoken = relay.release_status()
+    assert "can't check" in spoken and "review console" in spoken
+    assert "move ahead" not in spoken and "no blocking" not in spoken.lower()
+
+
+def test_rejected_findings_that_still_block_are_never_called_all_clear(monkeypatch):
+    summary = ReleaseSummary(held=2, pull_requests=[PullRequestCounts("a/b", 3, 0, 0, "2026-09-24", held=2)])
+    monkeypatch.setattr("src.relay.readmodel.read_summary", lambda: summary)
+    spoken = relay.release_status()
+    assert "move ahead" not in spoken and "2 rejected findings still block" in spoken
+
+
+def test_the_status_offer_names_only_screens_that_exist(one_blocking, monkeypatch):
+    assert "screen" not in relay.release_status()                     # nothing connected: nothing to offer
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [_Conn("laptop")])
+    assert relay.release_status().endswith("Want it on the laptop?")
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [_Conn("laptop"), _Conn("tablet")])
+    assert relay.release_status().endswith("Want it on the laptop or the tablet?")
+    monkeypatch.setattr(relay, "list_all_connections", lambda: [_Conn(n) for n in ("a", "b", "c")])
+    assert relay.release_status().endswith("Want it on a screen?")
+
+
+def test_a_failure_listing_screens_does_not_stop_the_status_answer(one_blocking, monkeypatch):
+    def broken():
+        raise RuntimeError("table down")
+    monkeypatch.setattr(relay, "list_all_connections", broken)
+    assert "1 blocker found" in relay.release_status()
+
+
+def test_a_screen_name_that_is_too_long_to_speak_cannot_break_display_on(one_blocking, monkeypatch):
+    monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": [], "not_connected": True})
+    result = relay.display_on("x" * 500)
+    assert len(result["spoken_response"]) <= SPEECH_CHAR_BUDGET
+
+
+def test_every_tool_decision_leaves_an_audit_line_without_the_reason_text(live, caplog):
+    import logging
+    with caplog.at_level(logging.INFO, logger="ship.relay.audit"):
+        relay.finding_detail("a1")
+        relay.request_risk_acceptance("a1", reason="secret reason words")
+        relay.request_risk_acceptance("a2", reason="")
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "tool=request_risk_acceptance outcome=applied" in text and "outcome=refused" in text and "why=not_seen" in text
+    assert "secret reason words" not in text
 
 
 # --- routing ---
@@ -691,7 +987,7 @@ def test_a_screen_that_is_not_connected_does_not_count_as_having_shown_anything(
 
     assert shown["delivered"] is False
     assert shown["routing"] == []
-    assert result["performed"] is False
+    assert result["performed"] == 0
 
 
 def test_a_delivered_push_returns_routing_with_positions_and_ids_only(one_blocking, session_table, monkeypatch):
@@ -737,3 +1033,29 @@ def test_cancel_pending_drops_the_staged_decisions_without_resolving_anything(tw
     result = relay.cancel_pending("pandayv/micro-finance", 2)
     assert cleared == [("pandayv/micro-finance", 2)] and resolved == []
     assert result["performed"] == 0 and "won't apply" in result["spoken_response"]
+
+
+def test_a_staged_confirmation_that_has_gone_stale_is_not_acted_on(live, pending_table):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
+    pending_table.rows["pandayv/micro-finance#2"]["staged_at"] -= pending_store.STALE_AFTER_SECONDS + 1
+
+    result = relay.proceed("pandayv/micro-finance", 2)
+
+    assert result["performed"] == 0 and live.resolve_calls == []
+    assert "Nothing pending" in result["spoken_response"]
+
+
+def test_a_pending_read_failure_reads_as_nothing_pending_and_resolves_nothing(live, monkeypatch):
+    relay.blocked_pull_requests()
+    relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1", True, "fine and dandy")])
+    monkeypatch.setattr(pending_store, "_table", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert relay.proceed("pandayv/micro-finance", 2)["performed"] == 0 and live.resolve_calls == []
+
+
+def test_a_failed_session_read_fails_closed_for_every_decision_path(live, monkeypatch):
+    relay.blocked_pull_requests()
+    monkeypatch.setattr(session_store, "_table", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert relay.request_risk_acceptance("a1", reason="known internal test fixture")["performed"] == 0
+    assert relay.stage_decisions("pandayv/micro-finance", 2, [_decision("a1")])["performed"] == 0
+    assert live.resolve_calls == []

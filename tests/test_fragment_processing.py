@@ -35,6 +35,8 @@ def _no_network(monkeypatch):
     absent from the environment to stay offline."""
     monkeypatch.setattr("src.api.main.post_pr_comment", lambda *a, **k: True)
     monkeypatch.setattr("src.api.main.sync_pr_check", lambda *a, **k: True)
+    monkeypatch.setattr("src.api.main.fragment_reported", lambda *a: True)
+    monkeypatch.setattr("src.api.main.claim_step", lambda *a: False)      # delivery steps are tested in test_alert_comment_once.py
     # Also the comment builder: it reads real Alert fields, and it is
     # evaluated as an argument to post_pr_comment before the stub above
     # ever sees it. Its own output is covered in test_github_writeback.py.
@@ -181,3 +183,60 @@ def test_fragment_lambda_handler_propagates_process_fragment_failures(monkeypatc
 
     with pytest.raises(RuntimeError, match="simulated failure"):
         fragment_lambda_handler.handler(event, None)
+
+
+# --- every outcome reports to the pull request ---
+
+
+@pytest.fixture
+def checks(monkeypatch):
+    seen = []
+    monkeypatch.setattr("src.api.main.sync_pr_check", lambda *a, **k: seen.append((a, k)) or True)
+    return seen
+
+
+def _no_alert(monkeypatch):
+    monkeypatch.setattr("src.api.main.put_alert", lambda **kwargs: pytest.fail("no finding should be stored"))
+
+
+def test_a_fragment_the_detector_clears_still_reports_to_the_pull_request(monkeypatch, checks):
+    # The webhook posts "pending" on accepting a commit; a clean fragment must still contribute,
+    # or a clean commit would stay pending forever.
+    monkeypatch.setattr("src.api.main.detect", lambda text: DetectorOutput(matched=False))
+    _no_alert(monkeypatch)
+    result = process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "frag", "sha1")
+    assert result["action"] == "pass" and len(checks) == 1
+    assert checks[0][0] == ("pandayv/micro-finance", 1, "sha1") and checks[0][1] == {"final": True}
+
+
+def test_a_fragment_below_the_review_floor_reports_too(monkeypatch, checks):
+    monkeypatch.setattr("src.api.main.detect", lambda text: _matched_output(risk_score=2.0))
+    _no_alert(monkeypatch)
+    assert process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "frag", "sha1")["action"] == "log_warning"
+    assert len(checks) == 1
+
+
+def test_the_check_is_not_final_while_other_fragments_of_the_review_are_outstanding(monkeypatch, checks):
+    monkeypatch.setattr("src.api.main.detect", lambda text: DetectorOutput(matched=False))
+    monkeypatch.setattr("src.api.main.fragment_reported", lambda *a: False)
+    process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "frag", "sha1")
+    assert checks[0][1] == {"final": False}
+
+
+def test_an_unreadable_ledger_leaves_the_check_pending_instead_of_guessing(monkeypatch, checks, caplog):
+    monkeypatch.setattr("src.api.main.detect", lambda text: DetectorOutput(matched=False))
+
+    def broken(*a):
+        raise RuntimeError("throttled")
+
+    monkeypatch.setattr("src.api.main.fragment_reported", broken)
+    with caplog.at_level("ERROR"):
+        process_fragment("pandayv/micro-finance", 1, "loans/apply.py", "frag", "sha1")
+    assert checks[0][1] == {"final": False} and "review ledger" in caplog.text
+
+
+def test_the_local_test_repo_never_consults_the_ledger(monkeypatch, checks):
+    monkeypatch.setattr("src.api.main.detect", lambda text: DetectorOutput(matched=False))
+    monkeypatch.setattr("src.api.main.fragment_reported", lambda *a: pytest.fail("no ledger for local runs"))
+    process_fragment("local-test", 0, "loans/apply.py", "frag", "")
+    assert checks[0][1] == {"final": True}

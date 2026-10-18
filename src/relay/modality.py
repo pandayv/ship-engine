@@ -25,9 +25,10 @@ no assistant's own initiative, and no well-meaning change to a tool's
 implementation can quietly turn Relay into a narrator. The constraint
 lives in the server, where the client cannot argue with it.
 
-The same principle governs what is ABSENT: there is no tool here that
-accepts a compliance risk. See src/relay/server.py for why that absence
-is a feature rather than an unimplemented backlog item.
+The same principle governs what a tool may DO: a tool that decides a finding
+refuses unless the finding was shown on a screen and a reason was given, and
+says so in one sentence. See src/relay/server.py for why that gate, rather than
+"voice can never decide", is the rule.
 """
 
 from __future__ import annotations

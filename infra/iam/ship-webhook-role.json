@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:680160265218:*"
+    },
+    {
+      "Sid": "QueueFragments",
+      "Effect": "Allow",
+      "Action": ["sqs:SendMessage"],
+      "Resource": "arn:aws:sqs:us-west-2:680160265218:ship-fragment-queue"
+    },
+    {
+      "Sid": "GateReadsAndDecidesFindings",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-alerts"
+    },
+    {
+      "Sid": "SummaryAndReviewLedger",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-status"
+    },
+    {
+      "Sid": "ConnectedRepositories",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Scan", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-repos"
+    }
+  ]
+}

@@ -127,24 +127,31 @@ def pipeline_calls(monkeypatch):
 
     class Summary:
         total = 4
-    monkeypatch.setattr(pipeline, "refresh_summary", lambda: Summary())
+    monkeypatch.setattr(pipeline, "refresh_summary", lambda *a, **k: Summary())
+    monkeypatch.setattr(pipeline, "fragment_reported", lambda *a: True)
+    done = set()      # the delivery steps recorded so far, as alert_store would keep them
+    monkeypatch.setattr(pipeline, "claim_step", lambda alert_id, step: (alert_id, step) not in done)
+    monkeypatch.setattr(pipeline, "complete_step", lambda alert_id, step: done.add((alert_id, step)))
+    monkeypatch.setattr(pipeline, "release_step", lambda alert_id, step: None)
     return sent
 
 
-def alert(new):
+def alert(already_notified):
     class A:
         alert_id = "abc"
-        newly_written = new
+        status = "frozen"
+        commented_at = None
+        notified_at = "2026-10-17T00:00:00+00:00" if already_notified else None
     return lambda **kwargs: A()
 
 
 def test_a_newly_recorded_finding_alerts_with_the_open_count(pipeline_calls, monkeypatch):
-    monkeypatch.setattr(pipeline, "put_alert", alert(True))
+    monkeypatch.setattr(pipeline, "put_alert", alert(False))
     pipeline.process_fragment("pandayv/micro-finance", 1, "f.py", "frag", "sha")
     assert pipeline_calls == [("abc", 4)]
 
 
-def test_a_finding_already_on_record_does_not_alert_again(pipeline_calls, monkeypatch):
-    monkeypatch.setattr(pipeline, "put_alert", alert(False))
+def test_a_finding_already_announced_does_not_alert_again(pipeline_calls, monkeypatch):
+    monkeypatch.setattr(pipeline, "put_alert", alert(True))
     pipeline.process_fragment("pandayv/micro-finance", 1, "f.py", "frag", "sha")
     assert pipeline_calls == []

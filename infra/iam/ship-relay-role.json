@@ -1,0 +1,65 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:680160265218:*"
+    },
+    {
+      "Sid": "AlertsReadAndDecide",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-alerts"
+    },
+    {
+      "Sid": "SummaryReadAndRefresh",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-status"
+    },
+    {
+      "Sid": "WhatWasShown",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-recent-reviews"
+    },
+    {
+      "Sid": "StagedDecisions",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-pending-dispositions"
+    },
+    {
+      "Sid": "ScreensConnectedNow",
+      "Effect": "Allow",
+      "Action": ["dynamodb:Scan", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-device-connections"
+    },
+    {
+      "Sid": "ScreensRegisteredForAlerts",
+      "Effect": "Allow",
+      "Action": ["dynamodb:Scan", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-push-subscriptions"
+    },
+    {
+      "Sid": "HoldFindingsForAClosedPage",
+      "Effect": "Allow",
+      "Action": ["dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-pending-display"
+    },
+    {
+      "Sid": "PushToAnOpenPage",
+      "Effect": "Allow",
+      "Action": ["execute-api:ManageConnections"],
+      "Resource": "arn:aws:execute-api:us-west-2:680160265218:9vkr6eelzd/prod/POST/@connections/*"
+    },
+    {
+      "Sid": "WebPushSigningKey",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter"],
+      "Resource": "arn:aws:ssm:us-west-2:680160265218:parameter/ship/webpush/vapid_private"
+    }
+  ]
+}

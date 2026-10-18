@@ -28,11 +28,12 @@ at one would add a moving part for nothing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.relay.modality import Spoken
-from src.storage.alert_store import SEVERITY_BLOCKING, THEME_ORDER, Alert, list_active_alerts, theme_for
-from src.storage.status_store import read_summary
+from src.storage.alert_store import (SEVERITY_BLOCKING, THEME_ORDER, Alert, is_held, is_open, list_gate_alerts,
+                                     theme_for)
+from src.storage.status_store import SummaryUnavailable, read_summary  # noqa: F401 - re-exported for callers
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,9 @@ class PullRequestFindings:
     blocking: int
     review: int
     findings: list[Alert] = field(default_factory=list)
+    # Rejected findings on this PR whose code is still there: decided, so not in
+    # `findings`, but the merge is still blocked by them.
+    held: int = 0
 
     @property
     def total(self) -> int:
@@ -57,6 +61,10 @@ class ReleaseStatus:
     """What voice is allowed to know: counts, and where to look next."""
 
     pull_requests: list[PullRequestFindings]
+    # PRs whose only blockers are rejected findings: nothing to decide there, so they
+    # are not in `pull_requests` (which drives numbering and screens), but the merge
+    # is still blocked.
+    held_only: list[PullRequestFindings] = field(default_factory=list)
 
     @property
     def blocking(self) -> int:
@@ -69,6 +77,10 @@ class ReleaseStatus:
     @property
     def total(self) -> int:
         return self.blocking + self.review
+
+    @property
+    def held(self) -> int:
+        return sum(p.held for p in self.pull_requests) + sum(p.held for p in self.held_only)
 
     @property
     def most_urgent(self) -> PullRequestFindings | None:
@@ -99,7 +111,11 @@ class ReleaseStatus:
         headline material when something is already actively stopping the
         merge.
         """
+        held = self.held
         if self.total == 0:
+            if held:
+                noun, verb = ("finding", "blocks") if held == 1 else ("findings", "block")
+                return Spoken(f"Nothing needs a decision, but {held} rejected {noun} still {verb} the merge until fixed.")
             return Spoken("No blocking issues. Good to move ahead.")
 
         multi_pr = len(self.pull_requests) > 1
@@ -115,7 +131,10 @@ class ReleaseStatus:
             sentence = f"{self.review} {noun} found"
             if multi_pr:
                 sentence += f" across {len(self.pull_requests)} PRs"
-            sentence += ". None blocking. Ready for your review."
+            if held:
+                sentence += f". {held} rejected still {'blocks' if held == 1 else 'block'} the merge."
+            else:
+                sentence += ". None blocking. Ready for your review."
 
         return Spoken(sentence, screen_hint=screen_hint)
 
@@ -161,16 +180,30 @@ def release_status() -> ReleaseStatus:
     """The voice path. Reads the pre-computed summary — one GetItem, no
     aggregation — so response time is independent of how many findings
     exist. See src/storage/status_store.py for why the aggregation happens
-    on the write side instead."""
+    on the write side instead. Raises SummaryUnavailable when the summary cannot be
+    read: the caller must say so, never report it as all clear."""
     summary = read_summary()
-    return ReleaseStatus(pull_requests=[
-        PullRequestFindings(repo=c.repo, pr_number=c.pr_number,
-                            blocking=c.blocking, review=c.review, findings=[])
-        for c in summary.pull_requests
-    ])
+    with_findings = [c for c in summary.pull_requests if c.blocking + c.review]
+    held_only = [c for c in summary.pull_requests if not (c.blocking + c.review) and c.held]
+    make = lambda c: PullRequestFindings(repo=c.repo, pr_number=c.pr_number, blocking=c.blocking,  # noqa: E731
+                                         review=c.review, findings=[], held=c.held)
+    return ReleaseStatus(pull_requests=[make(c) for c in with_findings], held_only=[make(c) for c in held_only])
 
 
-def findings_detail() -> ReleaseStatus:
-    """The screen path. Reads the alerts themselves, because a screen needs
-    the detail the summary deliberately does not carry."""
-    return ReleaseStatus(pull_requests=_group(list_active_alerts()))
+def findings_detail(gate_alerts=None) -> ReleaseStatus:
+    """The screen path. Reads the alerts themselves, because a screen needs the
+    detail the summary deliberately does not carry. `gate_alerts` lets a caller that
+    already read list_gate_alerts() in this request reuse it."""
+    alerts = list_gate_alerts() if gate_alerts is None else gate_alerts
+    open_alerts = [a for a in alerts if is_open(a)]
+    held_counts: dict[tuple[str, int], int] = {}
+    for a in alerts:
+        if is_held(a):
+            held_counts[(a.repo, a.pr_number)] = held_counts.get((a.repo, a.pr_number), 0) + 1
+
+    grouped = _group(open_alerts)
+    with_findings = [replace(p, held=held_counts.get((p.repo, p.pr_number), 0)) for p in grouped]
+    seen = {(p.repo, p.pr_number) for p in grouped}
+    held_only = [PullRequestFindings(repo=r, pr_number=n, blocking=0, review=0, findings=[], held=c)
+                 for (r, n), c in sorted(held_counts.items()) if (r, n) not in seen]
+    return ReleaseStatus(pull_requests=with_findings, held_only=held_only)

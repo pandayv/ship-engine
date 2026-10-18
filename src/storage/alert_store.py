@@ -11,7 +11,27 @@ decisions during a hackathon sprint):
     plain_english_summary, citation, remediation_patch, status
     ("frozen" | "resolved"), severity ("blocking" | "review"), resolution
     ("approved" | "rejected" | None), created_at, resolved_at (ISO 8601
-    strings)
+    strings), plus the bookkeeping attributes described below.
+
+What a decision means for the pull request (one rule, used by every reader):
+  - approved  the person accepted the risk. The finding stops blocking.
+  - rejected  the finding is real. The PR stays blocked (commit status
+              failure) until a later commit no longer contains the flagged
+              fragment. `fragment_key` identifies the fragment independent of
+              the detector verdict; the webhook calls release_fixed_rejections()
+              with the keys still present in the PR, and any rejected finding
+              whose fragment is gone gets `unblocked_at`. A rejected row written
+              before `fragment_key` existed has nothing to compare against, so it
+              is NOT held (it was cleared by the old rule and stays cleared).
+  A rejected finding is decided, so it never reappears as something to review:
+  list_active_alerts() (what a person still has to decide) returns only frozen
+  rows, while list_gate_alerts() also returns the rejected rows still holding a
+  merge, for the status and the summary.
+
+Delivery bookkeeping: `commented_at` / `notified_at` record that the PR comment
+and the Echo notification for a finding went out, each guarded by a short lease
+(`comment_claimed_at` / `notify_claimed_at`) so a retry finishes whichever step
+is missing without repeating the one already done. See claim_step().
 
 Note on status vs. severity: they answer different questions and both are
 needed. `status` is where the alert is in its lifecycle (does it still
@@ -21,10 +41,14 @@ build continues?) — see src/agents/triage.py's three routing bands.
 """
 
 import hashlib
+import logging
+import time
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
+
+log = logging.getLogger(__name__)
 
 TABLE_NAME = "ship-alerts"
 
@@ -94,6 +118,19 @@ class Alert:
     # is gone. Empty for rows written before this field existed, and for
     # local-test runs that never had a real commit.
     head_sha: str = ""
+    # Identifies the flagged code (file + isolated fragment) without the
+    # detector's verdict, so a later commit can tell "this fragment is still
+    # here" from "it was fixed". Empty for rows written before it existed.
+    fragment_key: str = ""
+    # When a rejected finding stopped holding the merge because the commit no
+    # longer contains its fragment (release_fixed_rejections()).
+    unblocked_at: str | None = None
+    # Delivery bookkeeping, see claim_step(). The *_claimed_at values are epoch
+    # seconds of a lease; 0 means unclaimed.
+    commented_at: str | None = None
+    notified_at: str | None = None
+    comment_claimed_at: int = 0
+    notify_claimed_at: int = 0
     # NOT stored. Set by put_alert() on the object it returns: True only when
     # this call created a brand-new row. A re-detection of a finding that is
     # already stored (still frozen, or already resolved by a person) leaves it
@@ -184,9 +221,19 @@ _FLOAT_FIELDS = {f.name for f in fields(Alert) if f.type is float}
 _INT_FIELDS = {f.name for f in fields(Alert) if f.type is int}
 
 
+# Bookkeeping that is absent until it happens. Conditional updates test
+# attribute_not_exists() on these, and DynamoDB counts an explicit NULL as
+# existing, so an unset value must not be written at all.
+_UNSET_UNTIL_SET = ("unblocked_at", "commented_at", "notified_at", "comment_claimed_at", "notify_claimed_at")
+_KNOWN_FIELDS = {f.name for f in fields(Alert)}
+
+
 def _encode_item(alert: Alert) -> dict:
     item = asdict(alert)
     item.pop("newly_written", None)  # a fact about this write, not about the finding
+    for name in _UNSET_UNTIL_SET:
+        if not item.get(name):
+            item.pop(name, None)
     for name in _FLOAT_FIELDS:
         item[name] = Decimal(str(item[name]))  # DynamoDB rejects native float
     return item
@@ -203,13 +250,31 @@ def _decode_item(item: dict) -> dict:
     return item
 
 
+def fragment_key_for(file: str, fragment_text: str) -> str:
+    """Identifies flagged code independent of the detector's verdict (taxonomy,
+    score). Two commits that leave a fragment untouched produce the same key."""
+    return hashlib.sha256(f"{file}#{fragment_text}".encode()).hexdigest()[:32]
+
+
+def _is_conditional_failure(exc: Exception) -> bool:
+    return type(exc).__name__ == "ConditionalCheckFailedException"
+
+
 def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str, risk_score: float,
               plain_english_summary: str, citation: str, remediation_patch: str,
               severity: str = SEVERITY_BLOCKING, head_sha: str = "") -> Alert:
-    # severity is deliberately NOT part of _deterministic_alert_id: a
-    # re-detection of the same violation that scores differently enough to
-    # cross a band boundary must UPDATE that violation's existing row, not
-    # create a second row for the same finding at a different severity.
+    """Records a finding and returns the STORED row.
+
+    A new finding is created with newly_written=True. A finding already on record
+    keeps its row (created_at, delivery bookkeeping, and any decision a person made):
+    while it is still frozen its verdict fields are refreshed, once decided it is
+    left exactly as it is. Either way the caller gets what is stored, so a retry can
+    see which delivery steps are still missing.
+
+    severity is deliberately NOT part of _deterministic_alert_id: a re-detection of
+    the same violation that scores differently enough to cross a band boundary must
+    UPDATE that violation's existing row, not create a second row for the same
+    finding at a different severity."""
     alert = Alert(
         alert_id=_deterministic_alert_id(repo, pr_number, file, taxonomy_id, fragment_text),
         repo=repo,
@@ -224,34 +289,52 @@ def put_alert(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_t
         created_at=datetime.now(timezone.utc).isoformat(),
         severity=severity,
         head_sha=head_sha,
+        fragment_key=fragment_key_for(file, fragment_text),
     )
-    item = _encode_item(alert)
     try:
-        # Guard the idempotent write itself: a retry/redelivery for a
-        # violation a human already resolved must NOT silently re-freeze
-        # it and erase their decision. Only write if the row doesn't exist
-        # yet, or still is (unresolved).
-        # ReturnValues="ALL_OLD" is DynamoDB's own, atomic answer to "was a
-        # row already here?": the old item comes back if there was one.
-        # Reading first and writing second would race with a concurrent fragment.
-        response = _table().put_item(
-            Item=item,
-            ConditionExpression="attribute_not_exists(alert_id) OR #s = :frozen",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":frozen": "frozen"},
-            ReturnValues="ALL_OLD",
-        )
-        alert.newly_written = not (response or {}).get("Attributes")
+        # Create only. attribute_not_exists is DynamoDB's own atomic answer to "was
+        # a row already here?"; reading first and writing second would race with a
+        # concurrent fragment.
+        _table().put_item(Item=_encode_item(alert), ConditionExpression="attribute_not_exists(alert_id)")
+        alert.newly_written = True
+        return alert
     except Exception as e:
-        if type(e).__name__ == "ConditionalCheckFailedException":
-            # Already resolved by a human — a retry re-detecting the same
-            # violation is not an error, just a no-op on the stored state.
-            return alert
-        raise
-    return alert
+        if not _is_conditional_failure(e):
+            raise
+
+    # Already on record. Refresh the verdict while a person has not yet decided it;
+    # a retry/redelivery for a violation already resolved must NOT re-freeze it or
+    # erase their decision.
+    try:
+        response = _table().update_item(
+            Key={"alert_id": alert.alert_id},
+            UpdateExpression=(
+                "SET risk_score = :score, severity = :severity, plain_english_summary = :summary, "
+                "citation = :citation, remediation_patch = :patch, head_sha = :sha, fragment_key = :fkey"
+            ),
+            ConditionExpression="#s = :frozen",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":score": Decimal(str(risk_score)), ":severity": severity, ":summary": plain_english_summary,
+                ":citation": citation, ":patch": remediation_patch, ":sha": head_sha,
+                ":fkey": alert.fragment_key, ":frozen": "frozen",
+            },
+            ReturnValues="ALL_NEW",
+        )
+        return _row_to_alert(response["Attributes"])
+    except Exception as e:
+        if not _is_conditional_failure(e):
+            raise
+    stored = get_alert(alert.alert_id)
+    return stored if stored is not None else alert
 
 
 def _scan_all(**scan_kwargs) -> list[dict]:
+    # Every caller feeds a gate decision, the summary Relay speaks, or a screen a
+    # person decides from, so the read is strongly consistent: a decision made a
+    # moment ago must be in it. (Costs twice the read units of an eventually
+    # consistent scan, on a table of tens of rows.)
+    scan_kwargs.setdefault("ConsistentRead", True)
     # finding #14: DynamoDB Scan reads at most 1MB BEFORE applying
     # FilterExpression, then returns LastEvaluatedKey if more of the table
     # remains to be scanned - a single, unpaginated .scan() silently
@@ -296,16 +379,48 @@ def _row_to_alert(item: dict) -> Alert:
     # reason still went to the PR comment at the time, just not here.
     item.setdefault("resolution_reason", "")
     item.setdefault("resolved_by", "")
-    return Alert(**item)
+    # Attributes a newer writer added are ignored rather than crashing an older reader.
+    return Alert(**{k: v for k, v in item.items() if k in _KNOWN_FIELDS})
+
+
+# --- what blocks a merge: one definition, used by the commit status, the
+# summary Relay speaks and the screens ---
+
+
+def is_open(alert: Alert) -> bool:
+    """Still waiting for a person's decision."""
+    return alert.status != "resolved"
+
+
+def is_held(alert: Alert) -> bool:
+    """Decided "reject" and the flagged code is still in the PR: the merge stays
+    blocked until a commit removes it (see release_fixed_rejections). Not something
+    left to review: the person already decided."""
+    return (alert.status == "resolved" and alert.resolution == "rejected"
+            and bool(alert.fragment_key) and not alert.unblocked_at)
 
 
 def list_active_alerts() -> list[Alert]:
+    """Findings still waiting for a decision (frozen)."""
     items = _scan_all(
         FilterExpression="#s = :status",
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":status": "frozen"},
     )
     return [_row_to_alert(i) for i in items]
+
+
+def list_gate_alerts() -> list[Alert]:
+    """Everything that can block a merge right now, in one scan: findings waiting
+    for a decision plus rejected findings whose code is still in the PR. Split them
+    with is_open() / is_held()."""
+    items = _scan_all(
+        FilterExpression="#s = :frozen OR (#s = :resolved AND #res = :rejected AND attribute_exists(#fk) "
+                         "AND attribute_not_exists(#ub))",
+        ExpressionAttributeNames={"#s": "status", "#res": "resolution", "#fk": "fragment_key", "#ub": "unblocked_at"},
+        ExpressionAttributeValues={":frozen": "frozen", ":resolved": "resolved", ":rejected": "rejected"},
+    )
+    return [a for a in (_row_to_alert(i) for i in items) if is_open(a) or is_held(a)]
 
 
 def list_resolved_alerts() -> list[Alert]:
@@ -325,9 +440,8 @@ def list_resolved_alerts() -> list[Alert]:
 
 def list_alerts_for_pr(repo: str, pr_number: int) -> list[Alert]:
     """
-    Every alert for one PR, resolved ones included — the caller needs the
-    resolved rows to tell "decided and cleared" from "never found anything"
-    (src/api/github_writeback.py's sync_pr_check filters on status itself).
+    Every alert for one PR, resolved ones included (src/api/github_writeback.py's
+    derive_commit_status() decides which of them still block).
 
     A Scan with a filter rather than a Query because alert_id is the only
     key on this table. Correct, and fine at the scale this runs at; a
@@ -345,7 +459,8 @@ def list_alerts_for_pr(repo: str, pr_number: int) -> list[Alert]:
 
 
 def get_alert(alert_id: str) -> Alert | None:
-    item = _table().get_item(Key={"alert_id": alert_id}).get("Item")
+    # Consistent: this feeds decisions (is it still frozen? what did it say?).
+    item = _table().get_item(Key={"alert_id": alert_id}, ConsistentRead=True).get("Item")
     return _row_to_alert(item) if item else None
 
 
@@ -379,11 +494,96 @@ def resolve_alert(alert_id: str, approved: bool, reason: str = "", resolved_by: 
             },
         )
     except Exception as e:
-        if type(e).__name__ == "ConditionalCheckFailedException":
+        if _is_conditional_failure(e):
             raise AlertNotFoundOrAlreadyResolved(
                 f"alert_id {alert_id!r} does not exist or is not currently frozen"
             ) from e
         raise
+
+
+def release_fixed_rejections(repo: str, pr_number: int, present_fragment_keys: set[str]) -> int:
+    """A rejected finding holds the merge until the code changes. Called when a
+    commit is processed with the fragment keys the PR still contains: every
+    held finding for this PR whose fragment is no longer among them stops
+    blocking. Returns how many were released.
+
+    The rule is deliberately about the code, not about time or about the
+    detector: a fragment that is still there stays blocked even if a later
+    detector run would score it differently, because a person already said it is
+    real. A fragment that changed at all gets a new key, is judged again as a new
+    finding, and blocks again if it still violates."""
+    released = 0
+    for alert in list_alerts_for_pr(repo, pr_number):
+        if not is_held(alert) or alert.fragment_key in present_fragment_keys:
+            continue
+        try:
+            _table().update_item(
+                Key={"alert_id": alert.alert_id},
+                UpdateExpression="SET unblocked_at = :now",
+                ConditionExpression="#res = :rejected AND attribute_not_exists(unblocked_at)",
+                ExpressionAttributeNames={"#res": "resolution"},
+                ExpressionAttributeValues={":now": datetime.now(timezone.utc).isoformat(), ":rejected": "rejected"},
+            )
+            released += 1
+        except Exception as e:
+            if not _is_conditional_failure(e):
+                raise
+    return released
+
+
+# --- delivery bookkeeping: send the comment / the notification once ---
+
+# step -> (attribute that records it was sent, attribute holding the in-flight lease)
+_STEPS = {"comment": ("commented_at", "comment_claimed_at"), "notify": ("notified_at", "notify_claimed_at")}
+CLAIM_LEASE_SECONDS = 300
+
+
+def claim_step(alert_id: str, step: str) -> bool:
+    """Takes the right to perform one delivery step ("comment" or "notify") for a
+    finding. True means the caller should send it and then call complete_step(); False
+    means it is already done or another invocation is mid-send.
+
+    A lease, not a permanent claim: if the invocation dies after claiming, the lease
+    runs out and a retry sends it. Marking only AFTER a successful send is what makes a
+    failed POST or a crash retryable; the lease is what stops two live invocations
+    sending it twice. The unlucky window (sent, then died before complete_step) can
+    repeat a message once, never lose it."""
+    done, claimed = _STEPS[step]
+    now = int(time.time())
+    try:
+        _table().update_item(
+            Key={"alert_id": alert_id},
+            UpdateExpression=f"SET {claimed} = :now",
+            ConditionExpression=(f"attribute_exists(alert_id) AND attribute_not_exists({done}) "
+                                 f"AND (attribute_not_exists({claimed}) OR {claimed} < :stale)"),
+            ExpressionAttributeValues={":now": now, ":stale": now - CLAIM_LEASE_SECONDS},
+        )
+        return True
+    except Exception as e:
+        if not _is_conditional_failure(e):
+            log.exception("could not claim the %s step for %s", step, alert_id)
+        return False
+
+
+def complete_step(alert_id: str, step: str) -> None:
+    done, claimed = _STEPS[step]
+    try:
+        _table().update_item(
+            Key={"alert_id": alert_id},
+            UpdateExpression=f"SET {done} = :now REMOVE {claimed}",
+            ExpressionAttributeValues={":now": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        log.exception("sent the %s for %s but could not record it: a retry may send it again", step, alert_id)
+
+
+def release_step(alert_id: str, step: str) -> None:
+    """The send failed: give the lease back so the next attempt can try at once."""
+    _, claimed = _STEPS[step]
+    try:
+        _table().update_item(Key={"alert_id": alert_id}, UpdateExpression=f"REMOVE {claimed}")
+    except Exception:
+        log.exception("could not release the %s lease for %s", step, alert_id)
 
 
 if __name__ == "__main__":

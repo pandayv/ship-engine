@@ -33,3 +33,26 @@ self.addEventListener("notificationclick", (event) => {
     await self.clients.openWindow(url);
   })());
 });
+
+// The browser can replace a push subscription (it expires, or site data is cleared). SHIP's copy of
+// the old address then stops working. Take a new one under the same key and tell any open page, which
+// files it with SHIP the next time it registers. The key is not repeated here: the browser hands
+// the old subscription's own key to this event.
+//
+// If the browser gives no key, or subscribing fails, nothing is guessed. The page notices on its next
+// visit that it has permission but no subscription and offers to turn alerts on again.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil((async () => {
+    const options = event.oldSubscription && event.oldSubscription.options;
+    const key = options && options.applicationServerKey;
+    let resubscribed = false;
+    if (key) {
+      try {
+        await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        resubscribed = true;
+      } catch { /* the page offers to turn alerts on again */ }
+    }
+    const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    pages.forEach((page) => page.postMessage({ type: "ship-subscription-changed", resubscribed }));
+  })());
+});

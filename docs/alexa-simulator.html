@@ -208,16 +208,10 @@ footer a { color: inherit; }
     <div class="presets">
       <button class="preset" data-q="Alexa, what's up?">"What's up?"</button>
       <button class="preset" data-q="Alexa, can we ship today?">"Can we ship today?"</button>
-      <button class="preset" data-q="Alexa, approve it.">"Approve it." (tries the risk-acceptance tool)</button>
+      <button class="preset" data-q="Alexa, approve it.">"Approve it." (see why it needs more than that)</button>
     </div>
 
-    <div class="surface-offer" id="surfaceOffer">
-      <button data-surface="tv">📺 TV</button>
-      <button data-surface="tablet">📱 Tablet</button>
-      <button data-surface="laptop">💻 Laptop</button>
-      <button data-surface="fridge">🧊 Fridge</button>
-      <button data-surface="here">Show here</button>
-    </div>
+    <div class="surface-offer" id="surfaceOffer" aria-label="Screens"></div>
   </div>
 
   <div class="screen-wrap" id="screenWrap">
@@ -285,6 +279,33 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+const DECISION_NOTE = "A decision needs the finding shown on a screen, a reason in your own words, and a confirmation. " +
+  "Say it to the Echo, or use the review console. This page shows status and screens only.";
+
+// The screens that are really set up, as Relay reports them. Nothing is offered that is not there.
+async function offerScreens() {
+  let screens = [];
+  try {
+    const r = await callTool("connected_screens", {});
+    screens = (r.payload && Array.isArray(r.payload.screens)) ? r.payload.screens : [];
+  } catch (err) {
+    addBubble("assistant", "Couldn't check which screens are set up: " + esc(err.message));
+  }
+  surfaceOffer.textContent = "";
+  for (const name of screens) {
+    const b = document.createElement("button");
+    b.dataset.surface = name;
+    b.textContent = name;
+    surfaceOffer.appendChild(b);
+  }
+  const here = document.createElement("button");
+  here.dataset.surface = "here";
+  here.textContent = "Show here";
+  surfaceOffer.appendChild(here);
+  if (!screens.length) addBubble("assistant", "No screen is set up right now. I can show it here.");
+  surfaceOffer.classList.add("show");
+}
+
 async function ask() {
   const q = askInput.value.trim();
   if (!q) return;
@@ -297,28 +318,24 @@ async function ask() {
 
   try {
     if (wantsApprove) {
-      // No spoken query resolves this locally to a specific alert_id in
-      // the simulator — in the real product a voice session would carry
-      // the alert from context. For the demo, this calls the SAME tool
-      // Relay actually exposes with a representative id, to show the
-      // real refusal path live, not a scripted one.
-      const r = await callTool("request_risk_acceptance", { alert_id: "demo" });
+      // Nothing is sent to Relay: a real decision is stage_decisions with finding ids and a reason, then
+      // proceed once confirmed, and this page has neither the person's reason nor their confirmation.
       thinking.remove();
-      addBubble("assistant", esc(r.payload.spoken_response));
-      deviceStatus.textContent = "Refused — a compliance decision needs a written reason, not a voice command";
-      ring.classList.remove("alert");
+      addBubble("assistant", esc(DECISION_NOTE));
+      deviceStatus.textContent = "Decisions are made by voice on the Echo or in the review console";
     } else {
       const r = await callTool("release_status", {});
       thinking.remove();
       const spoken = r.text;
       addBubble("assistant", "<b>Alexa</b> — " + esc(spoken));
-      // Relay's all-clear sentence is "No blocking issues. Good to move ahead."
-      // Any other sentence ("N blockers found...", "N issues found...") means
-      // something is waiting for a person.
-      const waiting = !/^no blocking issues/i.test(spoken);
-      ring.classList.toggle("alert", waiting);
-      deviceStatus.textContent = waiting ? "Findings waiting — choose a screen to see them" : "All clear";
-      if (/screen/i.test(spoken)) surfaceOffer.classList.add("show");
+      // Relay's all-clear sentence is "No blocking issues. Good to move ahead." If the count could not
+      // be read it says "I can't check right now." Anything else means something is waiting or blocking.
+      const unavailable = /can't check/i.test(spoken);
+      const clear = /^no blocking issues/i.test(spoken);
+      ring.classList.toggle("alert", !clear && !unavailable);
+      deviceStatus.textContent = unavailable ? "Couldn't read the status — open the review console"
+        : clear ? "All clear" : "Findings waiting — choose a screen to see them";
+      if (!clear && !unavailable) await offerScreens();
     }
   } catch (err) {
     thinking.remove();
@@ -330,13 +347,20 @@ async function ask() {
 
 async function showOn(surface) {
   surfaceOffer.classList.remove("show");
-  const label = { tv: "Fire TV", laptop: "Laptop", here: "This device" }[surface] || surface;
-  addBubble("assistant", "Putting it on your " + esc(label.toLowerCase()) + "…");
+  const label = surface === "here" ? "This device" : surface;
 
   try {
-    await callTool("display_on", { surface });
-    const r = await callTool("blocked_pull_requests", {});
-    renderScreen(label, r.payload);
+    // Relay says whether a screen actually received it. Findings count as seen only if one did.
+    const shown = await callTool("display_on", { surface });
+    const outcome = shown.payload || {};
+    addBubble("assistant", esc(outcome.spoken_response || "Okay."));
+    if (surface === "here" && outcome.delivered) {
+      // The caller renders its own copy for "here"; fetching it is what a screen does.
+      const r = await callTool("blocked_pull_requests", {});
+      renderScreen(label, r.payload);
+    } else if (outcome.delivered) {
+      deviceStatus.textContent = "Sent to the " + surface + " — look there, then decide by voice";
+    }
   } catch (err) {
     addBubble("assistant", "Couldn't load the screen: " + esc(err.message));
   }

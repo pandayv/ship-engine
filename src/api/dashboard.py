@@ -181,8 +181,9 @@ def _resolve(alert_id: str, request: Request, token: str | None, approved: bool,
         comment_for_decision(alert, accepted=approved, reason=reason, who=_reviewer_name()),
     )
     sync_pr_check(alert.repo, alert.pr_number, alert.head_sha)
-    # A resolved finding changes what Relay should say next time it is
-    # asked, so the summary is refreshed here too.
+    # A decided finding changes what Relay should say next time it is
+    # asked (an approval stops blocking; a rejection stops being a question but
+    # still holds the merge), so the summary is refreshed here too.
     refresh_summary()
 
     resp = RedirectResponse(url="/dashboard", status_code=303)
@@ -210,7 +211,10 @@ def view_history(request: Request, token: str | None = Query(default=None)):
     if not _authenticated(request, token):
         return RedirectResponse(url="/dashboard/login?next=/dashboard/history", status_code=303)
     alerts = alert_store.list_resolved_alerts()
-    resp = templates.TemplateResponse(request, "gate_history.html", {"alerts": alerts})
+    # A rejected finding keeps its pull request blocked until the code changes; say so on
+    # the row instead of leaving it to read like a closed item.
+    held = {a.alert_id for a in alerts if alert_store.is_held(a)}
+    resp = templates.TemplateResponse(request, "gate_history.html", {"alerts": alerts, "held": held})
     _set_session(resp, request, token)
     return resp
 

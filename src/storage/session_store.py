@@ -47,6 +47,8 @@ TABLE_NAME = "ship-recent-reviews"
 # empty, wrong-schema table is harmless to leave orphaned (on-demand
 # billing, zero items, zero cost).
 RECENT_WINDOW_SECONDS = 600  # 10 minutes
+# For a future DynamoDB TTL on `expires_at`; the window above is what the code enforces.
+EXPIRY_SECONDS = 3600
 
 
 @lru_cache(maxsize=1)
@@ -77,27 +79,47 @@ def create_table_if_not_exists() -> None:
     client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
 
 
-def mark_shown(alert_id: str) -> None:
+def mark_shown(alert_id: str, position: int | None = None) -> None:
     """Best-effort by design, same reasoning as repo_store.mark_event_seen():
     this is the UX gate, not the compliance record — a resolve_alert() call
     that follows this is what's durably written to ship-alerts regardless
-    of whether this bookkeeping succeeds."""
+    of whether this bookkeeping succeeds.
+
+    `position` is the number the finding had on the screen that displayed it. A
+    spoken "the second one" means the number the person SAW, and live positions shift
+    when findings arrive or are decided, so the displayed number is kept with the
+    record of having been shown (see findings_routing in src/relay/server.py)."""
+    now = int(time.time())
+    item = {"alert_id": alert_id, "shown_at": now, "expires_at": now + EXPIRY_SECONDS}
+    if position is not None:
+        item["position"] = int(position)
     try:
-        _table().put_item(Item={"alert_id": alert_id, "shown_at": int(time.time())})
+        _table().put_item(Item=item)
     except Exception:
-        log.warning("could not record %s as shown", alert_id)
+        log.warning("could not record %s as shown", alert_id, exc_info=True)
+
+
+def recent_view(alert_id: str) -> dict | None:
+    """{"shown_at": int, "position": int | None} if this alert was shown within the
+    window, else None. Fails closed, same reasoning as repo_store.is_watched()'s
+    SECURITY NOTE: a datastore error here must read as "not reviewed," never as
+    "reviewed" — the failure mode that matters is a blind approval slipping
+    through, not an extra trip to Gate. The read is strongly consistent: a view
+    recorded a moment ago must count."""
+    try:
+        item = _table().get_item(Key={"alert_id": alert_id}, ConsistentRead=True).get("Item")
+        if not item:
+            return None
+        shown_at = int(item["shown_at"])
+        if (int(time.time()) - shown_at) > RECENT_WINDOW_SECONDS:
+            return None
+        position = item.get("position")
+        return {"shown_at": shown_at, "position": int(position) if position is not None else None}
+    except Exception:
+        log.warning("could not check whether %s was shown recently — treating as not reviewed",
+                    alert_id, exc_info=True)
+        return None
 
 
 def was_shown_recently(alert_id: str) -> bool:
-    """Fails closed, same reasoning as repo_store.is_watched()'s SECURITY
-    NOTE: a datastore error here must read as "not reviewed," never as
-    "reviewed" — the failure mode that matters is a blind approval slipping
-    through, not an extra trip to Gate."""
-    try:
-        item = _table().get_item(Key={"alert_id": alert_id}).get("Item")
-        if not item:
-            return False
-        return (int(time.time()) - int(item["shown_at"])) <= RECENT_WINDOW_SECONDS
-    except Exception:
-        log.warning("could not check whether %s was shown recently — treating as not reviewed", alert_id)
-        return False
+    return recent_view(alert_id) is not None

@@ -1,0 +1,56 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:680160265218:*"
+    },
+    {
+      "Sid": "ConsumeTheFragmentQueue",
+      "Effect": "Allow",
+      "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+      "Resource": "arn:aws:sqs:us-west-2:680160265218:ship-fragment-queue"
+    },
+    {
+      "Sid": "AskDetector",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
+      "Resource": ["arn:aws:bedrock-agentcore:us-west-2:680160265218:runtime/*"]
+    },
+    {
+      "Sid": "RecordFindingsAndDeliveryProgress",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-alerts"
+    },
+    {
+      "Sid": "SummaryAndReviewLedger",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-status"
+    },
+    {
+      "Sid": "MarkRepositoryReviewed",
+      "Effect": "Allow",
+      "Action": ["dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-repos"
+    },
+    {
+      "Sid": "WhoToChime",
+      "Effect": "Allow",
+      "Action": ["dynamodb:Scan"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-alexa-users"
+    },
+    {
+      "Sid": "SkillCredentialsForTheChime",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter"],
+      "Resource": [
+        "arn:aws:ssm:us-west-2:680160265218:parameter/ship/alexa/client_id",
+        "arn:aws:ssm:us-west-2:680160265218:parameter/ship/alexa/client_secret"
+      ]
+    }
+  ]
+}

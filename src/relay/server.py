@@ -11,8 +11,8 @@ whole budget.
 
 WHAT VOICE CANNOT DO, AND WHY THAT IS THE POINT
 
-Voice cannot accept a compliance risk BLIND. It can confirm one, once a
-person has actually looked at the finding on a screen.
+Voice cannot decide a compliance finding BLIND. It can confirm a decision, once a
+person has actually looked at the finding on a screen and given a reason.
 
 The first version of this rule was simpler and wrong: no tool here would
 ever accept a risk by voice, full stop. Revisited directly (2026-09-28) —
@@ -27,7 +27,7 @@ what still must never work, is "ignore it, go ahead" with no review at
 all — that is the actual TLGP-002 shape (an AI-mediated decision with no
 human checkpoint), not "the confirmation channel was a microphone."
 
-So `request_risk_acceptance` checks one real, server-side fact before
+So the decision tools check one real, server-side fact before
 doing anything: was a screen tool (blocked_pull_requests / finding_detail)
 called for THIS alert_id recently — see src/storage/session_store.py. No:
 refused, exactly as before, redirected to Gate. Yes, and a reason was
@@ -36,6 +36,14 @@ record, same durability Gate's own resolve gives it. The reason is still
 required either way — dropping that would trade a real audit trail for a
 bare yes/no flag, which is the one piece of the original design worth
 keeping regardless of channel.
+
+The same two facts gate the batch path (stage_decisions, then proceed), checked
+again at commit time. Decisions name a finding by its alert_id, never by a live
+position: the number a person speaks is the number the screen showed, and findings
+that arrive or get decided between the screen and the sentence would otherwise shift
+"the second one" onto a different finding. Approve accepts the risk and the finding
+stops blocking; reject says the finding is real, so the PR stays blocked until the
+code changes (see src/api/github_writeback.py).
 
 That check is keyed on the alert, by a time window, not on an MCP session
 — a real correction, not the original design. The first version keyed on
@@ -73,6 +81,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -80,7 +89,8 @@ from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 
 from src.api.github_writeback import comment_for_decision, post_pr_comment, sync_pr_check
-from src.relay.modality import Modality, Spoken
+from src.relay.audit import audit
+from src.relay.modality import SPEECH_CHAR_BUDGET, Modality, Spoken
 from src.relay.push import push_to_device
 from src.relay import webpush
 from src.storage import push_store
@@ -88,8 +98,9 @@ from src.storage.device_store import list_all_connections
 from src.relay.readmodel import findings_detail as _findings_detail
 from src.relay.readmodel import release_status as _release_status
 from src.storage import pending_store, session_store
-from src.storage.alert_store import SEVERITY_BLOCKING, get_alert, resolve_alert, theme_for
-from src.storage.status_store import refresh_summary
+from src.storage.alert_store import (SEVERITY_BLOCKING, AlertNotFoundOrAlreadyResolved, get_alert, list_gate_alerts,
+                                     resolve_alert, theme_for)
+from src.storage.status_store import SummaryUnavailable, refresh_summary
 
 log = logging.getLogger(__name__)
 
@@ -139,11 +150,19 @@ INSTRUCTIONS = (
     "Use release_status for any spoken answer — it is one sentence and is the only "
     "tool safe to read aloud. Never read findings, citations or code aloud: call "
     "blocked_pull_requests or finding_detail and render the result on a screen. "
-    "Accepting a compliance risk needs both a reason and the finding having "
-    "already been shown on a screen in this same conversation — call "
-    "request_risk_acceptance with a reason once both are true; if either isn't, "
-    "it returns the console to open instead of performing anything."
+    "To decide findings, each needs to have been shown on a screen recently and a "
+    "reason in the person's own words: call stage_decisions with each finding's "
+    "alert_id, approved (true accepts the risk, false rejects it: the PR stays "
+    "blocked until the code changes) and reason, then proceed once the person "
+    "confirms. request_risk_acceptance approves one finding in a single step under "
+    "the same two conditions; if either isn't met it returns the console to open "
+    "instead of performing anything."
 )
+
+# A reason is the audit record; it is written to the alert and to the pull request.
+# Voice reasons are a sentence. Longer than this is refused rather than cut: a
+# shortened reason is no longer the person's reason.
+MAX_REASON_CHARS = 500
 
 
 def _console(path: str = "") -> str:
@@ -153,15 +172,49 @@ def _console(path: str = "") -> str:
 # --- tool logic: plain functions, no I/O at import, registered by create_app() ---
 
 
+def _screen_names() -> list[str]:
+    """Every screen that can be reached: a page that is open now, or one registered for
+    alerts. Shared by connected_screens() and the status sentence's hint."""
+    live = {c.device_name for c in list_all_connections()}
+    try:
+        registered = push_store.subscribed_device_names()
+    except Exception:  # noqa: BLE001 - the live screens still count if the registry cannot be read
+        log.exception("could not read the registered screens")
+        registered = set()
+    return sorted(live | registered)
+
+
+def _screen_hint(names: list[str] | None) -> str | None:
+    """The question that ends a status sentence, naming only what exists. None when
+    nothing is connected (there is nothing to offer) or when that could not be read."""
+    if not names:
+        return None
+    short = [n for n in names if len(n) <= 20]
+    if len(names) == 1 and short:
+        return f"Want it on the {short[0]}?"
+    if len(names) == 2 and len(short) == 2:
+        return f"Want it on the {short[0]} or the {short[1]}?"
+    return "Want it on a screen?"
+
+
 def release_status() -> str:
     """Whether anything is currently blocking a release, as one short spoken
     sentence. SAFE TO READ ALOUD. Returns counts and which pull request to
     look at first — never a list of findings, never a citation. Use this for
-    "is anything blocked", "can we ship", "what's going on with my release"."""
-    status = _release_status()
+    "is anything blocked", "can we ship", "what's going on with my release".
+    If the count cannot be read it says so; it never reports all clear on a failed read."""
+    try:
+        status = _release_status()
+    except SummaryUnavailable:
+        audit("release_status", "unavailable", why="summary_unreadable")
+        return Spoken("I can't check right now. Open the review console.").to_text()
     hint = None
     if status.total:
-        hint = "Want it on a screen?"
+        try:
+            hint = _screen_hint(_screen_names())
+        except Exception:  # noqa: BLE001 - the answer matters more than the offer
+            log.exception("could not list the screens for the status hint")
+    audit("release_status", "answered", blocking=status.blocking, review=status.review, held=status.held)
     return status.to_spoken(screen_hint=hint).to_text()
 
 
@@ -173,16 +226,22 @@ def _findings_payload(status) -> dict:
     pending disposition, if any is currently staged for that PR (see
     src/storage/pending_store.py) — "position" is never recomputed from a
     live pending record, it comes from the same stable ordering
-    readmodel._group() already produced, pending or not."""
+    readmodel._group() already produced, pending or not.
+
+    `type` names the message for pages that dispatch on it; `held` lists pull requests
+    that a rejected finding still blocks, so a screen never says "all clear" about them."""
     pending_by_pr = {
         (pr.repo, pr.pr_number): {d["alert_id"]: d for d in (pending_store.get_pending(pr.repo, pr.pr_number) or [])}
         for pr in status.pull_requests
     }
     return {
+        "type": "findings",
         "modality": Modality.SCREEN.value,
         "display_only": True,
         "summary": {"blocking": status.blocking, "flagged": status.review,
-                    "pull_requests": len(status.pull_requests)},
+                    "pull_requests": len(status.pull_requests), "held": status.held},
+        "held": [{"repo": pr.repo, "pr_number": pr.pr_number, "count": pr.held}
+                 for pr in [*status.pull_requests, *status.held_only] if pr.held],
         "pull_requests": [
             {
                 "repo": pr.repo,
@@ -216,12 +275,12 @@ def _findings_payload(status) -> dict:
 
 
 def _mark_shown(status) -> None:
-    """Records every finding in `status` as recently shown. Call this only once
-    a screen has actually received them: the voice gate treats "shown" as
-    "a person could have read it"."""
+    """Records every finding in `status` as recently shown, with the number it has on
+    that screen. Call this only once a screen has actually received them: the voice
+    gate treats "shown" as "a person could have read it"."""
     for pr in status.pull_requests:
-        for f in pr.findings:
-            session_store.mark_shown(f.alert_id)
+        for i, f in enumerate(pr.findings, start=1):
+            session_store.mark_shown(f.alert_id, position=i)
 
 
 def _routing(status) -> list[dict]:
@@ -246,6 +305,7 @@ def blocked_pull_requests() -> dict:
     """Every pull request with unresolved findings, with counts and the
     findings themselves. SCREEN ONLY — this is a list and must be displayed,
     never spoken. Use after release_status when the person asks to see detail.
+    Each finding carries its alert_id and the number shown on screen.
 
     Calling this records every returned alert as recently shown — see
     request_risk_acceptance and src/storage/session_store.py. That is a
@@ -287,52 +347,98 @@ def finding_detail(alert_id: str) -> dict:
 
 def _resolve_one(alert, approved: bool, reason: str) -> None:
     """Shared by request_risk_acceptance and proceed() — the one place a
-    voice-driven resolution actually happens, so both the single-finding
-    and batch paths write back to the PR the same way Gate's web console
-    already does (comment + commit-status sync), not two implementations
-    that could quietly drift. Before this, request_risk_acceptance only
-    called resolve_alert() — the decision was durably recorded in
-    ship-alerts but never reached GitHub at all, found while building the
-    batch path, fixed here rather than left inconsistent between the two
-    tools. Both calls fail soft, same as the web path (see
-    src/api/github_writeback.py) — the decision stands either way."""
+    voice-driven resolution is recorded and announced on the PR, so both the
+    single-finding and batch paths write back the way Gate's web console does,
+    not two implementations that could quietly drift. Approve accepts the risk;
+    reject keeps the PR blocked (see src/api/github_writeback.py).
+
+    This records the decision and comments. The commit status and the summary are
+    refreshed by _write_back(), once per request, after every decision in the request
+    has landed. The comment fails soft, same as the web path — the decision stands
+    either way. Raises AlertNotFoundOrAlreadyResolved if someone decided it first."""
     resolve_alert(alert.alert_id, approved=approved, reason=reason, resolved_by="voice")
     post_pr_comment(
         alert.repo, alert.pr_number,
         comment_for_decision(alert, accepted=approved, reason=reason, who="voice"),
     )
-    sync_pr_check(alert.repo, alert.pr_number, alert.head_sha)
+
+
+def _write_back(decided: list):
+    """After decisions landed: ONE read of everything that can block a merge, shared by
+    the commit status of each affected PR and the release summary Relay speaks. Returns
+    that read (None if it failed) so a following screen push can reuse it instead of
+    scanning again. Per request only, never cached: it is a gate decision."""
+    try:
+        gate = list_gate_alerts()
+    except Exception:  # noqa: BLE001 - each callee reads for itself when given None
+        log.exception("could not read the gate alerts after a decision")
+        gate = None
+    for repo, pr, sha in sorted({(a.repo, a.pr_number, a.head_sha) for a in decided}):
+        sync_pr_check(repo, pr, sha, alerts=gate)
+    refresh_summary(gate)
+    return gate
+
+
+def _refusal(tool: str, why: str, spoken: str, repo: str | None = None, pr_number: int | None = None,
+             alert_ids=None, **extra) -> dict:
+    """One shape for 'did nothing, here is the honest reason'. Builds the spoken text
+    first, so an over-long sentence fails before anything has happened."""
+    audit(tool, "refused", repo, pr_number, alert_ids, why)
+    return {
+        "modality": Modality.ACTION.value,
+        "performed": 0,
+        "refusal": why,
+        "spoken_response": Spoken(spoken).to_text(),
+        "console_url": _console("/dashboard"),
+        **extra,
+    }
 
 
 def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
-    """Called when someone asks to approve, accept, override or clear a
-    blocking finding. Only completes if BOTH are true: blocked_pull_requests
-    or finding_detail was called for this exact alert_id within the last
-    ten minutes (so the person has actually seen it on a screen recently,
-    not just heard a count), and a reason was given. Missing either:
-    refused, and this tool never performs it — returns where the decision
-    must be made instead. If the person hasn't reviewed it yet, offer to
-    show it before asking for a decision. If they have but gave no reason,
-    ask what the reason is before calling this again.
+    """Approve (accept the risk of) ONE finding in a single step. Only completes if
+    BOTH are true: blocked_pull_requests or finding_detail was called for this exact
+    alert_id within the last ten minutes (so the person has actually seen it on a
+    screen recently, not just heard a count), and a reason was given. Missing either:
+    refused, and this tool never performs it — returns where the decision must be
+    made instead. If the person hasn't reviewed it yet, offer to show it before asking
+    for a decision. If they have but gave no reason, ask what the reason is before
+    calling this again. To reject a finding, or to decide several, use stage_decisions.
 
     See src/relay/server.py's module docstring for why "reviewed, then
     voice-confirmed" is allowed while "ignore it, go ahead" with no review
     at all is not, and never will be. See src/storage/session_store.py for
     why this checks a time window on the alert itself rather than a
     session — this Lambda has no session continuity to check against."""
+    reason = (reason or "").strip()
     alert = get_alert(alert_id)
     target = _console(f"/dashboard#{alert_id}") if alert else _console("/dashboard")
+
+    if alert is not None and alert.status == "resolved":
+        return {**_refusal("request_risk_acceptance", "already_resolved", "That one was already decided.",
+                           alert_ids=[alert_id]), "console_url": target}
+
     reviewed = alert is not None and session_store.was_shown_recently(alert_id)
 
-    if reviewed and reason.strip():
-        _resolve_one(alert, approved=True, reason=reason.strip())
-        refresh_summary()
+    if reviewed and reason:
+        if len(reason) > MAX_REASON_CHARS:
+            return {**_refusal("request_risk_acceptance", "reason_too_long",
+                               "That reason is too long. Please give it in a sentence or two.",
+                               alert.repo, alert.pr_number, [alert_id]), "console_url": target}
+        # Built before anything is written. The reason is not echoed back: it is on the
+        # record already, and a long one must never turn a decision that was made into an error.
+        spoken = Spoken("Done. Accepted, on the record.").to_text()
+        try:
+            _resolve_one(alert, approved=True, reason=reason)
+        except AlertNotFoundOrAlreadyResolved:
+            return {**_refusal("request_risk_acceptance", "already_resolved", "That one was already decided.",
+                               alert.repo, alert.pr_number, [alert_id]), "console_url": target}
+        _write_back([alert])
+        audit("request_risk_acceptance", "applied", alert.repo, alert.pr_number, [alert_id], applied=1)
         return {
             "modality": Modality.ACTION.value,
-            "performed": True,
+            "performed": 1,
             "alert_id": alert_id,
-            "resolution_reason": reason.strip(),
-            "spoken_response": Spoken(f"Done. Accepted, on the record: {reason.strip()}").to_text(),
+            "spoken_response": spoken,
             "console_url": target,
         }
 
@@ -342,12 +448,16 @@ def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
     # given in the same breath.
     if not reviewed:
         missing, spoken = "for this to have been shown on a screen recently", "Take a look on a screen first, then tell me why."
+        why = "not_seen"
     else:
         missing, spoken = "a reason", "That needs a written reason on the record."
+        why = "no_reason"
+    audit("request_risk_acceptance", "refused", alert.repo if alert else None,
+          alert.pr_number if alert else None, [alert_id], why)
 
     return {
         "modality": Modality.ACTION.value,
-        "performed": False,
+        "performed": 0,
         "reason": "requires_attested_human_decision",
         "explanation": (
             f"Accepting a compliance risk needs {missing}, and a durable record either way. "
@@ -358,11 +468,12 @@ def request_risk_acceptance(alert_id: str, reason: str = "") -> dict:
     }
 
 
-def _findings_for(repo: str, pr_number: int):
+def _findings_for(repo: str, pr_number: int, status=None):
     """The ordered findings for one PR, exactly as currently on screen —
     shared by stage_decisions and proceed so "position 2" means the same
-    finding in both. None if that PR has no active findings right now."""
-    status = _findings_detail()
+    finding in both. None if that PR has no active findings right now.
+    `status` lets a caller that has just read it avoid a second scan."""
+    status = status if status is not None else _findings_detail()
     for pr in status.pull_requests:
         if pr.repo == repo and pr.pr_number == pr_number:
             return pr.findings
@@ -370,113 +481,198 @@ def _findings_for(repo: str, pr_number: int):
 
 
 def stage_decisions(repo: str, pr_number: int, decisions: list[dict], device: str = "") -> dict:
-    """Captures a decision (approve or reject, with a reason) for one or
-    more findings currently shown for this PR, WITHOUT resolving anything
-    yet — see docs/voice-resolution-workflow.md. Use when someone reviews
-    several findings in one turn, by position ("first one's a non-issue,
-    second one's an actual blocker") or as a group ("approve all of
-    these"). Each item in `decisions` is {"position": int, "approved":
-    bool, "reason": str}, position matching the numbers blocked_pull_requests
-    showed. Nothing in ship-alerts changes until proceed() is called —
-    say what was captured and ask the person to confirm, don't claim this
-    is done. If `device` is given (whatever surface they're looking at),
-    the pending state is pushed there so they can see what's about to
-    happen before confirming.
+    """Captures a decision for one or more findings of one pull request WITHOUT
+    resolving anything yet. Each item in `decisions` is {"alert_id": str,
+    "approved": bool, "reason": str, "position": int (optional, only to word a
+    refusal)}. alert_id comes from what the screen showed (blocked_pull_requests lists
+    it); a number on screen can drift when findings arrive, an id cannot. approved
+    true accepts the risk, so the finding stops blocking; false rejects it, so the
+    pull request stays blocked until the code is fixed. Nothing changes until
+    proceed() is called: say what was captured and ask the person to confirm, don't
+    claim it is done. If `device` is given, the pending state is pushed there.
 
-    Every position must belong to a finding shown on a screen recently —
-    same rule request_risk_acceptance enforces, just checked once per
-    finding here instead of once. A position that doesn't exist, or a
-    finding not recently reviewed, refuses the WHOLE batch rather than
-    guessing which ones were meant — see the workflow doc's "when a
-    reference doesn't land cleanly" section for why silent partial
-    success is worse than a clear refusal."""
-    findings = _findings_for(repo, pr_number)
+    Every finding must be open, shown on a screen recently, and have a reason. If any
+    one is not (gone, already decided, never shown, no reason) the WHOLE batch is
+    refused with a plain sentence, because silently applying part of it would decide
+    something the person did not say. See docs/voice-resolution-workflow.md."""
+    if not isinstance(decisions, list) or not decisions:
+        return _refusal("stage_decisions", "no_decisions", "Which findings do you want to decide, and why?",
+                        repo, pr_number)
+
+    status = _findings_detail()
+    findings = _findings_for(repo, pr_number, status)
     if not findings:
-        return {
-            "modality": Modality.ACTION.value, "performed": False,
-            "spoken_response": Spoken(f"I don't see any open findings on {repo} #{pr_number} right now.").to_text(),
-            "console_url": _console("/dashboard"),
-        }
+        return _refusal("stage_decisions", "no_open_findings",
+                        f"I don't see any open findings on {repo} #{pr_number} right now.", repo, pr_number)
 
-    staged = []
+    position_of = {f.alert_id: i for i, f in enumerate(findings, start=1)}
+    ids = [d.get("alert_id") for d in decisions if isinstance(d, dict)]
+    staged, seen_ids = [], set()
     for d in decisions:
-        position = d.get("position")
-        if not isinstance(position, int) or not (1 <= position <= len(findings)):
-            return {
-                "modality": Modality.ACTION.value, "performed": False,
-                "spoken_response": Spoken(
-                    f"I only see {len(findings)} finding{'s' if len(findings) != 1 else ''} here — "
-                    "which one did you mean?"
-                ).to_text(),
-                "console_url": _console("/dashboard"),
-            }
-        alert = findings[position - 1]
-        if not session_store.was_shown_recently(alert.alert_id):
-            return {
-                "modality": Modality.ACTION.value, "performed": False,
-                "spoken_response": Spoken(f"Finding {position} hasn't actually been shown on a screen recently — take a look first.").to_text(),
-                "console_url": _console("/dashboard"),
-            }
-        reason = str(d.get("reason", "")).strip()
-        if not reason:
-            return {
-                "modality": Modality.ACTION.value, "performed": False,
-                "spoken_response": Spoken(f"What's the reason for finding {position}?").to_text(),
-                "console_url": _console("/dashboard"),
-            }
-        staged.append({"position": position, "alert_id": alert.alert_id,
-                        "approved": bool(d.get("approved")), "reason": reason})
+        if not isinstance(d, dict) or not isinstance(d.get("alert_id"), str) or not d["alert_id"]:
+            return _refusal("stage_decisions", "missing_alert_id",
+                            "I couldn't tell which finding you meant. Which one?", repo, pr_number, ids)
+        alert_id = d["alert_id"]
+        hint = d.get("position")
+        what = f"finding {hint}" if isinstance(hint, int) and not isinstance(hint, bool) and 0 < hint < 1000 else "one of those"
+        if alert_id in seen_ids:
+            return _refusal("stage_decisions", "duplicate", "You mentioned the same finding twice. Which decision did you mean?",
+                            repo, pr_number, ids)
+        seen_ids.add(alert_id)
 
+        if alert_id not in position_of:
+            try:
+                existing = get_alert(alert_id)
+            except Exception:  # noqa: BLE001
+                log.exception("could not look up %s while staging", alert_id)
+                return _refusal("stage_decisions", "lookup_failed",
+                                "I couldn't check that just now. Please try again.", repo, pr_number, ids)
+            if existing is not None and existing.status == "resolved":
+                return _refusal("stage_decisions", "already_resolved",
+                                f"{what.capitalize()} was already decided in the console.", repo, pr_number, ids)
+            return _refusal("stage_decisions", "not_found",
+                            f"{what.capitalize()} is no longer there. Take a fresh look at the screen.", repo, pr_number, ids)
+
+        if not isinstance(d.get("approved"), bool):
+            return _refusal("stage_decisions", "approved_unclear",
+                            "I couldn't tell whether that was an approve or a reject. Which was it?", repo, pr_number, ids)
+        if not session_store.was_shown_recently(alert_id):
+            return _refusal("stage_decisions", "not_seen",
+                            f"{what.capitalize()} hasn't been shown on a screen recently. Take a look first.",
+                            repo, pr_number, ids)
+        reason = str(d.get("reason") or "").strip()
+        if not reason:
+            return _refusal("stage_decisions", "no_reason", f"What's the reason for {what}?", repo, pr_number, ids)
+        if len(reason) > MAX_REASON_CHARS:
+            return _refusal("stage_decisions", "reason_too_long",
+                            "That reason is too long. Please give it in a sentence or two.", repo, pr_number, ids)
+        staged.append({"position": position_of[alert_id], "alert_id": alert_id,
+                       "approved": d["approved"], "reason": reason})
+
+    spoken = Spoken("Got it, take a look and say proceed when you're ready.").to_text()
     pending_store.stage(repo, pr_number, staged)
+    audit("stage_decisions", "staged", repo, pr_number, [s["alert_id"] for s in staged], staged=len(staged))
 
     if device:
-        push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+        push_to_device(device.strip().lower(), _findings_payload(status))
 
     return {
         "modality": Modality.ACTION.value,
-        "performed": False,
+        "performed": 0,
         "staged": len(staged),
-        "spoken_response": Spoken("Got it, take a look and say proceed when you're ready.").to_text(),
+        "spoken_response": spoken,
         "console_url": _console("/dashboard"),
     }
 
 
-def proceed(repo: str, pr_number: int, device: str = "") -> dict:
-    """Commits whatever stage_decisions most recently staged for this PR —
-    the one action that actually writes to ship-alerts in the batch flow.
-    Use when someone says "proceed," "go ahead," "that's right," or
-    similar, after reviewing a pending screen. "Nothing pending" if
-    stage_decisions was never called, or if it's been more than ten
-    minutes (see src/storage/pending_store.py's staleness window) — ask
-    them to run through their decisions again rather than silently acting
-    on stale context."""
-    staged = pending_store.get_pending(repo, pr_number)
-    if not staged:
-        return {
-            "modality": Modality.ACTION.value, "performed": False,
-            "spoken_response": Spoken("Nothing pending to confirm.").to_text(),
-            "console_url": _console("/dashboard"),
-        }
-
-    performed = 0
-    for d in staged:
-        alert = get_alert(d["alert_id"])
-        if alert is None or not session_store.was_shown_recently(d["alert_id"]):
-            continue  # re-checked at commit time, not just at staging time
+def _apply_staged(d: dict) -> tuple[str, object]:
+    """Commits one staged decision, re-checking at commit time everything that was checked
+    at staging time. Returns (outcome, alert-or-None). Never raises, so one item cannot
+    abort the batch."""
+    alert_id = d["alert_id"]
+    try:
+        alert = get_alert(alert_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not read %s while committing", alert_id)
+        return "error", None
+    if alert is None:
+        return "not_found", None
+    if alert.status == "resolved":
+        return "already_resolved", None
+    if not session_store.was_shown_recently(alert_id):
+        return "skipped_not_seen", None
+    try:
         _resolve_one(alert, approved=d["approved"], reason=d["reason"])
-        performed += 1
+    except AlertNotFoundOrAlreadyResolved:
+        return "already_resolved", None
+    except Exception:  # noqa: BLE001
+        log.exception("could not record the decision for %s", alert_id)
+        return "error", None
+    return "applied", alert
 
-    pending_store.clear_pending(repo, pr_number)
-    refresh_summary()
+
+def _plural_were(n: int) -> str:
+    return "wasn't" if n == 1 else "weren't"
+
+
+def _proceed_sentence(outcomes: list[dict]) -> str:
+    """What happened, in one capped sentence, from the per-finding outcomes."""
+    n = len(outcomes)
+    count = {k: sum(1 for o in outcomes if o["outcome"] == k)
+             for k in ("applied", "skipped_not_seen", "already_resolved", "not_found", "error")}
+    if count["applied"] == n:
+        return "Done." if n == 1 else f"Done. Applied all {n}."
+    if count["error"] == n:
+        return "I couldn't save that just now. Say proceed to try again."
+    parts = [f"Applied {count['applied']} of {n}."]
+    if count["skipped_not_seen"]:
+        k = count["skipped_not_seen"]
+        parts.append(f"{k} {_plural_were(k)} shown on a screen recently.")
+    if count["already_resolved"]:
+        parts.append(f"{count['already_resolved']} already decided in the console.")
+    if count["not_found"]:
+        k = count["not_found"]
+        parts.append(f"{k} no longer {'exists' if k == 1 else 'exist'}.")
+    if count["error"]:
+        parts.append(f"{count['error']} could not be saved, say proceed to retry.")
+    sentence = " ".join(parts)
+    if len(sentence) > SPEECH_CHAR_BUDGET:
+        sentence = f"Applied {count['applied']} of {n}. Some were left alone, check the screen."
+    return sentence
+
+
+def proceed(repo: str, pr_number: int, device: str = "") -> dict:
+    """Commits whatever stage_decisions most recently staged for this PR — the one
+    action that writes the batch. Call it ONLY after the person has confirmed what was
+    staged ("proceed", "yes, go ahead"). It re-checks every finding at commit time and
+    reports what actually happened per finding in `outcomes` (applied, skipped_not_seen,
+    already_resolved, not_found, error); `performed` is how many were applied, and the
+    spoken sentence says so, including what was left alone. A finding that could not be
+    saved because of a temporary problem stays staged for another proceed. "Nothing
+    pending" if nothing was staged or it has been more than ten minutes (see
+    src/storage/pending_store.py): ask them to run through their decisions again."""
+    got = pending_store.get_pending_with_age(repo, pr_number)
+    if not got:
+        return _refusal("proceed", "nothing_pending", "Nothing pending to confirm.", repo, pr_number,
+                        outcomes=[], of=0, pending_remaining=0)
+    staged, staged_at = got
+
+    outcomes, applied = [], []
+    for d in staged:
+        outcome, alert = _apply_staged(d)
+        outcomes.append({"alert_id": d["alert_id"], "outcome": outcome})
+        if alert is not None:
+            applied.append(alert)
+
+    # Rule for what stays staged: a decision that reached a final answer (applied, or
+    # skipped/gone/already decided, all of which need the person to look again) is
+    # finished with. One that failed for a transient reason is kept, with its original
+    # clock, so saying proceed again retries it without extending how long the
+    # confirmation counts.
+    failed = [d for d, o in zip(staged, outcomes) if o["outcome"] == "error"]
+    if failed:
+        try:
+            pending_store.stage(repo, pr_number, failed, staged_at=staged_at)
+        except Exception:  # noqa: BLE001
+            log.exception("could not keep the failed decisions staged for %s#%s", repo, pr_number)
+    else:
+        pending_store.clear_pending(repo, pr_number)
+
+    gate = _write_back(applied) if applied else None
+    spoken = _proceed_sentence(outcomes)
 
     if device:
-        push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+        push_to_device(device.strip().lower(), _findings_payload(_findings_detail(gate)))
 
+    audit("proceed", "applied" if len(applied) == len(outcomes) else "partial", repo, pr_number,
+          [o["alert_id"] for o in outcomes], applied=len(applied), of=len(outcomes), errors=len(failed))
     return {
         "modality": Modality.ACTION.value,
-        "performed": performed,
-        "of": len(staged),
-        "spoken_response": Spoken("Done.").to_text(),
+        "performed": len(applied),
+        "of": len(outcomes),
+        "outcomes": outcomes,
+        "pending_remaining": len(failed),
+        "spoken_response": Spoken(spoken).to_text(),
         "console_url": _console("/dashboard"),
     }
 
@@ -488,6 +684,7 @@ def cancel_pending(repo: str, pr_number: int, device: str = "") -> dict:
     pending_store.clear_pending(repo, pr_number)
     if device:
         push_to_device(device.strip().lower(), _findings_payload(_findings_detail()))
+    audit("cancel_pending", "cancelled", repo, pr_number)
     return {
         "modality": Modality.ACTION.value,
         "performed": 0,
@@ -533,11 +730,13 @@ def display_on(surface: str) -> dict:
     connected shows nothing, so it records nothing. On success the reply
     carries `routing`: the position and id of each open finding, which is
     how a later spoken decision points at one."""
-    normalised = (surface or "").strip().lower() or "here"
+    # A name is spoken back, so keep it short and plain whatever was sent.
+    normalised = re.sub(r"[^a-z0-9 _-]", "", (surface or "").strip().lower())[:30].strip() or "here"
     status = _findings_detail()
 
     if normalised == "here":
         _mark_shown(status)   # the caller renders its own copy of the same payload
+        audit("display_on", "shown", surface="here", findings=sum(len(p.findings) for p in status.pull_requests))
         return {
             "modality": Modality.ACTION.value, "surface": normalised, "delivered": True,
             "routing": _routing(status),
@@ -547,7 +746,7 @@ def display_on(surface: str) -> dict:
 
     payload = _findings_payload(status)
     result = push_to_device(normalised, payload)
-    delivered = bool(result["delivered_to"])
+    delivered = bool(result["delivered_to"])      # only connections whose post succeeded are listed
     notified = False
     if delivered:
         _mark_shown(status)
@@ -560,6 +759,8 @@ def display_on(surface: str) -> dict:
         spoken = f"I've sent a notification to your {normalised}. Open it to review."
     else:
         spoken = f"I don't see a {normalised} connected right now."
+    audit("display_on", "delivered" if delivered else ("notified" if notified else "not_connected"),
+          surface=normalised, connections=len(result["delivered_to"]))
 
     return {
         "modality": Modality.ACTION.value,
@@ -575,24 +776,20 @@ def display_on(surface: str) -> dict:
 def findings_routing() -> dict:
     """Where each open finding sits and whether the person has seen it on a screen in the
     last ten minutes. Positions, ids and a yes or no only: nothing that must stay off the
-    speaker. Reading this records nothing as shown. Use it to know which findings a spoken
-    decision may point at."""
+    speaker. `position` is where the finding sits now; `shown_position` is the number it
+    had on the screen that displayed it, which is the number the person will speak (null
+    if it was shown another way). Reading this records nothing as shown. Use it to know
+    which findings a spoken decision may point at."""
     status = _findings_detail()
-    return {
-        "modality": Modality.ACTION.value,
-        "pull_requests": [
-            {
-                "repo": pr.repo,
-                "pr_number": pr.pr_number,
-                "findings": [
-                    {"position": i, "alert_id": f.alert_id, "blocks_merge": f.severity == SEVERITY_BLOCKING,
-                     "seen": session_store.was_shown_recently(f.alert_id)}
-                    for i, f in enumerate(pr.findings, start=1)
-                ],
-            }
-            for pr in status.pull_requests
-        ],
-    }
+    pull_requests = []
+    for pr in status.pull_requests:
+        findings = []
+        for i, f in enumerate(pr.findings, start=1):
+            view = session_store.recent_view(f.alert_id)
+            findings.append({"position": i, "alert_id": f.alert_id, "blocks_merge": f.severity == SEVERITY_BLOCKING,
+                             "seen": view is not None, "shown_position": view["position"] if view else None})
+        pull_requests.append({"repo": pr.repo, "pr_number": pr.pr_number, "findings": findings})
+    return {"modality": Modality.ACTION.value, "pull_requests": pull_requests}
 
 
 def connected_screens() -> dict:

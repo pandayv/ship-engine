@@ -16,14 +16,24 @@ write and buys two things worth more than the saving:
   - It is race-safe without coordination. Fragments are processed in
     parallel, so several writers can refresh this item at once. A counter
     would need every increment to land exactly once; a full recomputation
-    is correct whoever writes it last, and a write racing with a slightly
-    older one is corrected by the next refresh rather than drifting
-    permanently. This is the same reasoning as sync_pr_check() in
-    src/api/github_writeback.py.
+    is correct whoever computes it last. The write is also conditional on
+    `computed_at`, stamped BEFORE the alerts are read: a slow writer that
+    read older data cannot overwrite a newer summary, and because every state
+    change is followed by a refresh that starts after the change, the newest
+    stamp always reflects the change. This is the same reasoning as
+    sync_pr_check() in src/api/github_writeback.py.
   - It cannot silently diverge from the truth. A counter that misses one
     decrement stays wrong forever, and the failure is invisible: the
     number simply reads wrong to whoever asks. A recomputation is
     self-healing by construction.
+
+WHAT THE SUMMARY COUNTS. Findings waiting for a decision (blocking, review) and
+`held`: rejected findings whose code is still in the PR. A held finding is decided,
+so it is not asked about again, but it still blocks the merge, so voice must not say
+"good to move ahead" while any exist.
+
+UNREADABLE IS NOT ZERO. A missing item or a failed read raises SummaryUnavailable.
+Only a stored summary that says zero reads as zero.
 
 WHAT VOICE IS ALLOWED TO KNOW. This summary deliberately holds counts,
 pull-request labels and timestamps — not citations, file paths, taxonomy
@@ -50,6 +60,11 @@ TABLE_NAME = "ship-status"
 SUMMARY_KEY = "release-summary"
 
 
+class SummaryUnavailable(Exception):
+    """The stored summary could not be read, or does not exist yet. Callers must
+    not treat this as "nothing is blocked"."""
+
+
 @dataclass
 class PullRequestCounts:
     repo: str
@@ -57,6 +72,7 @@ class PullRequestCounts:
     blocking: int
     review: int
     oldest_finding_at: str
+    held: int = 0       # rejected findings whose code is still in the PR
 
 
 @dataclass
@@ -65,6 +81,7 @@ class ReleaseSummary:
     review: int = 0
     pull_requests: list[PullRequestCounts] = field(default_factory=list)
     computed_at: str = ""
+    held: int = 0
 
     @property
     def total(self) -> int:
@@ -99,36 +116,44 @@ def create_table_if_not_exists() -> None:
     client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
 
 
-def compute_summary() -> ReleaseSummary:
+def compute_summary(alerts=None) -> ReleaseSummary:
     """Rebuilds the summary from the alerts table. Called on the WRITE path
-    only — never by Relay, which must not pay this cost."""
-    from src.storage.alert_store import SEVERITY_BLOCKING, list_active_alerts
+    only — never by Relay, which must not pay this cost. `alerts` lets a caller that
+    has just read list_gate_alerts() reuse that read."""
+    from src.storage.alert_store import SEVERITY_BLOCKING, is_held, is_open, list_gate_alerts
+
+    # Stamped before the read, see the module docstring.
+    computed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    if alerts is None:
+        alerts = list_gate_alerts()
 
     buckets: dict[tuple[str, int], list] = {}
-    for alert in list_active_alerts():
+    for alert in alerts:
         buckets.setdefault((alert.repo, alert.pr_number), []).append(alert)
 
-    counts = [
-        PullRequestCounts(
+    counts = []
+    for (repo, pr), items in buckets.items():
+        open_items = [a for a in items if is_open(a)]
+        counts.append(PullRequestCounts(
             repo=repo,
             pr_number=pr,
-            blocking=sum(1 for a in items if a.severity == SEVERITY_BLOCKING),
-            review=sum(1 for a in items if a.severity != SEVERITY_BLOCKING),
+            blocking=sum(1 for a in open_items if a.severity == SEVERITY_BLOCKING),
+            review=sum(1 for a in open_items if a.severity != SEVERITY_BLOCKING),
             oldest_finding_at=min(a.created_at for a in items),
-        )
-        for (repo, pr), items in buckets.items()
-    ]
+            held=sum(1 for a in items if is_held(a)),
+        ))
     counts.sort(key=lambda c: c.oldest_finding_at)
 
     return ReleaseSummary(
         blocking=sum(c.blocking for c in counts),
         review=sum(c.review for c in counts),
         pull_requests=counts,
-        computed_at=datetime.now(timezone.utc).isoformat(),
+        computed_at=computed_at,
+        held=sum(c.held for c in counts),
     )
 
 
-def refresh_summary() -> ReleaseSummary:
+def refresh_summary(alerts=None) -> ReleaseSummary:
     """Recompute and store. Best-effort by design: a failure here must never
     fail the finding that triggered it, because the alert itself is already
     durably stored and the next refresh will correct this one.
@@ -142,11 +167,22 @@ def refresh_summary() -> ReleaseSummary:
     succeeded — turning one IAM gap into a wasted multi-minute retry loop
     instead of the silent, self-healing degradation this was designed for.
     The whole body is now inside the guard, not just the write.
+
+    The write only lands if no newer summary is stored (see the module docstring).
     """
     try:
-        summary = compute_summary()
+        summary = compute_summary(alerts)
         item = {"summary_id": SUMMARY_KEY, **asdict(summary)}
-        _table().put_item(Item=item)
+        try:
+            _table().put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(computed_at) OR computed_at <= :c",
+                ExpressionAttributeValues={":c": summary.computed_at},
+            )
+        except Exception as e:
+            if type(e).__name__ != "ConditionalCheckFailedException":
+                raise
+            log.info("a newer release summary is already stored, keeping it")
         return summary
     except Exception:
         log.exception("could not refresh the release summary — Relay may serve a stale count "
@@ -157,19 +193,19 @@ def refresh_summary() -> ReleaseSummary:
 def read_summary() -> ReleaseSummary:
     """Relay's entire read path: one GetItem, no aggregation, no scan.
 
-    An empty or unreadable summary reports "nothing blocked" rather than
-    raising. That is the honest degradation for a voice surface — the
-    alternative is an assistant that errors at someone instead of
-    answering, and the authoritative state is always the dashboard.
+    Raises SummaryUnavailable when the summary cannot be read or has never been
+    written. An empty ReleaseSummary() is returned only when a stored summary says
+    there is nothing: a voice surface that answered "good to move ahead" because a
+    read failed would be telling a person a gated release is clear on no evidence.
     """
     try:
-        item = _table().get_item(Key={"summary_id": SUMMARY_KEY}).get("Item")
-    except Exception:
+        item = _table().get_item(Key={"summary_id": SUMMARY_KEY}, ConsistentRead=True).get("Item")
+    except Exception as exc:
         log.exception("could not read the release summary")
-        return ReleaseSummary()
+        raise SummaryUnavailable("the release summary could not be read") from exc
 
     if not item:
-        return ReleaseSummary()
+        raise SummaryUnavailable("no release summary has been stored yet")
 
     return ReleaseSummary(
         blocking=int(item.get("blocking", 0)),
@@ -178,9 +214,10 @@ def read_summary() -> ReleaseSummary:
             PullRequestCounts(
                 repo=p["repo"], pr_number=int(p["pr_number"]),
                 blocking=int(p.get("blocking", 0)), review=int(p.get("review", 0)),
-                oldest_finding_at=p.get("oldest_finding_at", ""),
+                oldest_finding_at=p.get("oldest_finding_at", ""), held=int(p.get("held", 0)),
             )
             for p in item.get("pull_requests", [])
         ],
         computed_at=item.get("computed_at", ""),
+        held=int(item.get("held", 0)),
     )

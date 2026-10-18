@@ -26,7 +26,8 @@ routine case, not an error — see push_to_device() below.
 """
 
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -34,12 +35,54 @@ log = logging.getLogger(__name__)
 
 TABLE_NAME = "ship-device-connections"
 
+# API Gateway closes a WebSocket connection after 2 hours whatever happens, and after
+# 10 idle minutes. A $disconnect that never fires leaves a row behind, and no TTL is
+# enabled on the table yet, so a row is treated as dead once either limit has passed.
+# The display page re-registers every ~5 minutes, which is what keeps last_seen_at
+# fresh on a healthy connection; the idle margin sits above the 10 minute limit.
+CONNECTION_HARD_CAP_SECONDS = 2 * 3600
+CONNECTION_IDLE_SECONDS = 15 * 60
+# For a future DynamoDB TTL on `expires_at` (not enabled by this code).
+ROW_EXPIRY_SECONDS = CONNECTION_HARD_CAP_SECONDS + 3600
+
 
 @dataclass
 class DeviceConnection:
     connection_id: str
     device_name: str
     connected_at: str
+    last_seen_at: str = ""
+    expires_at: int = 0
+
+
+_KNOWN = {f.name for f in fields(DeviceConnection)}
+
+
+def _row(item: dict) -> DeviceConnection:
+    """Attributes a newer writer added are ignored rather than crashing an older reader."""
+    row = {k: v for k, v in item.items() if k in _KNOWN}
+    if "expires_at" in row:
+        row["expires_at"] = int(row["expires_at"])
+    return DeviceConnection(**row)
+
+
+def _age_seconds(iso: str, now: float) -> float | None:
+    try:
+        return now - datetime.fromisoformat(iso).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def is_live(conn: DeviceConnection, now: float | None = None) -> bool:
+    """False once the connection is past API Gateway's hard cap or has been silent
+    longer than its idle limit. A row with an unreadable timestamp is kept: when
+    unsure, a push attempt (and its Gone handling) is the cheaper mistake."""
+    now = time.time() if now is None else now
+    age = _age_seconds(conn.connected_at, now)
+    if age is not None and age > CONNECTION_HARD_CAP_SECONDS:
+        return False
+    idle = _age_seconds(conn.last_seen_at or conn.connected_at, now)
+    return not (idle is not None and idle > CONNECTION_IDLE_SECONDS)
 
 
 @lru_cache(maxsize=1)
@@ -72,15 +115,21 @@ def create_table_if_not_exists() -> None:
 
 def register_connection(connection_id: str, device_name: str) -> None:
     """Called from the WebSocket 'register' route once a display page has
-    named itself. Overwrites any previous row for this connection_id, and
-    deliberately does NOT remove a prior row under the same device_name
-    from a different connection — if two tabs register as 'tv', both are
-    valid push targets (see list_connections_for_device)."""
-    _table().put_item(Item={
-        "connection_id": connection_id,
-        "device_name": device_name.strip().lower(),
-        "connected_at": datetime.now(timezone.utc).isoformat(),
-    })
+    named itself, and again every few minutes by the same page (idempotent: it
+    refreshes last_seen_at and keeps connected_at from the first call). Deliberately
+    does NOT remove a prior row under the same device_name from a different
+    connection — if two tabs register as 'tv', both are valid push targets (see
+    list_connections_for_device)."""
+    now = datetime.now(timezone.utc)
+    _table().update_item(
+        Key={"connection_id": connection_id},
+        UpdateExpression=("SET device_name = :d, last_seen_at = :now, expires_at = :exp, "
+                          "connected_at = if_not_exists(connected_at, :now)"),
+        ExpressionAttributeValues={
+            ":d": device_name.strip().lower(), ":now": now.isoformat(),
+            ":exp": int(now.timestamp()) + ROW_EXPIRY_SECONDS,
+        },
+    )
 
 
 def remove_connection(connection_id: str) -> None:
@@ -108,7 +157,7 @@ def list_connections_for_device(device_name: str) -> list[DeviceConnection]:
         if not last_key:
             break
         kwargs["ExclusiveStartKey"] = last_key
-    return [DeviceConnection(**i) for i in items]
+    return [c for c in (_row(i) for i in items) if is_live(c)]
 
 
 def list_all_connections() -> list[DeviceConnection]:
@@ -121,4 +170,4 @@ def list_all_connections() -> list[DeviceConnection]:
         if not last_key:
             break
         kwargs["ExclusiveStartKey"] = last_key
-    return [DeviceConnection(**i) for i in items]
+    return [c for c in (_row(i) for i in items) if is_live(c)]

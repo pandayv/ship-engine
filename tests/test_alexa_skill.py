@@ -18,7 +18,8 @@ sys.path.insert(0, str(SKILL_PATH.parent))   # the skill imports orchestrator.py
 STATUS_SENTENCE = "2 blockers found. Ready for your decision. Want it on a screen?"
 TOOLS = [
     "release_status", "blocked_pull_requests", "finding_detail",
-    "request_risk_acceptance", "stage_decisions", "proceed", "display_on", "connected_screens", "findings_routing",
+    "request_risk_acceptance", "stage_decisions", "proceed", "cancel_pending", "display_on", "connected_screens",
+    "findings_routing",
 ]
 
 
@@ -35,6 +36,8 @@ def skill(monkeypatch):
     module.display_reply = {"spoken_response": "Putting it on your tv."}
     module.connected = ["tv", "laptop"]
     module.routing_reply = []
+    module.tool_error = None      # name of a tool whose call comes back as an MCP tool error
+    module.calls = []             # (tool name, arguments) in order
 
     def fake_post(body, protocol=None):
         if module.fail_relay:
@@ -49,6 +52,10 @@ def skill(monkeypatch):
             return {"jsonrpc": "2.0", "id": body["id"], "result": {"tools": [{"name": n} for n in TOOLS]}}
         if method == "tools/call":
             name = body["params"]["name"]
+            module.calls.append((name, body["params"].get("arguments")))
+            if name == module.tool_error:
+                return {"jsonrpc": "2.0", "id": body["id"], "result": {
+                    "isError": True, "content": [{"type": "text", "text": f"Error executing tool {name}: KeyError 'boom' at server.py:123"}]}}
             if name == "connected_screens":
                 text = json.dumps({"screens": module.connected})
             elif name == "findings_routing":
@@ -98,6 +105,7 @@ def test_the_mcp_handshake_runs_in_order_and_only_once(skill):
     methods = [m for m, _, _ in skill.sent]
     # each turn asks which screens exist, then for the status
     assert methods == ["initialize", "notifications/initialized", "tools/list"] + ["tools/call"] * 4
+    assert sorted(n for n, _ in skill.calls) == ["connected_screens"] * 2 + ["release_status"] * 2
 
 
 def test_calls_after_initialize_carry_the_negotiated_protocol_version(skill):
@@ -312,10 +320,40 @@ def test_the_permission_asked_for_is_the_one_the_manifest_declares():
 
 def test_findings_seen_on_another_device_are_known_to_the_next_turn(skill, monkeypatch):
     skill.routing_reply = [{"repo": "pandayv/micro-finance", "pr_number": 1, "findings": [
-        {"position": 1, "alert_id": "a1", "blocks_merge": True, "seen": True},
-        {"position": 2, "alert_id": "a2", "blocks_merge": True, "seen": False}]}]
+        {"position": 1, "alert_id": "a1", "blocks_merge": True, "seen": True, "shown_position": 1},
+        {"position": 2, "alert_id": "a2", "blocks_merge": True, "seen": False, "shown_position": None}]}]
     routing = skill.seen_routing()
-    assert routing[0]["pr_number"] == 1 and [f["position"] for f in routing[0]["findings"]] == [1, 2]
+    assert routing[0]["pr_number"] == 1 and [(f["position"], f["alert_id"]) for f in routing[0]["findings"]] == [(1, "a1")]
+
+
+def test_the_number_is_the_one_the_screen_showed_not_where_the_finding_sits_now(skill):
+    # a0 arrived after the screen was drawn and took live number 1; the person's "second one" is still a2.
+    skill.routing_reply = [{"repo": "r", "pr_number": 1, "findings": [
+        {"position": 1, "alert_id": "a0", "blocks_merge": True, "seen": False, "shown_position": None},
+        {"position": 2, "alert_id": "a1", "blocks_merge": True, "seen": True, "shown_position": 1},
+        {"position": 3, "alert_id": "a2", "blocks_merge": True, "seen": True, "shown_position": 2}]}]
+    findings = skill.seen_routing()[0]["findings"]
+    assert {f["position"]: f["alert_id"] for f in findings} == {1: "a1", 2: "a2"}
+
+
+def test_a_number_claimed_by_two_seen_findings_is_dropped_not_guessed(skill):
+    skill.routing_reply = [{"repo": "r", "pr_number": 1, "findings": [
+        {"position": 1, "alert_id": "x", "seen": True, "shown_position": 1},
+        {"position": 2, "alert_id": "y", "seen": True, "shown_position": 1},
+        {"position": 3, "alert_id": "z", "seen": True, "shown_position": 2}]}]
+    assert {f["position"]: f["alert_id"] for f in skill.seen_routing()[0]["findings"]} == {2: "z"}
+
+
+def test_a_finding_that_was_shown_some_other_way_has_no_number_to_point_at(skill):
+    skill.routing_reply = [{"repo": "r", "pr_number": 1, "findings": [
+        {"position": 1, "alert_id": "x", "seen": True, "shown_position": None}]}]
+    assert skill.seen_routing() == []
+
+
+def test_an_older_relay_without_shown_positions_still_works_on_the_live_numbers(skill):
+    skill.routing_reply = [{"repo": "r", "pr_number": 1, "findings": [
+        {"position": 1, "alert_id": "x", "seen": True}, {"position": 2, "alert_id": "y", "seen": False}]}]
+    assert [(f["position"], f["alert_id"]) for f in skill.seen_routing()[0]["findings"]] == [(1, "x")]
 
 
 def test_a_pull_request_nobody_has_seen_is_not_offered_for_decisions(skill):
@@ -344,7 +382,14 @@ def test_the_suggestion_never_names_a_screen_that_is_not_set_up(skill):
     skill.connected = ["laptop", "tablet"]
     reply = skill.handler(request_event(intent("StatusIntent")), None)
     prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
-    assert "laptop" in prompt and "TV" not in prompt and "tv" not in prompt
+    assert "laptop or tablet" in prompt and "TV" not in prompt and "tv" not in prompt
+
+
+def test_the_suggestion_names_at_most_two_screens(skill):
+    skill.connected = ["laptop", "tablet", "tv"]
+    reply = skill.handler(request_event(intent("StatusIntent")), None)
+    prompt = reply["response"]["reprompt"]["outputSpeech"]["text"]
+    assert prompt == "You can ask what's up, or say show it on the laptop or tablet."
 
 
 def test_with_no_screen_the_suggestion_does_not_offer_one(skill):
@@ -368,3 +413,60 @@ def test_an_unmatched_phrase_gets_a_useful_answer_not_a_screen_offer(skill):
 def test_mark_and_what_is_keep_their_first_word(skill, monkeypatch):
     assert spoken_to_model(skill, monkeypatch, "MarkIntent", "the first one as a false positive") == "mark the first one as a false positive"
     assert spoken_to_model(skill, monkeypatch, "WhatIntent", "wrong with the first one") == "what is wrong with the first one"
+
+
+# --- a failing tool is never spoken ---
+
+
+def test_a_tool_error_is_logged_and_never_spoken(skill, caplog):
+    skill.tool_error = "release_status"
+    with caplog.at_level("ERROR"):
+        reply = skill.handler(request_event(intent("StatusIntent")), None)
+    text = spoken(reply)
+    assert "Error executing" not in text and "KeyError" not in text and "server.py" not in text
+    assert text == "Something went wrong on my side. Please try again in a moment."
+    assert reply["response"]["shouldEndSession"] is False         # a staged decision survives a hiccup
+    assert "KeyError" in caplog.text                                # the detail is for the logs
+
+
+def test_a_tool_error_is_a_relay_error_to_the_rest_of_the_skill(skill):
+    skill._connect()
+    skill.tool_error = "display_on"
+    with pytest.raises(skill.RelayError):
+        skill.call_tool("display_on", {"surface": "tv"})
+    with pytest.raises(skill.RelayToolError):
+        skill.call_tool("display_on", {"surface": "tv"})
+
+
+def test_a_tool_error_during_a_confirmation_keeps_the_staged_decision(skill, monkeypatch):
+    skill.tool_error = "proceed"
+    session = {"pending": {"repo": "r", "pr_number": 1}}
+    event = request_event(intent("AMAZON.YesIntent"))
+    event["session"] = {"attributes": {"pending": session["pending"], "screen": "tv"}}
+    reply = skill.handler(event, None)
+    assert reply["sessionAttributes"]["pending"] == {"repo": "r", "pr_number": 1}
+    assert "Error executing" not in spoken(reply)
+
+
+# --- leaving drops what was staged ---
+
+
+@pytest.mark.parametrize("name", ["AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"])
+def test_leaving_drops_a_staged_decision_on_relay(skill, name):
+    event = request_event(intent(name))
+    event["session"] = {"attributes": {"pending": {"repo": "r", "pr_number": 2}, "screen": "tablet"}}
+    reply = skill.handler(event, None)
+    assert reply["response"]["shouldEndSession"] is True
+    assert ("cancel_pending", {"repo": "r", "pr_number": 2, "device": "tablet"}) in skill.calls
+
+
+def test_leaving_with_nothing_staged_calls_nothing(skill):
+    skill.handler(request_event(intent("AMAZON.StopIntent")), None)
+    assert skill.calls == []
+
+
+def test_leaving_still_works_when_relay_is_down(skill):
+    skill.fail_relay = True
+    event = request_event(intent("AMAZON.StopIntent"))
+    event["session"] = {"attributes": {"pending": {"repo": "r", "pr_number": 2}}}
+    assert skill.handler(event, None)["response"]["shouldEndSession"] is True

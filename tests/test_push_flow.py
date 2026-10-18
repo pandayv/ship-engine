@@ -118,8 +118,10 @@ def relay_world(monkeypatch, store):
     shown, notified = [], []
     monkeypatch.setattr(relay, "_findings_detail", lambda: Status("a1", "a2"))
     monkeypatch.setattr(relay, "_findings_payload", lambda status: {"pull_requests": [], "display_only": True})
-    monkeypatch.setattr(relay.session_store, "mark_shown", lambda alert_id: shown.append(alert_id))
+    monkeypatch.setattr(relay.session_store, "mark_shown", lambda alert_id, position=None: shown.append(alert_id))
     monkeypatch.setattr(relay.session_store, "was_shown_recently", lambda alert_id: alert_id in shown)
+    monkeypatch.setattr(relay.session_store, "recent_view",
+                        lambda alert_id: {"shown_at": 1, "position": None} if alert_id in shown else None)
     monkeypatch.setattr(relay, "push_to_device", lambda name, payload: {"delivered_to": [], "not_connected": True})
     monkeypatch.setattr(relay.webpush, "notify_device", lambda name, body: notified.append((name, body)) or 1)
     return shown, notified
@@ -180,39 +182,73 @@ def gw(monkeypatch, store):
     sent, shown = [], []
     monkeypatch.setattr(gateway, "_ack", lambda event, cid, body: sent.append(body))
     monkeypatch.setattr(gateway, "register_connection", lambda cid, name: None)
-    monkeypatch.setattr(gateway.session_store, "mark_shown", lambda alert_id: shown.append(alert_id))
+    monkeypatch.setattr(gateway.session_store, "mark_shown",
+                        lambda alert_id, position=None: shown.append((alert_id, position)))
     return sent, shown
 
 
 def test_the_gateway_stores_a_subscription_and_confirms(gw, store):
     sent, _ = gw
     out = gateway.handler(ws_event("subscribe", {"device_name": "Tablet", "subscription": SUB}), None)
-    assert out["statusCode"] == 200 and sent == [{"subscribed": "tablet"}]
+    assert out["statusCode"] == 200 and sent == [{"type": "subscribed", "subscribed": "tablet"}]
     assert push_store.subscribed_device_names() == {"tablet"}
 
 
-def test_a_bad_subscription_is_refused(gw):
+def test_a_bad_subscription_is_refused_and_the_page_is_told(gw):
+    sent, _ = gw
     assert gateway.handler(ws_event("subscribe", {"device_name": "t", "subscription": {}}), None)["statusCode"] == 400
+    assert sent[0]["type"] == "error" and sent[0]["action"] == "subscribe"
+
+
+def test_a_screen_name_that_is_empty_or_unspeakable_is_refused_visibly(gw):
+    sent, _ = gw
+    for bad in ("", "   ", "x" * 31, "tv <script>"):
+        sent.clear()
+        out = gateway.handler(ws_event("register", {"device_name": bad}), None)
+        assert out["statusCode"] == 400, bad
+        assert sent[0]["type"] == "error" and sent[0]["action"] == "register", bad
+
+
+def test_a_malformed_body_is_refused_not_crashed(gw):
+    event = ws_event("register")
+    event["body"] = "{not json"
+    assert gateway.handler(event, None)["statusCode"] == 400
 
 
 def test_a_page_that_connects_receives_the_findings_held_for_it(gw, store):
     sent, _ = gw
     push_store.save_pending("tablet", {"pull_requests": [{"pr_number": 1}]}, ["a1"])
     gateway.handler(ws_event("register", {"device_name": "tablet"}), None)
-    assert sent == [{"registered": "tablet"}, {"pull_requests": [{"pr_number": 1}]}]
+    assert sent == [{"type": "registered", "registered": "tablet"},
+                    {"type": "findings", "pull_requests": [{"pr_number": 1}]}]
 
 
 def test_a_page_with_nothing_held_gets_only_its_confirmation(gw, store):
     sent, _ = gw
     gateway.handler(ws_event("register", {"device_name": "tablet"}), None)
-    assert sent == [{"registered": "tablet"}]
+    assert sent == [{"type": "registered", "registered": "tablet"}]
+
+
+def test_registering_again_is_harmless_and_idempotent(gw, store):
+    sent, _ = gw
+    for _ in range(3):
+        assert gateway.handler(ws_event("register", {"device_name": "Tablet"}), None)["statusCode"] == 200
+    assert sent == [{"type": "registered", "registered": "tablet"}] * 3
 
 
 def test_the_ack_marks_only_the_findings_that_were_being_held(gw, store):
     _, shown = gw
     push_store.save_pending("tablet", {"pull_requests": []}, ["a1", "a2"])
     gateway.handler(ws_event("ack", {"device_name": "tablet", "alert_ids": ["a1", "other-alert"]}), None)
-    assert shown == ["a1"] and push_store.get_pending("tablet") is None
+    assert shown == [("a1", None)] and push_store.get_pending("tablet") is None
+
+
+def test_an_ack_records_the_number_each_finding_had_on_the_page(gw, store):
+    _, shown = gw
+    payload = {"pull_requests": [{"findings": [{"alert_id": "a1", "position": 2}, {"alert_id": "a2", "position": 1}]}]}
+    push_store.save_pending("tablet", payload, ["a1", "a2"])
+    gateway.handler(ws_event("ack", {"device_name": "tablet", "alert_ids": ["a1", "a2"]}), None)
+    assert sorted(shown) == [("a1", 2), ("a2", 1)]
 
 
 def test_an_ack_with_nothing_held_marks_nothing(gw, store):

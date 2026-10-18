@@ -16,15 +16,23 @@ failure mode (multiple independent invocations, not a single call) before
 this design was relied on.
 
 The cost of rebuilding per invocation is small and measured, not assumed:
-~2ms to construct and register five tools on a fresh FastMCP instance,
+~2ms to construct and register the tools on a fresh FastMCP instance,
 against a 500ms total budget.
 """
 
+import logging
+
 from mangum import Mangum
 
+from src.relay.audit import set_request_id
 from src.relay.server import create_app
+
+# Lambda's runtime attaches its handler to the root logger at WARNING, so without this
+# Relay's own info lines (the audit trail) never reach CloudWatch.
+logging.getLogger().setLevel(logging.INFO)
 
 
 def handler(event, context):
+    set_request_id(getattr(context, "aws_request_id", ""))
     app = create_app()
     return Mangum(app)(event, context)

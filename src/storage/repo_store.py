@@ -180,6 +180,20 @@ def is_watched(repo_full_name: str) -> bool:
         return False
 
 
+def watch_state(repo_full_name: str) -> str:
+    """"watched", "not_watched" or "unknown" (the datastore could not be read).
+    is_watched() folds the last two into False, which is right for the allowlist but
+    hides that a repository SHIP does watch may have been let through unreviewed;
+    the webhook uses this to tell the two apart and report an error status."""
+    if repo_full_name in BOOTSTRAP_REPOS:
+        return "watched"
+    try:
+        return "watched" if get_repo(repo_full_name) is not None else "not_watched"
+    except Exception:
+        log.exception("could not read %s to check whether %r is connected", TABLE_NAME, repo_full_name)
+        return "unknown"
+
+
 def mark_event_seen(repo_full_name: str) -> None:
     """
     Flips a repository from awaiting to watching on its first real webhook

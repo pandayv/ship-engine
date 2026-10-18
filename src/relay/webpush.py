@@ -14,6 +14,8 @@ the findings and reports that it displayed them.
 
 import json
 import logging
+import os
+import time
 from functools import lru_cache
 
 from src.storage import push_store
@@ -21,9 +23,14 @@ from src.storage import push_store
 log = logging.getLogger(__name__)
 
 VAPID_PRIVATE_PARAM = "/ship/webpush/vapid_private"
-VAPID_CONTACT = "mailto:mysubmails0@gmail.com"
+# Identifies the sender to the browser's push service; set SHIP_VAPID_CONTACT to change it.
+VAPID_CONTACT = os.environ.get("SHIP_VAPID_CONTACT", "mailto:mysubmails0@gmail.com")
 DISPLAY_PAGE = "https://pandayv.github.io/ship-engine/ship-display.html"
 GONE = (404, 410)       # the browser says this subscription no longer exists
+# Same reasoning as src/relay/push.py: the skill is waiting on Relay, so each send is
+# short and the whole notification stops when its budget is spent.
+SEND_TIMEOUT_SECONDS = 2
+NOTIFY_BUDGET_SECONDS = 2.5
 
 
 @lru_cache(maxsize=1)
@@ -43,7 +50,7 @@ def _send(subscription: dict, message: dict):
             vapid_private_key=_vapid_private_key(),
             vapid_claims={"sub": VAPID_CONTACT},
             ttl=600,
-            timeout=5,
+            timeout=SEND_TIMEOUT_SECONDS,
         )
     except WebPushException as exc:
         return exc.response
@@ -54,7 +61,11 @@ def notify_device(device_name: str, body: str) -> int:
     many accepted it. Never raises: a failed notification is a normal, reportable outcome."""
     message = {"title": "SHIP", "body": body, "url": DISPLAY_PAGE}
     sent = 0
+    started = time.monotonic()
     for row in push_store.subscriptions_for_device(device_name):
+        if time.monotonic() - started > NOTIFY_BUDGET_SECONDS:
+            log.warning("notification to %s stopped at its time budget", device_name)
+            break
         try:
             response = _send(row["subscription"], message)
         except Exception:  # noqa: BLE001

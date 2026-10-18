@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:680160265218:*"
+    },
+    {
+      "Sid": "RegisterAndForgetConnections",
+      "Effect": "Allow",
+      "Action": ["dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-device-connections"
+    },
+    {
+      "Sid": "FileAnAlertAddress",
+      "Effect": "Allow",
+      "Action": ["dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-push-subscriptions"
+    },
+    {
+      "Sid": "CollectHeldFindings",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-pending-display"
+    },
+    {
+      "Sid": "RecordThatAPageDisplayedFindings",
+      "Effect": "Allow",
+      "Action": ["dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:us-west-2:680160265218:table/ship-recent-reviews"
+    },
+    {
+      "Sid": "ReplyOnTheConnection",
+      "Effect": "Allow",
+      "Action": ["execute-api:ManageConnections"],
+      "Resource": "arn:aws:execute-api:us-west-2:680160265218:9vkr6eelzd/prod/POST/@connections/*"
+    }
+  ]
+}

@@ -29,9 +29,11 @@ never an exception.
 import json
 import logging
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import orchestrator
 
@@ -73,10 +75,17 @@ _mcp = {"ready": False, "protocol": None, "tools": [], "tool_defs": [], "next_id
 _table_handle = None
 _bedrock_handle = None
 _deadline = float("inf")   # set at the start of every request by handler()
+_id_lock = threading.Lock()
 
 
 class RelayError(Exception):
     """Relay could not be reached or answered with an error."""
+
+
+class RelayToolError(RelayError):
+    """Relay was reached but the tool failed (the MCP reply carried isError). The text of
+    such a reply is an exception message, not a sentence for a person: it is logged and
+    never spoken."""
 
 
 # ---------------------------------------------------------------- MCP client
@@ -114,9 +123,11 @@ def _post(body, protocol=None):
 
 
 def _rpc(method, params=None, protocol=None):
-    _mcp["next_id"] += 1
+    with _id_lock:
+        _mcp["next_id"] += 1
+        request_id = _mcp["next_id"]
     reply = _post(
-        {"jsonrpc": "2.0", "id": _mcp["next_id"], "method": method, "params": params or {}},
+        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}},
         protocol,
     )
     if not reply:
@@ -155,6 +166,11 @@ def call_tool(name, arguments=None):
     result = _rpc("tools/call", {"name": name, "arguments": arguments or {}}, _mcp["protocol"])
     content = result.get("content") or [{}]
     text = content[0].get("text", "")
+    if result.get("isError"):
+        # FastMCP turns an exception inside a tool into text like "Error executing tool ...".
+        # That is for the logs, never for the speaker.
+        log.error("Relay tool %s failed: %s", name, str(text)[:300])
+        raise RelayToolError(f"tool {name} failed")
     try:
         return json.loads(text)
     except (TypeError, ValueError):
@@ -199,7 +215,7 @@ def next_step(session):
         return "Say approve or reject, with the number and a reason."
     screens = session.get("screens")
     if screens:
-        return f"You can ask what's up, or say show it on the {screens[0]}."
+        return f"You can ask what's up, or say show it on the {' or '.join(screens[:2])}."
     return "You can ask what's up."
 
 
@@ -262,9 +278,17 @@ def _session(event):
     }
 
 
+def _both(first, second):
+    """Two independent Relay reads at once: each is a round trip, and Alexa is waiting."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(first), pool.submit(second)
+        return a.result(), b.result()
+
+
 def status_reply(session):
-    connected_screens(session)
-    sentence = str(call_tool("release_status"))
+    _connect()      # the handshake once, before the reads share it
+    _, sentence = _both(lambda: connected_screens(session), lambda: call_tool("release_status"))
+    sentence = str(sentence)
     orchestrator.remember(session, "what's the status", sentence)
     return speak(sentence, reprompt=REPROMPT, session=session)
 
@@ -284,10 +308,18 @@ def connected_screens(session=None):
 
 def seen_routing():
     """Which findings the person has actually seen on a screen, according to Relay, as
-    [{repo, pr_number, findings}] for each pull request with at least one seen finding.
-    None if that could not be checked. This is the source of truth: the skill's own
-    memory of what it displayed is not, because the person may have opened a notification
-    on a device the skill never talked to."""
+    [{repo, pr_number, findings: [{position, alert_id, blocks_merge}]}] for each pull
+    request with at least one seen finding, or None if that could not be checked.
+
+    `position` is the number the finding had on the screen that displayed it (Relay records
+    that when it shows the findings), which is the number the person will say. It is NOT
+    where the finding sits now: findings that arrive or get decided after the screen was drawn
+    move the live numbers, and "the second one" must still mean the one they looked at. Only
+    seen findings are included, and a number that two seen findings both claim is dropped
+    (ambiguous, so refused rather than guessed).
+
+    This is the source of truth: the skill's own memory of what it displayed is not, because
+    the person may have opened a notification on a device the skill never talked to."""
     try:
         data = call_tool("findings_routing")
     except Exception:  # noqa: BLE001
@@ -295,12 +327,18 @@ def seen_routing():
         return None
     routing = []
     for pr in data.get("pull_requests", []):
-        if any(f.get("seen") for f in pr.get("findings", [])):
-            routing.append({
-                "repo": pr["repo"], "pr_number": pr["pr_number"],
-                "findings": [{"position": f["position"], "alert_id": f["alert_id"],
-                              "blocks_merge": f.get("blocks_merge")} for f in pr["findings"]],
-            })
+        findings = pr.get("findings", [])
+        # A Relay from before shown_position existed only knows the live number.
+        legacy = any("shown_position" not in f for f in findings)
+        picked = [(f.get("position") if legacy else f.get("shown_position"), f) for f in findings if f.get("seen")]
+        picked = [(pos, f) for pos, f in picked if pos is not None]
+        counts = {}
+        for pos, _ in picked:
+            counts[pos] = counts.get(pos, 0) + 1
+        kept = [{"position": pos, "alert_id": f["alert_id"], "blocks_merge": f.get("blocks_merge")}
+                for pos, f in picked if counts[pos] == 1]
+        if kept:
+            routing.append({"repo": pr["repo"], "pr_number": pr["pr_number"], "findings": kept})
     return routing
 
 
@@ -333,8 +371,7 @@ def free_text_reply(text, session):
     """Anything said in the person's own words. A language model picks the tools;
     if it can't be used in time, plain rules cover the common requests."""
     _connect()
-    connected = connected_screens(session)
-    seen = seen_routing()
+    connected, seen = _both(lambda: connected_screens(session), seen_routing)
     if seen is not None:
         session["routing"] = seen       # what Relay says was seen, not what we remember
     try:
@@ -361,6 +398,22 @@ def alerts_reply(session):
         reprompt=REPROMPT, session=session,
         card={"type": "AskForPermissionsConsent", "permissions": [NOTIFICATIONS_SCOPE]},
     )
+
+
+def drop_pending(session):
+    """Leaving the conversation drops a decision that was staged but never confirmed, so
+    the screen stops showing it as pending. The goodbye does not wait on this."""
+    pending = session.get("pending")
+    if not pending:
+        return
+    try:
+        args = {"repo": pending["repo"], "pr_number": pending["pr_number"]}
+        if session.get("screen"):
+            args["device"] = session["screen"]
+        call_tool("cancel_pending", args)
+    except Exception:  # noqa: BLE001
+        log.exception("could not clear the staged decision on Relay")
+    session.pop("pending", None)
 
 
 def on_intent(request, session):
@@ -394,6 +447,7 @@ def on_intent(request, session):
             reprompt=REPROMPT, session=session,
         )
     if name in ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent"):
+        drop_pending(session)
         return speak("Okay.", end=True)
     # Alexa could not match what was said to anything it knows. It hands over no text,
     # so say what does work instead of guessing.
@@ -430,6 +484,12 @@ def handler(event, context):
         if kind == "SessionEndedRequest":
             return {"version": "1.0", "response": {}}
         return speak("Sorry, I missed that. " + next_step(session), reprompt=REPROMPT, session=session)
+    except RelayToolError:
+        log.exception("Relay tool failed")
+        # Reached, but it could not do that. Stay in the conversation: a staged decision
+        # is still staged and a plain yes will retry it.
+        return speak("Something went wrong on my side. Please try again in a moment.",
+                     reprompt=REPROMPT, session=session)
     except RelayError:
         log.exception("Relay call failed")
         return speak("I couldn't reach SHIP just now. Please try again in a moment.", end=True)

@@ -394,3 +394,21 @@ def test_wrong_token_uses_constant_time_comparison(monkeypatch):
     response = client.get("/dashboard", params={"token": "x" * len(TEST_TOKEN)}, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"].startswith("/dashboard/login")
+
+
+def test_history_says_a_rejected_finding_still_blocks_until_the_code_changes(monkeypatch):
+    held = _sample_resolved_alert()
+    held.resolution, held.fragment_key = "rejected", "k"
+    cleared = _sample_resolved_alert()
+    cleared.alert_id, cleared.resolution, cleared.fragment_key, cleared.unblocked_at = "a2", "rejected", "k2", "2026-10-17T00:00:00+00:00"
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_TOKEN", TEST_TOKEN)
+    monkeypatch.setattr(dashboard_module.alert_store, "list_resolved_alerts", lambda: [held, cleared])
+    text = client.get(f"/dashboard/history?token={TEST_TOKEN}").text
+    assert text.count("Still blocking the merge") == 1
+
+
+def test_a_gate_rejection_posts_the_status_through_the_shared_function(monkeypatch):
+    calls = []
+    _, synced = _wire_resolvable(monkeypatch, calls)
+    client.post(f"/dashboard/a1/reject?token={TEST_TOKEN}", data={"reason": "real problem"}, follow_redirects=False)
+    assert calls == [("a1", False)] and synced[0][0] == ("pandayv/micro-finance", 1, "abc123sha")
