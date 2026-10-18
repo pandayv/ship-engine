@@ -234,6 +234,35 @@ def routing_for(session, repo, pr_number):
     return None
 
 
+_ORDINAL_WORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
+                  "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10}
+_ORDINAL = r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th))"
+# Alexa writes the word "one" as the digit 1, so "the second one" can reach us as "the second 1".
+# After an ordinal or a pointing word a lone 1 is the pronoun, not finding number 1.
+_ORDINAL_THEN_ONE = re.compile(rf"\b({_ORDINAL}|last|next|that|this|other)\s+1\b", re.I)
+_SPOKEN_ORDINAL = re.compile(rf"\b({_ORDINAL})\b", re.I)
+_NUMBERED = re.compile(r"(?:\bnumber|\bfinding|\bitem|#)\s*(\d{1,2})\b", re.I)
+
+
+def normalize_spoken(text):
+    """Puts the pronoun back: "the 2nd 1" is "the 2nd one". Nothing else is changed, so
+    "pull request 1" and "number 1" keep their digit."""
+    return _ORDINAL_THEN_ONE.sub(lambda m: f"{m.group(1)} one", str(text or ""))
+
+
+def spoken_position(text):
+    """The finding number the person named in words ("the second one", "the 2nd", "number 2",
+    "#2"), or None if they named none or more than one. Pull request numbers do not count.
+    Used to check the model's reading of what was said, never to guess at an unclear request."""
+    found = set()
+    for m in _SPOKEN_ORDINAL.finditer(text or ""):
+        word = m.group(1).lower()
+        found.add(_ORDINAL_WORDS[word] if word in _ORDINAL_WORDS else int(re.match(r"\d+", word).group()))
+    for m in _NUMBERED.finditer(text or ""):
+        found.add(int(m.group(1)))
+    return found.pop() if len(found) == 1 else None
+
+
 def decisions_by_id(routing_pr, decisions):
     """Turns spoken positions into finding ids against what Relay recorded as shown.
     Returns (decisions_with_ids, None) or (None, sentence_to_speak). Done in code, after
@@ -411,6 +440,7 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
     sit (for pointing at them), and a short history. `converse(system, messages,
     tools)` is the model call and returns Bedrock's Converse response.
     """
+    utterance = normalize_spoken(utterance)
     pending = session.get("pending")
     if pending and is_confirmation(utterance):
         result = call_tool("proceed", {"repo": pending["repo"], "pr_number": pending["pr_number"],
@@ -511,6 +541,12 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
             if decisions is None:
                 speech = DECISION_UNCLEAR
                 continue
+            # One decision about one finding named in words: the person's number wins over the
+            # model's reading of it. A wrong number here would decide a different finding.
+            named = spoken_position(utterance)
+            if len(decisions) == 1 and named is not None and decisions[0]["position"] != named:
+                log.info("model read finding %s but the person said %s", decisions[0]["position"], named)
+                decisions[0]["position"] = named
             # Only with reasons in the person's own words.
             said = [utterance] + [earlier for earlier, _ in session.get("history", [])]
             if not decisions or any(not reason_is_theirs(d["reason"], said, connected) for d in decisions):

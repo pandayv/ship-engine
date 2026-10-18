@@ -48,7 +48,7 @@ architecture genuinely needed each piece.
   for alerts and the findings held for them, which alert was shown on a
   screen recently and under what number, decisions staged by voice until
   the person confirms, which Alexa users SHIP may notify, and patterns
-  learned from resolved findings. The summary table exists because Relay's voice
+  learned from the findings reviewers allowed. The summary table exists because Relay's voice
   path needs to be one `GetItem` regardless of how many findings exist.
   The half-second Alexa+ budget would not survive aggregating on
   read.
@@ -295,9 +295,10 @@ other caller, so the skill needs no signature-checking code.
 **What needs work:** the notification catalog has no generic alert type,
 so a compliance alert has to be phrased as a message count. And when a free
 text slot (`AMAZON.SearchQuery`) sits behind a carrier phrase, Alexa hands
-the skill only the slot, so a verb used as the carrier ("approve ...",
-"reject ...") disappears from what the skill receives. Details in
-[`FRICTION_LOG.md`](FRICTION_LOG.md).
+the skill only the slot, so a verb used as the carrier ("allow ...",
+"block ...") disappears from what the skill receives. The skill keeps one
+intent per verb (`AllowIntent`, `BlockIntent`) and puts the verb back
+itself. Details in [`FRICTION_LOG.md`](FRICTION_LOG.md).
 
 **Onboarding:** `ask configure` was self-explanatory, and linking the AWS
 profile there meant no separate credential setup for the deploy.

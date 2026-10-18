@@ -613,3 +613,63 @@ def test_a_reason_that_borrows_a_screen_name_but_has_real_content_passes():
 
 def test_a_reason_the_person_did_not_say_is_still_refused():
     assert not o.reason_is_theirs("vendor confirmed anonymised", ["allow the first one"])
+
+
+# --- spoken ordinals: Alexa writes "one" as 1, and the person's number beats the model's reading ---
+
+
+@pytest.mark.parametrize("heard, meant", [
+    ("block the second 1 on pull request 6 because it leaks data", "block the second one on pull request 6 because it leaks data"),
+    ("allow the 1st 1 because it is test data", "allow the 1st one because it is test data"),
+    ("allow the last 1 because it is test data", "allow the last one because it is test data"),
+    ("allow that 1 because it is test data", "allow that one because it is test data"),
+    ("allow the 3rd 1 on pull request 1", "allow the 3rd one on pull request 1"),
+])
+def test_a_lone_1_after_an_ordinal_is_the_word_one(heard, meant):
+    assert o.normalize_spoken(heard) == meant
+
+
+@pytest.mark.parametrize("text", ["on pull request 1", "allow number 1 because it is test data", "finding 1", "#1", "1 and 2"])
+def test_a_digit_that_is_a_number_is_left_alone(text):
+    assert o.normalize_spoken(text) == text
+
+
+@pytest.mark.parametrize("text, position", [
+    ("allow the second one", 2), ("block the 2nd one", 2), ("block the second one on pull request 6", 2),
+    ("allow number 2 because it is test data", 2), ("allow #3", 3), ("allow the tenth one", 10),
+    ("block the first one on pull request 2", 1),
+])
+def test_the_number_the_person_named_is_read_in_code(text, position):
+    assert o.spoken_position(text) == position
+
+
+@pytest.mark.parametrize("text", [
+    "allow everything", "allow all of them", "allow the first and block the second", "block it on pull request 2",
+    "allow the first one and the third one",
+])
+def test_no_single_number_is_read_when_there_is_none_or_more_than_one(text):
+    assert o.spoken_position(text) is None
+
+
+def test_the_second_one_heard_as_second_1_is_the_second_finding_even_if_the_model_reads_it_as_1():
+    # Seen live: Alexa gave "the second 1" and the model proposed position 1.
+    speech, relay, _ = stage({"position": 1, "decision": "block", "reason": "it sends personal data to an outside model"},
+                             "block the second 1 on pull request 1 because it sends personal data to an outside model")
+    assert relay.names == ["stage_decisions"]
+    assert relay.calls[0][1]["decisions"][0]["alert_id"] == "bbb" and relay.calls[0][1]["decisions"][0]["position"] == 2
+
+
+def test_when_the_model_agrees_with_the_spoken_number_nothing_changes():
+    _, relay, _ = stage({"position": 1, "decision": "allow", "reason": "it is only test data"},
+                        "allow the first one because it is only test data")
+    assert relay.calls[0][1]["decisions"][0]["alert_id"] == "aaa"
+
+
+def test_a_spoken_number_does_not_override_a_batch_or_an_exclusion():
+    # "everything except the second one" names one number, but the decisions are several.
+    decisions = [{"position": 1, "decision": "allow", "reason": "it is only test data"}]
+    _, relay, _ = turn("allow everything except the second one because it is test data",
+                       model_says(use("stage_decisions", repo="pandayv/micro-finance", pr_number=1,
+                                      decisions=decisions + [{"position": 2, "decision": "allow", "reason": "it is only test data"}])),
+                       session={"screen": "tv", "routing": ROUTING})
+    assert [d["position"] for d in relay.calls[0][1]["decisions"]] == [1, 2]

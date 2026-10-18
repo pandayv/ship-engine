@@ -25,12 +25,12 @@ Then ask it out loud. *"Alexa, ask ship review what's up."* gets one
 sentence. It says how many blockers there are and offers a screen to
 look at, never the finding itself. Say *"show it on the laptop"* and the detail appears there, as one
 table per pull request with numbered rows. Decide in your own words:
-*"Approve the first one on pull request 2 because it's only test data."*
+*"Allow the first one on pull request 2 because it's only test data."*
 
-Approve means you accept the risk, and the finding stops blocking. Reject
-means the finding is confirmed and the pull request stays blocked until a
-later commit changes the flagged code. SHIP checks the PR again on every
-commit.
+Allow means you accept the risk, and the finding stops blocking. Block
+means you confirm the finding is real, and the pull request stays blocked
+until a later commit changes the flagged code. SHIP checks the PR again on
+every commit.
 
 A decision by voice has to be a decision a person made. Relay, SHIP's
 server, refuses unless the finding was shown on a screen in the last ten
@@ -93,10 +93,10 @@ how each integration went.
 - **Grounded, not recalled.** Every citation traces to sourced regulation
   text retrieved at judgment time. A Healing Loop script re-checks that the
   stored text still matches the source.
-- **A feedback loop.** What reviewers okay becomes a small set of general
+- **A feedback loop.** What reviewers allow becomes a small set of general
   patterns. A pattern counts only after several independent decisions, and
   Detector treats it as context while it still judges every finding against
-  the regulation text. A finding a reviewer confirmed is real never feeds it.
+  the regulation text. A finding a reviewer blocked as real never feeds it.
 - **Parallel, retryable review.** Each flagged fragment is its own SQS job.
   A slow or failed one can't block the others, and a dead-letter queue
   catches failures instead of dropping them.
@@ -107,7 +107,8 @@ how each integration went.
 - **A modality contract, enforced by the server.** A spoken sentence is
   capped at 180 characters with no line breaks, so a list of findings can't
   be read aloud. The tests check outcomes: a refusal changes nothing, an
-  approval clears the PR's status, a rejection keeps it failing.
+  allowed finding stops blocking the PR's check, a blocked one keeps it
+  failing.
 - **The model proposes, code decides.** The model can reach four tools and
   never sees finding text. Spoken numbers become finding ids in code, using
   the numbers the person saw on a screen. What Alexa says back is Relay's
@@ -122,7 +123,7 @@ Voice, screen and decision are three surfaces doing three different jobs on
 purpose. Alexa triggers and routes. A nearby display renders the detail.
 Deciding a finding, in Gate with a typed reason or by voice with a spoken
 one, always requires having seen it first. That split is why the refusal
-(approving something you've never looked at fails) reads as a design
+(allowing something you've never looked at fails) reads as a design
 position and not a missing feature.
 
 The product is also candid about what it doesn't know. If SHIP can't read

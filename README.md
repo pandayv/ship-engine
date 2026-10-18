@@ -33,7 +33,7 @@ Rely on facts, not memory or guesswork. Every citation traces to sourced regulat
 The answer finds you, on whatever device is nearest. Voice gives the headline. A screen gives the detail.
 
 **Learns from your decisions.**
-What reviewers okay shapes the next review. Detector still judges every finding against the regulation text.
+What reviewers allow shapes the next review. Detector still judges every finding against the regulation text.
 
 **Honest when unsure.**
 A status SHIP can't read is never called all clear. A review that hasn't finished never shows a green check.
@@ -62,15 +62,16 @@ Screener, Detector, Triage, Gate, Relay.
    line is flagged for a human without blocking.
 4. **A person decides in Gate**, the review console, or by voice. They
    see file, risk, explanation, citation and suggested fix, then
-   approve or reject.
+   allow or block.
 5. **Relay carries the same review to voice and screen**, so it comes
    to you wherever you are.
 
-Approve and reject mean different things. **Approve** means you accept
-the risk, and the finding stops blocking. **Reject** means the finding is
-real and the pull request isn't ready. It stays blocked until a later
-commit changes the flagged code. Either way the decision, with your
-reason, is posted to the PR.
+A person makes one of two calls. **Allow** means you accept the risk. The
+finding stops blocking, and the pull request can merge once nothing else
+blocks it. **Block** means the finding is real. The pull request stays
+blocked until a later commit changes the flagged code. Either way, your
+decision and your reason are posted to the PR. In Gate, a blocking finding
+offers "Allow merge" and "Keep blocked".
 
 SHIP watches for four kinds of risk: exposing sensitive personal data,
 decisions made with no human review, bias from a protected trait, and
@@ -89,7 +90,7 @@ you ask.
 > *"Alexa, ask ship review what's up."*
 > **"2 blockers found. Ready for your decision. Want it on the laptop or the tablet?"**
 > *"Show it on the laptop."*
-> **"Putting it on your laptop. Say approve or reject, with the number and a reason."**
+> **"Putting it on your laptop. Say allow or block, with the number and a reason."**
 
 The findings appear on the laptop. SHIP offers only the screens that
 exist. With one screen it asks "Want it on the laptop?". With none it
@@ -97,7 +98,7 @@ says so and puts a link to the review console in your Alexa app.
 
 You decide in your own words, using the numbers on the screen:
 
-> *"Approve the first one on pull request 2 because it's only test data."*
+> *"Allow the first one on pull request 2 because it's only test data."*
 > **"Got it, take a look and say proceed when you're ready."**
 > *"Yes."*
 > **"Done."**
@@ -107,21 +108,23 @@ is applied until you confirm. Say no, cancel or stop, and it is dropped.
 When some decisions can't be applied, SHIP says so plainly, for example
 "Applied 2 of 3. 1 already decided in the console."
 
-A rejected finding still blocks the merge, and voice says so: "Nothing
-needs a decision, but 1 rejected finding still blocks the merge until
-fixed."
+A blocked finding keeps holding the merge, and voice says so: "Nothing
+needs a decision, but 1 finding that was blocked still holds the merge
+until the code is fixed."
 
 ### On a screen
 
 The findings screen shows one table per pull request, blockers first.
 Each row has a number, the way you speak it ("first one on pull request
-2"), the file, what's wrong and the rule it breaks. A decision you have
-staged shows on its row as pending. A note appears when a rejected
-finding still holds a pull request.
+2"), the file, what's wrong and the rule it breaks. A finding that
+blocks the merge is marked "Needs a decision". One that doesn't is marked
+"Flagged". Staged decisions show on their row as pending, for example
+"Pending: allow" with your reason. When blocked findings still hold a
+pull request, a note says so.
 
 ### Voice can confirm a decision. It can never make one blind.
 
-Asking SHIP to approve a finding you haven't looked at gets a refusal.
+Asking SHIP to allow a finding you haven't looked at gets a refusal.
 That is the pattern SHIP flags in *other* people's code, an AI-mediated
 decision applied with no human checkpoint. A decision goes through only
 when three things are true.
@@ -179,9 +182,13 @@ A few examples:
 |---|---|
 | Know where things stand | "What's up?" "Can we ship today?" "Any blockers?" "Is anything blocked?" |
 | See the detail | "Show it on the laptop." "Put it on my tablet." "Send it to the TV." |
-| Decide | "Approve the first one on pull request 2 because it's only test data." "Reject the second one because it leaks a phone number." "Approve the first two on pull request 1 because they are test fixtures." |
+| Decide | "Allow the first one on pull request 2 because it's only test data." "Block the second one because it leaks a phone number." "Allow the first two on pull request 1 because they are test fixtures." |
 | Confirm or back out | "Yes." "No." "Cancel." |
 | Get alerted | "Turn on alerts." |
+
+You can also say approve, accept, dismiss, clear or ignore instead of
+allow, and reject or confirm instead of block. SHIP understands them and
+answers in allow and block.
 
 SHIP asks when something is missing, such as "What's the reason?" or
 "Which screen?", and says no when a rule says no.
@@ -223,10 +230,10 @@ has reported. If SHIP can't read its state, the check stays pending.
 
 | State of the findings | Check |
 |---|---|
-| A blocking finding waits for a decision | failure |
-| A rejected finding's code is still in the PR | failure |
+| A blocking finding waits for a decision | failure, "1 finding needs a decision" |
+| A blocked finding's code is still in the PR | failure, "1 finding blocked by a reviewer, fix the code" |
 | Only flagged (non-blocking) findings wait | success, "flagged for review" |
-| Approved, or nothing found | success |
+| Allowed, or nothing found | success |
 | Review couldn't run (unreadable diff, repo check failed, fragment too large to queue) | error |
 
 ### Tech stack
@@ -278,8 +285,11 @@ has reported. If SHIP can't read its state, the check stays pending.
   the top of [`src/relay/server.py`](src/relay/server.py) has the details.
 - **Alexa Skill:** [`alexa-skill/`](alexa-skill/) stands in for an Alexa+
   add-on. Common requests have their own intents and are answered by
-  plain code. Anything else goes to Amazon Nova Lite on Bedrock, which
-  chooses among `release_status`, `display_on`, `stage_decisions` and
+  plain code. Anything else goes to Amazon Nova Lite on Bedrock. Decisions
+  arrive on `AllowIntent` and `BlockIntent`, one per verb, so the verb
+  survives Alexa's carrier-phrase handling. Approve, accept, clear,
+  dismiss and ignore reach the model as allow, and reject and confirm as
+  block. The model chooses among `release_status`, `display_on`, `stage_decisions` and
   `proceed`. Plain code then checks the choice. The model never sees
   finding text. It must name a screen the person used, give numbers the
   person saw, and give a reason built from the person's own words. Only
@@ -319,10 +329,10 @@ with no line breaks, so a list of findings can't be spoken.
 | `display_on` | Action | Pushes the findings to a named screen, or sends a notification if the page is closed. Reports plainly when neither is possible. |
 | `connected_screens` | Action | Screens that are open now or registered for alerts. |
 | `findings_routing` | Action | Which findings were shown, and under what number. Records nothing. |
-| `stage_decisions` | Action | Validates a batch of decisions for one pull request and stages it. Applies nothing. |
-| `proceed` | Action | Applies the staged batch after re-checking each finding. Reports each outcome. |
+| `stage_decisions` | Action | Validates a batch of decisions for one pull request and stages it. Each item is `{alert_id, decision, reason}`, and `decision` must be exactly `allow` or `block`. Anything else, including an `approved` flag, is refused. Applies nothing. |
+| `proceed` | Action | Applies the staged batch after re-checking each finding. Reports each outcome: applied, skipped, already decided, not found, unreadable or error. |
 | `cancel_pending` | Action | Drops the staged batch. |
-| `request_risk_acceptance` | Action | Approves one finding in a single step under the same two server rules. The skill's model can't reach it. |
+| `request_risk_acceptance` | Action | Allows one finding in a single step under the same two server rules. It can't block. The skill's model can't reach it. |
 
 ## Setup
 
@@ -354,7 +364,7 @@ src/
     embedding_cache.py  # Cached corpus embeddings
     pattern_store.py    # Learned patterns for Detector
   storage/
-    alert_store.py      # DynamoDB: idempotent alerts, decisions, held rejections
+    alert_store.py      # DynamoDB: idempotent alerts, decisions, held blocks
     repo_store.py       # DynamoDB: which repos SHIP watches
     status_store.py     # DynamoDB: precomputed release summary
     review_ledger.py    # Which fragments of a commit's review have reported
@@ -389,7 +399,7 @@ docs/
   voice-resolution-workflow.md  # How a spoken decision is checked
 scripts/
   healing_loop.py          # Periodic corpus-grounding check
-  pattern_miner.py         # Extracts patterns from resolved findings
+  pattern_miner.py         # Extracts patterns from allowed findings
   benchmark_models.py      # The benchmark behind the Nova Lite choice
   precompute_embeddings.py # Regenerates rag_corpus/'s cached embeddings
 lambda_handler.py          # Webhook Lambda entrypoint
@@ -405,14 +415,16 @@ The review pipeline, Gate, Relay, the Alexa Skill, the web simulator and
 screen delivery (open pages and Web Push) are built.
 
 What's not built yet:
-- **Auto-applying the suggested fix.** Approving a finding doesn't push
-  the patch to the PR; a person applies it after reviewing it in Gate.
+- **Auto-applying the suggested fix.** SHIP drafts the patch but doesn't
+  push it to the PR. A person applies it after reviewing it in Gate.
   A GitHub-API integration away, not an architecture change.
 - **Scheduling the Healing Loop and the pattern miner.**
   [Healing Loop](scripts/healing_loop.py) re-checks that sourced
-  regulation text still matches the law. The pattern miner turns approved
-  findings into patterns. Both run as manual scripts, not on a schedule
-  or alert channel.
+  regulation text still matches the law. The pattern miner turns allowed
+  findings into patterns. A blocked finding is never mined, and a pattern
+  reaches Detector only after three independent decisions, as context and
+  never as a rule. Both run as manual scripts, not on a schedule or alert
+  channel.
 - **A dead-letter consumer.** A review whose queue message exhausts its
   retries leaves the check pending, which is the safe direction. A
   consumer would turn that into an explicit error status.
