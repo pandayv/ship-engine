@@ -60,7 +60,10 @@ reason."
    finding as shown, together with the number it had on that screen.
 3. The person speaks a decision with a number and a reason.
 4. The skill checks the sentence and turns each spoken number into a finding
-   id, using the numbers Relay recorded as shown.
+   id, using the numbers Relay recorded as shown. A number the person says in
+   words ("the second one") outranks the model's reading of it when a single
+   finding is named. A bare yes never stages a decision: it only confirms one
+   that is already staged.
 5. `stage_decisions` validates the whole batch, stores it, and pushes the
    screen so each row shows "Pending: allow" or "Pending: block" with the
    reason. Alexa says: "Got it, take a look and say proceed when you're ready."

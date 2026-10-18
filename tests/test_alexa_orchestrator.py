@@ -673,3 +673,22 @@ def test_a_spoken_number_does_not_override_a_batch_or_an_exclusion():
                                       decisions=decisions + [{"position": 2, "decision": "allow", "reason": "it is only test data"}])),
                        session={"screen": "tv", "routing": ROUTING})
     assert [d["position"] for d in relay.calls[0][1]["decisions"]] == [1, 2]
+
+
+@pytest.mark.parametrize("said", ["yes", "okay", "go ahead", "yeah", "sure", "proceed"])
+def test_a_bare_yes_never_stages_a_decision_even_if_the_model_fills_one_in_from_earlier_turns(said):
+    session = {"screen": "tv", "routing": ROUTING,
+               "history": [("allow the first one because it is only test data", "I don't have a finding number 3. Which one did you mean?")]}
+    speech, relay, session = turn(said, model_says(use("stage_decisions", repo="pandayv/micro-finance", pr_number=1,
+                                  decisions=[{"position": 1, "decision": "allow", "reason": "it is only test data"}])),
+                                  session=session)
+    assert relay.calls == [] and speech == o.NEEDS_A_DECISION and "pending" not in session
+
+
+def test_an_answer_that_names_the_finding_still_stages_after_a_clarifying_question():
+    session = {"screen": "tv", "routing": ROUTING,
+               "history": [("allow it because it is only test data", "Which one did you mean?")]}
+    speech, relay, _ = turn("the first one", model_says(use("stage_decisions", repo="pandayv/micro-finance", pr_number=1,
+                            decisions=[{"position": 1, "decision": "allow", "reason": "it is only test data"}])),
+                            session=session)
+    assert relay.names == ["stage_decisions"]

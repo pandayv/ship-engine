@@ -89,6 +89,7 @@ ASK_REASON = "What's the reason?"
 ASK_REASON_EACH = "What's the reason for each one?"
 CONFIRM_OR_DROP = "Say yes to apply what's staged, or no to drop it."
 NOTHING_STAGED = "There is nothing staged to apply."
+NEEDS_A_DECISION = "Tell me which finding, and whether to allow or block it."
 SAME_TWICE = "You mentioned the same finding twice. Which decision did you mean?"
 # The two decisions, as Relay spells them. This folder is zipped on its own and cannot import
 # src/, so tests/test_alexa_orchestrator.py checks these match src/storage/alert_store.py.
@@ -535,6 +536,12 @@ def run_turn(utterance, session, tool_defs, call_tool, converse, deadline, conne
             shown = routing_for(session, *target) if target else None
             if shown is None:
                 speech = LOOK_FIRST
+                continue
+            # A bare "yes" confirms what is already staged (handled above, before the model). It
+            # never stages anything: the model would fill the gaps from earlier turns, and a
+            # decision must come from words that say which finding and which way.
+            if is_confirmation(utterance):
+                speech = NEEDS_A_DECISION
                 continue
             # Each decision must be exactly allow or block: anything else is asked about, not sent.
             decisions = clean_decisions(args.get("decisions"))
