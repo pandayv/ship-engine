@@ -1,28 +1,41 @@
-# IAM reference policies
+# IAM: one role per function, one policy per role
 
-One policy file per Lambda role, holding the permissions the code calls today and nothing else.
-These are **reference files reviewed against the code. They have not been applied to AWS.**
+Each Lambda has its own role, because each needs different permissions. A role holds exactly one
+inline policy, named after the function it serves: `<function>-access`. The policy documents in
+this folder are the source of truth, and `roles.json` ties each role to its function, its policy
+name and its file.
 
-| File | Role | Lambda |
-|---|---|---|
-| `ship-relay-role.json` | `ship-relay-role` | `ship-relay` (MCP server) |
-| `ship-device-gateway-role.json` | `ship-device-gateway-role` | `ship-device-gateway` (WebSocket routes) |
-| `ship-fragment-processor-role.json` | `ship-fragment-processor-role` | `ship-fragment-processor` (SQS consumer) |
-| `ship-webhook-AgentCore-lambda-role.json` | `ship-webhook-AgentCore-lambda-role` (read from the Lambda's configuration; `deploy.sh` names a different role) | `ship-webhook` (GitHub webhook and the Gate console) |
-| `ask-lambda-SHIPReview-1791468806554.json` | `ask-lambda-SHIPReview-1791468806554` | `ship-alexa-skill` |
+| Role | Function | Policy | File |
+|---|---|---|---|
+| `ship-relay-role` | `ship-relay` | `ship-relay-access` | `ship-relay-role.json` |
+| `ship-device-gateway-role` | `ship-device-gateway` | `ship-device-gateway-access` | `ship-device-gateway-role.json` |
+| `ship-fragment-processor-role` | `ship-fragment-processor` | `ship-fragment-processor-access` | `ship-fragment-processor-role.json` |
+| `ship-webhook-AgentCore-lambda-role` | `ship-webhook` | `ship-webhook-access` | `ship-webhook-AgentCore-lambda-role.json` |
+| `ask-lambda-SHIPReview-1791468806554` | `ship-alexa-skill` | `ship-alexa-skill-access` | `ask-lambda-SHIPReview-1791468806554.json` |
 
-## Applying one
+The webhook role keeps its historical name and the skill role is named by the ASK CLI. Roles
+cannot be renamed, and the names do not matter to anyone using the system. What matters is that
+each holds one policy that says what it needs and why.
 
-Never overwrite an existing inline policy. The policy names in the console are not known from the
-repo (`deploy.sh` names one that does not exist on the live fragment-processor role), so:
+## Tidying a deployment
 
-1. Pick a **new, unique** name for each, for example `ship-relay-reference-20261018`.
-2. Check the name is free (`aws iam get-role-policy --role-name <role> --policy-name <name>` should
-   say it does not exist) before putting it.
-3. Put the whole file as that new policy. Compare it with what the role has today before removing
-   anything older; removing the old inline policies is a separate, deliberate step.
+`scripts/iam_tidy.py` brings every role to that layout. It needs credentials that can manage IAM,
+not the deploy user. The stages are safe to stop after:
 
-## How each action was derived
+```
+python scripts/iam_tidy.py            # show what each role has now and what would change
+python scripts/iam_tidy.py --apply    # add the one policy to every role; nothing is removed
+python scripts/preflight.py           # check the demo still works
+python scripts/iam_tidy.py --prune    # back up, then remove every other policy from those roles
+python scripts/iam_tidy.py --restore infra/iam/backups/<file>.json    # put back what --prune removed
+```
+
+`--prune` refuses to run unless each role already has its policy exactly as in this folder, and
+it writes a backup of everything it removes before it removes anything. It never touches a role's
+trust policy, tags, or the roles themselves. Roles that look like SHIP's but are not listed in
+`roles.json` are reported for review in the console, and nothing more.
+
+## How each permission was derived
 
 Each line was checked against the call in the code, after the changes in this branch.
 
@@ -45,6 +58,7 @@ Each line was checked against the call in the code, after the changes in this br
 | SQS `ship-fragment-queue` | SendMessage (webhook); Receive/Delete/GetQueueAttributes (fragment) | `main._dispatch_fragments`; the event source mapping |
 | `bedrock-agentcore:InvokeAgentRuntime` | fragment | `detector.detect_via_agentcore` |
 | `bedrock:InvokeModel` on Nova Lite | skill | `lambda_function._converse` (Converse needs InvokeModel) |
+
 
 ## Left out on purpose
 

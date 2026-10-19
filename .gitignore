@@ -12,3 +12,4 @@ build-*/
 
 # Alexa skill local deploy state (skill ID, Lambda ARN)
 alexa-skill/.ask/
+infra/iam/backups/

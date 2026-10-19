@@ -73,6 +73,8 @@ blocked until a later commit changes the flagged code. Either way, your
 decision and your reason are posted to the PR. In Gate, a blocking finding
 offers "Allow merge" and "Keep blocked".
 
+![A finding SHIP posted on a pull request: the file, the risk score, the explanation, the regulation it cites, a suggested change, and a link to the review console](docs/screenshots/pr-finding.png)
+
 SHIP watches for four kinds of risk: exposing sensitive personal data,
 decisions made with no human review, bias from a protected trait, and
 AI handed more authority than it should have. The detectors are grounded
@@ -174,6 +176,8 @@ blocks the merge is marked "Needs a decision". One that doesn't is marked
 "Flagged". Staged decisions show on their row as pending, for example
 "Pending: allow" with your reason. When blocked findings still hold a
 pull request, a note says so.
+
+![The findings screen on a laptop: one numbered table per pull request, every row marked Needs a decision, and two staged decisions shown as Pending: allow and Pending: block with the reasons the person gave](docs/screenshots/screen-findings.png)
 
 ### Voice can confirm a decision. It can never make one blind.
 
@@ -429,7 +433,12 @@ Deploying this yourself needs an AWS account (Bedrock, Lambda, DynamoDB,
 SQS, API Gateway) and a GitHub repository to protect. Step-by-step
 walkthrough, including troubleshooting for a brand-new AWS account:
 [SETUP.md](SETUP.md). [`deploy.sh`](deploy.sh) scripts part of it.
-Reference IAM policies: [`infra/iam/`](infra/iam/).
+IAM policies, one per role: [`infra/iam/`](infra/iam/).
+
+Day to day, two scripts matter. `python scripts/preflight.py` checks that
+everything a demo needs is up and in the right state. `python
+scripts/demo_reset.py --yes` clears the findings and opens fresh demo
+pull requests.
 
 ## Project structure
 
@@ -488,6 +497,12 @@ docs/
   architecture.html        # Full pipeline diagram
   voice-resolution-workflow.md  # How a spoken decision works and is checked
 scripts/
+  preflight.py             # Checks everything a demo needs and says what to fix
+  demo_reset.py            # Clears the findings and opens fresh demo pull requests
+  build_packages.py        # Builds the four Lambda zips from the repository
+  iam_tidy.py              # One reviewed policy per role, named <function>-access
+  migrate_decision_names.py  # One-off: older stored decisions to allowed/blocked
+  backfill_fragment_keys.py  # One-off: gives older findings their code fingerprint
   healing_loop.py          # Periodic corpus-grounding check
   pattern_miner.py         # Extracts patterns from allowed findings
   benchmark_models.py      # The benchmark behind the Nova Lite choice
