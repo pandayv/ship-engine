@@ -261,18 +261,25 @@ never decides anything.
 
 ## Try it
 
-- **An Echo with the skill enabled.** Say "Alexa, ask ship review what's
-  up" and answer what it asks.
-- **[The simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
-  is a web page that acts as an MCP client of Relay. It opens a session,
-  lists the tools, asks for the status and shows the findings on a
-  screen. The guided conversation and the decisions run on the Echo or in
-  the review console, not on this page.
-- **[The display page](https://pandayv.github.io/ship-engine/ship-display.html)**
-  registers a screen. Open it in one tab, then pick that screen in the
-  simulator and, when something is waiting, the findings arrive there.
-- **[The architecture page](https://pandayv.github.io/ship-engine/architecture.html)**
-  walks through every component.
+Without an Echo, in about two minutes:
+
+1. Open **[the simulator](https://pandayv.github.io/ship-engine/alexa-simulator.html)**
+   and press "What's up?". It speaks to the live Relay server over MCP and
+   shows the sentence Alexa would say.
+2. Press **Show here**. The findings table appears on the page: one
+   numbered table per pull request, with the regulation each finding cites.
+3. To see the screen path, open **[the display page](https://pandayv.github.io/ship-engine/ship-display.html)**
+   in another tab and give it a name. Back in the simulator, press that
+   name. The table arrives on the display page, pushed over a WebSocket.
+4. Open the **[demo pull requests](https://github.com/pandayv/micro-finance/pulls)**
+   to see what SHIP posted: a comment per finding and a failing
+   `ship/compliance` check that stops the merge.
+5. Open **[the architecture page](https://pandayv.github.io/ship-engine/architecture.html)**
+   for every component and how a spoken decision is checked.
+
+The guided conversation, the decisions by voice and the Echo alert need an
+Echo with the skill enabled. The video shows them. On an Echo, say
+"Alexa, ask ship review what's up" and answer what it asks.
 
 ## How it's built
 
