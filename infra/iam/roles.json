@@ -1,0 +1,16 @@
+{
+  "region": "us-west-2",
+  "account": "680160265218",
+  "roles": [
+    {"role": "ship-relay-role", "function": "ship-relay", "policy": "ship-relay-access", "file": "ship-relay-role.json",
+     "purpose": "Relay, the MCP server: reads findings, records decisions, pushes to screens, signs web push"},
+    {"role": "ship-device-gateway-role", "function": "ship-device-gateway", "policy": "ship-device-gateway-access", "file": "ship-device-gateway-role.json",
+     "purpose": "WebSocket gateway: registers screens, files alert addresses, records what a page displayed"},
+    {"role": "ship-fragment-processor-role", "function": "ship-fragment-processor", "policy": "ship-fragment-processor-access", "file": "ship-fragment-processor-role.json",
+     "purpose": "Fragment processor: asks Detector, records findings, sends the Echo alert"},
+    {"role": "ship-webhook-AgentCore-lambda-role", "function": "ship-webhook", "policy": "ship-webhook-access", "file": "ship-webhook-AgentCore-lambda-role.json",
+     "purpose": "GitHub webhook and the Gate console: queues fragments, records decisions, keeps the check honest"},
+    {"role": "ask-lambda-SHIPReview-1791468806554", "function": "ship-alexa-skill", "policy": "ship-alexa-skill-access", "file": "ask-lambda-SHIPReview-1791468806554.json",
+     "purpose": "Alexa skill: remembers who to alert, picks Relay tools with Nova Lite"}
+  ]
+}
