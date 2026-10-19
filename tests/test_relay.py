@@ -1271,3 +1271,20 @@ def test_a_finding_the_reviewer_blocked_is_still_counted_when_others_need_a_deci
 def test_the_sentence_is_unchanged_when_nothing_is_blocked():
     grouped = _group([_alert(severity="blocking", score=9.0)])
     assert ReleaseStatus(grouped).to_spoken().to_text() == "1 blocker found. Ready for your decision."
+
+
+@pytest.mark.parametrize("given", [
+    "https://console.example.test", "https://console.example.test/", "https://console.example.test/dashboard",
+    "https://console.example.test/dashboard/", "  https://console.example.test/dashboard  ",
+])
+def test_the_console_address_works_whether_it_is_given_as_the_site_root_or_the_dashboard_url(given):
+    # The webhook is given ".../dashboard"; one value should serve Relay too, without doubling the path.
+    assert relay._console_root(given) == "https://console.example.test"
+
+
+def test_with_no_console_address_the_reply_names_the_console_instead_of_linking_to_it(monkeypatch):
+    monkeypatch.setattr(relay, "CONSOLE_URL", "")
+    assert relay._console("/dashboard") == "the SHIP review console"
+    monkeypatch.setattr(relay, "CONSOLE_URL", "https://console.example.test")
+    assert relay._console("/dashboard") == "https://console.example.test/dashboard"
+    assert relay._console("/dashboard#abc") == "https://console.example.test/dashboard#abc"

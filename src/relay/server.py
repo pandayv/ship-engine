@@ -105,7 +105,15 @@ from src.storage.status_store import SummaryUnavailable, refresh_summary
 
 log = logging.getLogger(__name__)
 
-CONSOLE_URL = os.environ.get("SHIP_DASHBOARD_URL", "").rstrip("/")
+def _console_root(value: str) -> str:
+    """The Gate console's address without its /dashboard path, which _console() adds back.
+    The webhook and the fragment processor are given the full /dashboard address; accepting
+    both here means one value serves all three."""
+    value = (value or "").strip().rstrip("/")
+    return value[: -len("/dashboard")] if value.endswith("/dashboard") else value
+
+
+CONSOLE_URL = _console_root(os.environ.get("SHIP_DASHBOARD_URL", ""))
 
 # MCP's Streamable HTTP transport enables DNS-rebinding protection by
 # default (mcp.server.transport_security.TransportSecuritySettings,

@@ -121,10 +121,9 @@ The output names the runtime ARN. Keep it. It becomes `SHIP_AGENTCORE_RUNTIME_AR
 
 `deploy.sh` reads settings from your environment or from `.env.deploy`. It parses that file as `NAME=value` lines and does not run it. It never prints a value.
 
-`.env.deploy` is not in `.gitignore` yet. Add it before you create the file.
+`.env.deploy` is listed in `.gitignore`, so it never reaches the repository.
 
 ```bash
-echo '.env.deploy' >> .gitignore
 ./deploy.sh env
 ```
 
@@ -143,7 +142,7 @@ The `env` step writes `.env.deploy` with mode 600. It fills `GITHUB_WEBHOOK_SECR
 | `SHIP_ALEXA_CLIENT_ID`, `SHIP_ALEXA_CLIENT_SECRET` | `secrets` step | from section 5 |
 | `SHIP_VAPID_PRIVATE_KEY` | `secrets` step | made by `--generate-vapid` |
 
-`deploy.sh` sets the rest itself. `SHIP_DETECTOR_MODE` is `agentcore` and `SHIP_MODEL_BACKEND` is `bedrock`. The queue URL, the Gate URL, the Relay host and the WebSocket management endpoint are read from what it creates.
+`deploy.sh` sets the rest itself. `SHIP_DETECTOR_MODE` is `agentcore` and `SHIP_MODEL_BACKEND` is `bedrock`. The queue URL, the Gate URL, the Relay host and the WebSocket management endpoint are read from what it creates. The Gate URL goes to the webhook, the fragment processor and Relay, so Relay's tool results link to the console.
 
 ### 4.5 Read the plan
 

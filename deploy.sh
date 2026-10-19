@@ -69,7 +69,7 @@ STAGE_NAME=prod
 # Environment variable names each Lambda receives. A leading + marks a value that must
 # be provided when the function is created. On an update, a name the caller leaves unset
 # keeps the value the function already has.
-RELAY_ENV=(+GITHUB_TOKEN SHIP_DEVICE_GATEWAY_ENDPOINT SHIP_RELAY_ALLOWED_HOSTS SHIP_RELAY_ALLOWED_ORIGINS SHIP_VAPID_CONTACT)
+RELAY_ENV=(+GITHUB_TOKEN SHIP_DEVICE_GATEWAY_ENDPOINT SHIP_RELAY_ALLOWED_HOSTS SHIP_RELAY_ALLOWED_ORIGINS SHIP_DASHBOARD_URL SHIP_VAPID_CONTACT)
 REVIEW_ENV=(+GITHUB_TOKEN +GITHUB_WEBHOOK_SECRET +SHIP_DASHBOARD_TOKEN +SHIP_AGENTCORE_RUNTIME_ARN
             +SHIP_FRAGMENT_QUEUE_URL SHIP_ALLOWED_REPOS SHIP_DASHBOARD_URL SHIP_DETECTOR_MODE SHIP_MODEL_BACKEND SHIP_REVIEWER_NAME)
 
@@ -692,6 +692,20 @@ deploy_webhook() {
     env_file ship-webhook "${REVIEW_ENV[@]}"
     run aws lambda update-function-configuration --function-name ship-webhook --environment "file://$ENV_FILE_OUT"
     wait_updated ship-webhook
+  fi
+  point_relay_at_console "$dashboard"
+}
+
+# Relay hands the console's address back in its tool results, so it needs the same value as the
+# webhook. Relay is deployed first, before the webhook has an address, so it is set here.
+point_relay_at_console() {
+  local dashboard=$1
+  if probe aws lambda get-function --function-name ship-relay --query Configuration.FunctionArn --output text; then
+    if env_differs ship-relay SHIP_DASHBOARD_URL "$dashboard"; then
+      export SHIP_DASHBOARD_URL=$dashboard
+      note "Relay now links to the Gate console"
+      relay_release
+    fi
   fi
 }
 

@@ -214,16 +214,24 @@ the skill steps aside.
 
 ## Set up a screen
 
-A screen is any browser: a laptop, a tablet, a TV, a smart fridge.
+A screen is any browser: a laptop, a tablet, a TV, a smart fridge. The
+page to open on it is:
 
-1. Open the [display page](https://pandayv.github.io/ship-engine/ship-display.html)
-   on the device and pick a name (TV, Tablet, Laptop, Fridge, or your own).
+**https://pandayv.github.io/ship-engine/ship-display.html**
+
+1. Open that address in the device's browser and pick a name (TV, Tablet,
+   Laptop, Fridge, or your own).
 2. Press "Get alerts on this screen" and allow notifications once.
 
 That's all. There is no pairing code. After that, SHIP can reach the
 screen even when the page is closed. It sends a notification, you tap
 it, and the findings open on the page. On an iPhone or iPad, add the page
 to the Home Screen first.
+
+To add another screen later, such as a TV, repeat the two steps on that
+device and pick "TV". On a TV without notifications, leave the page open
+and the findings appear as soon as they are shown. Say "show it on the
+TV", or "both" to show it on every screen.
 
 A notification doesn't count as a look. Findings count as seen only when
 a page displays them and reports back, and only while the page is
