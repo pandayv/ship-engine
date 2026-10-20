@@ -66,7 +66,7 @@ architecture needs each piece.
   nothing else. Relay's, for instance, covers alert reads and decision
   writes, the summary, what was shown, staged decisions, the screen
   registries, a push to a WebSocket connection and one Parameter Store key.
-  The repo does not apply them.
+  `scripts/iam_tidy.py` applies them, one policy per role.
 
 ### Strands Agents SDK
 
@@ -92,8 +92,8 @@ version confusion.
 
 **Would we build with it again?** **Yes.** It did exactly what it needed
 to with minimal ceremony, and the tool-calling contract held up under
-real adversarial testing, 9 of 9 correct on genuine violations and
-look-alikes, not just the happy path.
+adversarial testing: on ten planted cases it caught all six violations and
+dismissed all four look-alikes, not just the happy path.
 
 ### Amazon Bedrock
 
@@ -114,7 +114,7 @@ subscription permissions (Anthropic models are delivered through
 Marketplace under the hood, which isn't obvious from the API surface),
 and a new-account daily token quota that silently defaults to zero until
 support intervenes. Each produced a different, correctly-worded error and
-each was solvable, but five sequential gates for a first call
+each was solvable, but four sequential gates for a first call
 is a lot for a hackathon's time budget, and none of them were mentioned
 together on one onboarding page. Separately, per-model
 request-per-minute quota varies by roughly 20x across models on the same
@@ -326,5 +326,8 @@ Filed as [issue #3590](https://github.com/modelcontextprotocol/python-sdk/issues
 and a docs PR, [#3591](https://github.com/modelcontextprotocol/python-sdk/pull/3591),
 adding it as a documented third cause in `deploy.md` alongside the two
 the SDK already covers, with the per-invocation fix and a SnapStart-specific
-note. Repo: [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk).
+note. The repository's bot closed the PR on the day it was opened, because
+it keeps pull requests open only for contributors a maintainer has assigned
+to the linked issue. The issue is open and the change is on the public
+branch [`docs/lambda-reused-process-deploy`](https://github.com/pandayv/python-sdk/tree/docs/lambda-reused-process-deploy). Repo: [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk).
 GitHub: [pandayv](https://github.com/pandayv).

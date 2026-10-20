@@ -1,4 +1,4 @@
-# Friction Log — Build, Ship, Shape (Amazon AppDev 2026)
+# Friction Log: Build, Ship, Shape (Amazon AppDev 2026)
 
 Captured live, while building, so entries are precise rather than
 reconstructed from memory at submission time. Format follows the
@@ -58,10 +58,8 @@ account, following the public docs exactly, cannot reach a working
 **Workaround used:** the Alexa+ track's own rules anticipate exactly this
 gap and explicitly permit an alternative, a simulated Alexa+ web
 experience with source code included. We pivoted to that path, building
-a web-based voice-interaction simulation against Relay's real,
-already-deployed, spec-compliant MCP server. This is a legitimate
-submission path per the rules, not a workaround we invented, though we
-only reached it after losing real time on the CLI path first.
+a web-based voice-interaction simulation against Relay's deployed,
+spec-compliant MCP server, after losing time on the CLI path first.
 
 **Suggestion:** state the Solutions-Architect/account-registration
 prerequisite explicitly and prominently, ideally in the quickstart's own
@@ -75,8 +73,8 @@ of the actual cause.
 
 ## AWS vs. GCP: overall onboarding friction
 
-Running note from the user's direct experience across this project and
-its predecessor, not tied to one specific tool. The AWS/Amazon developer
+A running note from our experience across this project and the one before
+it, not tied to one specific tool. The AWS/Amazon developer
 experience across this project has repeatedly required multi-step,
 cross-service credential choreography to reach a working state. Earlier
 in this build: the multi-gate Bedrock model-access saga (use-case
@@ -85,13 +83,12 @@ held at a hard 0 until a support case resolved it), the AgentCore CLI's
 own pip package being deprecated mid-build in favor of an unannounced npm
 replacement, and a CDK bootstrap failure whose own rollback failed on a
 second missing permission. Each was individually solvable, but the
-cumulative pattern is real friction. Broad, cross-service IAM
+cumulative pattern is friction. Broad, cross-service IAM
 choreography and undocumented prerequisite gates recur across unrelated
 AWS product areas (Bedrock, AgentCore, and now Alexa+), and more than
-once. By contrast, the user's independent experience with GCP for
-comparable work (noted directly, not measured in this project) was
-self-service and fast, with none of this multi-day credential
-back-and-forth.
+once. By contrast, our earlier work on GCP for comparable tasks (an
+impression, not a measurement from this project) was self-service and
+fast, without the multi-day credential back-and-forth.
 
 **Suggestion:** a single, consistent "what you need before you start, and
 where to get each thing" page per product, stated once, up front rather
@@ -255,3 +252,86 @@ by eliciting it. Understanding the answer is then the skill's job.
 **Suggestion:** describe slot elicitation with `AMAZON.SearchQuery` as the way
 to ask an open question, in the dialog documentation. Or pass the raw
 utterance text to the skill on `AMAZON.FallbackIntent`.
+
+---
+
+## MCP Streamable HTTP on a Lambda Function URL: the default response mode times out
+
+**Task attempted:** serve Relay, an MCP server built with the MCP Python SDK,
+from an AWS Lambda Function URL.
+
+**Steps taken:**
+1. Deployed the server with the SDK's defaults and called it through the
+   Function URL.
+2. Invoked the same function directly with `aws lambda invoke`, to separate
+   the function from the HTTP layer.
+
+**Expected:** the same answer through the URL as by direct invoke.
+
+**Actual:** the direct invoke returned a correct response in 375 ms. The same
+request through the Function URL failed after about 240 ms with a generic
+timeout. The SDK answers with a server-sent event stream by default
+(`Connection: keep-alive`), and a Function URL in its default `BUFFERED` invoke
+mode cannot carry that.
+
+**Severity:** medium. It blocks the first call, and nothing in the error points
+at the response mode.
+
+**Workaround used:** the MCP specification allows a single JSON response, and
+Relay's tools are plain request and response calls, so we set
+`json_response=True`. A status answer now takes about half a second through the
+live URL.
+
+**Suggestion:** say in the SDK's deployment guide that a buffered Function URL
+needs JSON responses, and show `json_response=True` in the Lambda example.
+
+---
+
+## MCP SDK on Lambda with SnapStart: the session manager runs once per process
+
+**Task attempted:** run Relay on Lambda with SnapStart, so a restored invocation
+starts fast.
+
+**Steps taken:**
+1. Created the ASGI app once at module level, the usual shape for a Lambda
+   handler, and sent two requests to the same warm container.
+
+**Expected:** both requests to succeed.
+
+**Actual:** the first succeeded and the second failed. The SDK's streamable HTTP
+session manager can run its lifespan only once per instance, and a reused
+process runs it again. Neither the Lambda documentation nor the SDK's
+deployment guide covers a runtime that reuses one process across invocations.
+
+**Severity:** medium. Any Streamable HTTP MCP server on Lambda reaches it on the
+second request.
+
+**Workaround used:** build the app inside the handler on every invocation.
+
+**Suggestion:** add reused-process runtimes to the SDK's deployment guide. We
+proposed the text in an issue and a docs pull request
+(modelcontextprotocol/python-sdk #3590 and #3591).
+
+---
+
+## Skill history: the utterance history API returns a server error
+
+**Task attempted:** see what Alexa heard from a real Echo, using
+`ask smapi get-utterance-data` for the skill.
+
+**Steps taken:**
+1. Called the command for the development stage and `en-US`, with and without
+   sort options, on two different days.
+
+**Expected:** a list of recent utterances and the intents they resolved to.
+
+**Actual:** HTTP 500 from `.../history/intentRequests` every time.
+
+**Severity:** low. It did not block the build, but it was the one tool that
+would have shown why a device did not reach the skill.
+
+**Workaround used:** the skill's own request log, and `ask smapi profile-nlu` to
+see how Alexa reads a phrase.
+
+**Suggestion:** make the history call work for development-stage skills, or say
+in its documentation when it is available.

@@ -1,9 +1,9 @@
 # SHIP: Project Description
 
-*(Devpost submission text. Technical detail lives in the repo's
+*(The long-form pitch. The text to paste into Devpost is in
+[`submission/`](submission/). Technical detail lives in the
 [README](README.md) and the
-[architecture page](https://pandayv.github.io/ship-engine/architecture.html);
-this is the pitch.)*
+[architecture page](https://pandayv.github.io/ship-engine/architecture.html).)*
 
 ## What it does
 
