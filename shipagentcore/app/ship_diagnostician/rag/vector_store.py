@@ -50,8 +50,8 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 def active_embed_model_id() -> str:
     """
     Mirrors src/rag/vector_store.py's function of the same name, but this
-    container is deliberately bedrock-only (see SHIP_REVIEW_DISPOSITIONS
-    #23/#47 — that is a design choice, not drift), so there is no backend
+    container is deliberately bedrock-only (a design choice, not drift),
+    so there is no backend
     to look up. The "bedrock:" prefix is kept so a cache file produced by
     the main repo's precompute script fingerprints identically here.
     """

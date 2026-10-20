@@ -7,8 +7,7 @@ expected vs. actual, severity, workaround used, actionable suggestion.
 
 ---
 
-## Alexa+ MCP Toolkit: CLI deployment path requires an undisclosed
-## partner-program gate
+## Alexa+ MCP Toolkit: CLI deployment path requires an undisclosed partner-program gate
 
 **Task attempted:** connect Relay (our MCP server, already deployed and
 spec-compliant on `2025-11-25` Streamable HTTP) to Alexa+ via the

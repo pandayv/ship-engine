@@ -18,8 +18,7 @@ one Lambda invocation sequentially detecting every escalated fragment in
 a PR — could be silently killed mid-review by AWS Lambda's hard, non-
 negotiable 900-second function timeout the moment a PR had 3+ escalated
 fragments across categories (2 fragments alone consumed the full budget
-in the observed failure; see SHIP_REVIEW_DISPOSITIONS.md for the full
-writeup). Nothing crashed or errored visibly — the review just silently
+in the observed failure). Nothing crashed or errored visibly — the review just silently
 stopped short. Since a judge or a real dense PR could hit this at any
 time, not just during a demo, this was not acceptable to leave as-is.
 
@@ -67,8 +66,7 @@ covered without new infrastructure: a fragment whose SQS message exhausts its re
 (the check stays pending, which is the safe direction) needs a dead-letter consumer or a
 reconciler to turn that into an explicit error status.
 
-2026-09-05 architecture-review fix pass (see SHIP_REVIEW_DISPOSITIONS.md
-for the full plain-English writeup of every finding):
+2026-09-05 architecture-review fix pass:
 - #1: signature verification now fails CLOSED by default (was fail-open
   when GITHUB_WEBHOOK_SECRET was unset) — set SHIP_ALLOW_UNSIGNED=true to
   explicitly opt into the old dev-convenience behavior.
@@ -337,8 +335,8 @@ def process_pr(repo_full_name: str, pr_number: int, code_diff: str, head_sha: st
     here, specifically to avoid this function's own failure mode: a PR
     with enough escalated fragments can exceed a single Lambda invocation's
     hard 900-second timeout partway through, silently losing whatever
-    fragments never got their turn (see SHIP_REVIEW_DISPOSITIONS.md,
-    2026-09-05, for the real end-to-end test that proved this).
+    fragments never got their turn (an end-to-end test on 2026-09-05
+    proved this).
     """
     fragment_count, escalated = _escalate(code_diff)
     results = []
