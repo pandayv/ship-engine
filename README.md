@@ -198,19 +198,14 @@ and plain code checks every part of it. Relay, the server, also refuses a
 decision on a finding you haven't seen or one without a reason, so
 the model can't talk its way past the rules.
 
-## Why not Alexa+
+## Talk to it with Alexa
 
-SHIP is designed as an Alexa+ experience, but Alexa+ add-ons aren't open
-to hackathon participants. The hackathon
-[FAQ](https://amazonappdev2026.devpost.com/details/faqs) says the add-on
-tools are for select partners only, and the documented route to them
-stops at an AWS role that only accounts registered by an Amazon Alexa
-Solutions Architect can assume (see the [friction log](FRICTION_LOG.md)).
-So a custom Alexa Skill called "ship review" stands in for the add-on.
-It does the same job. It hears you and calls the same MCP server an
-add-on would. Plain code runs the guided review. A Bedrock model, Amazon
-Nova Lite, turns other free speech into tool calls. When the add-on opens, it can point at the same server and
-the skill steps aside.
+A custom Alexa Skill called "ship review" hears you and calls Relay, the
+MCP server behind everything. MCP is the same standard Alexa+ add-ons
+use. Plain code runs the guided review, so it follows your answers
+without a model in the way. A Bedrock model, Amazon Nova Lite, turns
+other free speech into tool calls. An Alexa+ add-on can point at the
+same server whenever you want one.
 
 ## Set up a screen
 
@@ -366,8 +361,7 @@ has reported. If SHIP can't read its state, the check stays pending.
   A fresh ASGI app is built per invocation because the SDK's session
   manager can run its lifespan only once per instance. The docstring at
   the top of [`src/relay/server.py`](src/relay/server.py) has the details.
-- **Alexa Skill:** [`alexa-skill/`](alexa-skill/) stands in for an Alexa+
-  add-on. Alexa only understands a sentence that matches one of the
+- **Alexa Skill:** [`alexa-skill/`](alexa-skill/) is SHIP's voice. Alexa only understands a sentence that matches one of the
   skill's sample phrases, so a free answer to a question would fall to "I
   didn't understand". The skill avoids that by asking every question with
   a `Dialog.ElicitSlot` directive on `AnswerIntent`, whose one slot is an
@@ -529,31 +523,28 @@ device_gateway_handler.py  # WebSocket connect/disconnect/register/subscribe/ack
 tests/                     # Test suite, runs without AWS credentials
 ```
 
-## Status & what's next
+## What's next
 
 The review pipeline, Gate, Relay, the Alexa Skill, the web simulator and
-screen delivery (open pages and Web Push) are built.
+screen delivery (open pages and Web Push) are in place. Next:
 
-What's not built yet:
-- **Auto-applying the suggested fix.** SHIP drafts the patch but doesn't
-  push it to the PR. A person applies it after reviewing it in Gate.
-  A GitHub-API integration away, not an architecture change.
-- **Scheduling the Healing Loop and the pattern miner.**
+- **Apply the suggested fix.** SHIP drafts the patch today. The next step
+  pushes it to the PR once a person has allowed it. It is a GitHub-API
+  integration, not an architecture change.
+- **Run the Healing Loop and the pattern miner on a schedule.**
   [Healing Loop](scripts/healing_loop.py) re-checks that sourced
   regulation text still matches the law. The pattern miner turns allowed
   findings into patterns. A blocked finding is never mined, and a pattern
   reaches Detector only after three independent decisions, as context and
-  never as a rule. Both run as manual scripts, not on a schedule or alert
-  channel.
-- **A dead-letter consumer.** A review whose queue message exhausts its
+  never as a rule.
+- **Add a dead-letter consumer.** A review whose queue message exhausts its
   retries leaves the check pending, which is the safe direction. A
-  consumer would turn that into an explicit error status.
-- **The Alexa+ add-on itself.** Add-on tooling is limited to select partners
-  today. When it opens, the add-on points at the same Relay server and the
-  skill steps aside.
-- **Detectors that need more than a single PR diff.** Infrastructure or
-  deployment context, or behavior observed across multiple files or over
-  time. See [architecture.html](https://pandayv.github.io/ship-engine/architecture.html)
+  consumer turns that into an explicit error status.
+- **Bring SHIP to Alexa+ as an add-on.** It points at the same Relay
+  server.
+- **Look beyond a single PR diff.** Infrastructure or deployment context,
+  or behavior observed across multiple files or over time. See
+  [architecture.html](https://pandayv.github.io/ship-engine/architecture.html)
   for where that boundary sits.
 
 ## License

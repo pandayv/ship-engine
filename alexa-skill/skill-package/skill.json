@@ -10,7 +10,7 @@
             "Alexa, ask ship review to show it on the TV"
           ],
           "name": "SHIP Review",
-          "description": "SHIP reviews every pull request for AI compliance risk. This skill tells you by voice whether anything is blocked and sends the detail to the screen you choose. It stands in for an Alexa+ add-on."
+          "description": "SHIP reviews every pull request for AI compliance risk. This skill tells you by voice whether anything is blocked and sends the detail to the screen you choose."
         }
       },
       "isAvailableWorldwide": false,
