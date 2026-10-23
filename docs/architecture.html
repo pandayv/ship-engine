@@ -173,157 +173,17 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 </header>
 
 <div class="legend">
-  <div class="legend-item"><span class="legend-dot" style="background:var(--agent)"></span>Agent step</div>
-  <div class="legend-item"><span class="legend-dot" style="background:var(--infra)"></span>Service / infra</div>
-  <div class="legend-item"><span class="legend-dot" style="background:var(--data)"></span>Output / data artifact</div>
-  <div class="legend-item"><span class="legend-dot" style="background:var(--human)"></span>Human-in-the-loop</div>
-  <div class="legend-item"><span style="border-bottom:2px dashed var(--ink-soft);width:16px;display:inline-block"></span>Retry / failure path</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#4f8ef7"></span>1. Review</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#8a8f98"></span>2. State and status</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#f5a623"></span>3. Voice and decisions</div>
+  <div class="legend-item"><span style="border-bottom:2px dashed var(--ink-soft);width:16px;display:inline-block"></span>Hand-over between pipelines</div>
 </div>
 
 <figure>
 <div class="diagram-frame">
-<svg viewBox="0 0 1260 720" role="img" aria-label="Two deployables. ship-webhook, the always-on Lambda behind the GitHub webhook, does only fast work: verify the HMAC signature, check the repo against the connected-repositories table, post a pending ship/compliance status, run Screener's whole-diff precheck, and if anything matches, split the diff into fragments, screen each one individually, record the expected fragments in a review ledger and send one SQS message per flagged fragment. If nothing matches, it posts a passing status immediately at no further cost. ship-fragment-processor, a second Lambda triggered by that queue and scaled independently with a concurrency cap, does the model work one fragment at a time: Detector reasons over the fragment grounded in retrieved regulation text, Triage routes the verdict against a per-category risk threshold, and anything at or above it is stored as an alert in DynamoDB and surfaced in Gate or by voice, where a person allows (accepts the risk, the finding stops blocking) or blocks (the finding is real, the pull request stays blocked until the code changes). Every fragment, whatever its outcome, reports to the review ledger, and the ship/compliance status is recomputed from stored alerts and posted to the pull request's current head: it turns green only after every fragment has reported. A fragment that fails outright is retried by SQS and moved to a dead-letter queue after repeated failure; a fragment that is merely slow, or that trips the provider's request-rate limit, backs off and retries on its own without blocking any other fragment." xmlns="http://www.w3.org/2000/svg" font-family="'Public Sans', sans-serif" fill="none" style="max-width:100%;height:auto">
-<defs>
-  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
-  </marker>
-</defs>
-<g stroke="currentColor" fill="none">
-  <rect x="10" y="10" width="1240" height="310" rx="14" stroke-dasharray="4 4" opacity="0.5"></rect>
-  <rect x="10" y="340" width="1240" height="360" rx="14" stroke-dasharray="4 4" opacity="0.5"></rect>
-</g>
-<text x="26" y="30" font-size="11.5" letter-spacing="0.04em" fill="currentColor" opacity="0.65">SHIP-WEBHOOK &middot; ALWAYS-ON LAMBDA, FAST-ACK ONLY</text>
-<text x="26" y="360" font-size="11.5" letter-spacing="0.04em" fill="currentColor" opacity="0.65">SHIP-FRAGMENT-PROCESSOR &middot; INDEPENDENTLY-SCALING LAMBDA, ONE JOB PER FRAGMENT</text>
-
-<!-- Lane A: fast-ack webhook -->
-<g font-size="12.5">
-  <rect x="30" y="110" width="140" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="100" y="134" text-anchor="middle" fill="var(--infra)" font-weight="600">GitHub PR</text>
-  <text x="100" y="150" text-anchor="middle" fill="currentColor" font-size="10.5">opened / updated</text>
-
-  <line x1="170" y1="140" x2="202" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="205" y="110" width="170" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="290" y="130" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Verify + allowlist</text>
-  <text x="290" y="145" text-anchor="middle" fill="currentColor" font-size="10">HMAC signature, repo check</text>
-  <text x="290" y="159" text-anchor="middle" fill="currentColor" font-size="9.5">posts status: pending</text>
-
-  <line x1="375" y1="140" x2="407" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="410" y="110" width="160" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="490" y="134" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Screener</text>
-  <text x="490" y="150" text-anchor="middle" fill="currentColor" font-size="10">whole-diff precheck</text>
-
-  <line x1="570" y1="140" x2="600" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <polygon points="645,105 690,140 645,175 600,140" fill="var(--infra-tint)" stroke="var(--infra)"></polygon>
-  <text x="645" y="136" text-anchor="middle" fill="var(--infra)" font-size="10" font-weight="600">any</text>
-  <text x="645" y="148" text-anchor="middle" fill="var(--infra)" font-size="10" font-weight="600">match?</text>
-
-  <path d="M 630 112 L 600 40" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
-  <text x="560" y="35" text-anchor="middle" font-size="10" fill="currentColor">no</text>
-  <rect x="440" y="15" width="160" height="50" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="520" y="36" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Pass</text>
-  <text x="520" y="50" text-anchor="middle" font-size="10" fill="currentColor">no model call spent</text>
-
-  <line x1="690" y1="140" x2="722" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
-  <text x="700" y="128" font-size="10" fill="currentColor">yes</text>
-
-  <rect x="725" y="110" width="180" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="815" y="130" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Split + per-fragment</text>
-  <text x="815" y="145" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Screener scan</text>
-  <text x="815" y="160" text-anchor="middle" fill="currentColor" font-size="9.5">one file/function at a time</text>
-
-  <line x1="905" y1="140" x2="937" y2="140" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="940" y="110" width="180" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="1030" y="130" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Enqueue</text>
-  <text x="1030" y="146" text-anchor="middle" fill="currentColor" font-size="10">1 SQS message per</text>
-  <text x="1030" y="159" text-anchor="middle" fill="currentColor" font-size="10">flagged fragment</text>
-
-  <path d="M 1030 170 L 1030 300 L 105 300 L 105 420" stroke="currentColor" marker-end="url(#arrow)"></path>
-</g>
-
-<!-- Lane B: fragment processor -->
-<g font-size="12.5">
-  <rect x="30" y="420" width="150" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="105" y="444" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">SQS</text>
-  <text x="105" y="460" text-anchor="middle" fill="currentColor" font-size="10">fragment queue</text>
-
-  <line x1="180" y1="450" x2="212" y2="450" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="215" y="420" width="190" height="60" rx="8" fill="var(--agent-tint)" stroke="var(--agent)"></rect>
-  <text x="310" y="444" text-anchor="middle" fill="var(--agent)" font-weight="600" font-size="12">Detector</text>
-  <text x="310" y="460" text-anchor="middle" fill="currentColor" font-size="10">RAG-grounded judgment</text>
-
-  <path d="M 265 480 L 265 505" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <path d="M 355 505 L 355 480" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <rect x="235" y="508" width="240" height="48" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="355" y="528" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11">Regulation corpus</text>
-  <text x="355" y="544" text-anchor="middle" font-size="9.5" fill="currentColor">GDPR &middot; EU AI Act &middot; OWASP, sourced verbatim</text>
-
-  <path d="M 250 480 C 170 540, 170 600, 250 605 C 290 608, 330 570, 335 480" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
-  <text x="150" y="600" font-size="10" fill="currentColor">throttled &rarr;</text>
-  <text x="150" y="612" font-size="10" fill="currentColor">adaptive retry</text>
-
-  <line x1="405" y1="450" x2="437" y2="450" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="440" y="420" width="160" height="60" rx="8" fill="var(--infra-tint)" stroke="var(--infra)"></rect>
-  <text x="520" y="444" text-anchor="middle" fill="var(--infra)" font-weight="600" font-size="12">Triage</text>
-  <text x="520" y="460" text-anchor="middle" fill="currentColor" font-size="10">per-category threshold</text>
-
-  <line x1="600" y1="450" x2="630" y2="450" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <polygon points="675,415 720,450 675,485 630,450" fill="var(--infra-tint)" stroke="var(--infra)"></polygon>
-  <text x="675" y="446" text-anchor="middle" fill="var(--infra)" font-size="9.5" font-weight="600">&ge; threshold?</text>
-
-  <path d="M 705 425 L 760 400" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <text x="740" y="392" text-anchor="middle" font-size="10" fill="currentColor">no</text>
-  <rect x="765" y="370" width="170" height="55" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="850" y="392" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Log, continue</text>
-  <text x="850" y="407" text-anchor="middle" font-size="10" fill="currentColor">no alert created</text>
-
-  <path d="M 675 485 L 675 555" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <text x="685" y="520" font-size="10" fill="currentColor">yes</text>
-
-  <path d="M 380 480 C 360 560, 310 600, 260 650" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arrow)"></path>
-  <text x="300" y="660" text-anchor="middle" font-size="10" fill="currentColor">fails repeatedly</text>
-  <rect x="30" y="655" width="230" height="45" rx="8" fill="var(--surface)" stroke="var(--muted-stroke)" stroke-dasharray="3 3"></rect>
-  <text x="145" y="672" text-anchor="middle" fill="var(--muted-text)" font-weight="600" font-size="11">Dead-letter queue</text>
-  <text x="145" y="687" text-anchor="middle" font-size="9.5" fill="var(--muted-text)">visible for manual triage</text>
-
-  <rect x="590" y="560" width="180" height="60" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="680" y="584" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="12">Freeze: store alert</text>
-  <text x="680" y="600" text-anchor="middle" font-size="10" fill="currentColor">DynamoDB, idempotent write</text>
-
-  <line x1="770" y1="590" x2="802" y2="590" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <rect x="805" y="560" width="190" height="60" rx="8" fill="var(--human-tint)" stroke="var(--human)"></rect>
-  <text x="900" y="584" text-anchor="middle" fill="var(--human)" font-weight="600" font-size="12">Gate dashboard</text>
-  <text x="900" y="600" text-anchor="middle" font-size="10" fill="currentColor">token-gated review console</text>
-
-  <line x1="995" y1="590" x2="1027" y2="590" stroke="currentColor" marker-end="url(#arrow)"></line>
-
-  <polygon points="1075,555 1120,590 1075,625 1030,590" fill="var(--human-tint)" stroke="var(--human)"></polygon>
-  <text x="1075" y="586" text-anchor="middle" fill="var(--human)" font-size="9" font-weight="600">allow /</text>
-  <text x="1075" y="597" text-anchor="middle" fill="var(--human)" font-size="9" font-weight="600">block?</text>
-
-  <rect x="1000" y="640" width="220" height="55" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="1110" y="656" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">Decided, once</text>
-  <text x="1110" y="670" text-anchor="middle" font-size="9.5" fill="currentColor">allow: stops blocking</text>
-  <text x="1110" y="684" text-anchor="middle" font-size="9.5" fill="currentColor">block: PR stays blocked</text>
-  <path d="M 1075 625 L 1110 638" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <rect x="1000" y="435" width="220" height="70" rx="8" fill="var(--data-tint)" stroke="var(--data)"></rect>
-  <text x="1110" y="456" text-anchor="middle" fill="var(--data)" font-weight="600" font-size="11.5">ship/compliance check</text>
-  <text x="1110" y="472" text-anchor="middle" font-size="10" fill="currentColor">pending, then success / failure / error</text>
-  <text x="1110" y="487" text-anchor="middle" font-size="9.5" fill="currentColor">green only after every fragment reported</text>
-  <path d="M 935 400 L 1000 455" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <path d="M 740 560 L 740 528 L 980 528 L 980 485 L 998 485" stroke="currentColor" marker-end="url(#arrow)"></path>
-  <path d="M 1075 555 L 1095 507" stroke="currentColor" marker-end="url(#arrow)"></path>
-</g>
-</svg>
+<img src="architecture-diagram.png" width="1719" height="1285" alt="SHIP in three pipelines. Review: GitHub sends a pull request to the webhook, which verifies the signature and checks the repository, then screens the diff, splits it into fragments and queues them. A fragment processor takes each fragment, Detector (a Strands agent on Bedrock AgentCore) judges it against sourced regulation text, and a finding at or above the threshold is written as an alert. State and status: a review ledger counts the fragments as they report, and when all have reported the pull request's ship/compliance status is recomputed and posted to GitHub. A person's decision, from the web dashboard or by voice, updates the alert and triggers the same recalculation. Voice and decisions: Alexa reaches Relay, which reads the precomputed summary and pushes the findings to a screen over a WebSocket. The screen reports what it displayed. A decision is applied only if the finding was shown in the last ten minutes and a reason was given; otherwise the command is refused.">
 </div>
-<figcaption>The two deployables and how they connect: the always-on webhook that only does cheap work, and the independently scaling processor that reviews one flagged fragment per invocation. The check on the pull request is recomputed from stored alerts by every path that touches them.</figcaption>
+<figcaption>SHIP in three pipelines. Review finds the risk and writes an alert. State and status keeps count and keeps the pull request check honest. Voice and decisions lets a person decide, and only after the findings were shown on a screen and a reason was given. Dashed lines are the two hand-overs: each reviewed fragment reports to the ledger, and a person's decision returns to the alert it changes.</figcaption>
 </figure>
 
 <div class="walkthrough">

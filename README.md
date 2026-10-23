@@ -288,6 +288,8 @@ Echo with the skill enabled. The video shows them. On an Echo, say
 
 ### Architecture
 
+![SHIP in three pipelines: review, state and status, and voice and decisions. Review turns a pull request into findings. State and status keeps count and posts the pull request check. Voice and decisions lets a person decide once the findings were shown on a screen and a reason was given.](docs/architecture-diagram.png)
+
 Full diagram and component-by-component detail: [pandayv.github.io/ship-engine](https://pandayv.github.io/ship-engine/architecture.html) ([source](docs/architecture.html)). How a spoken decision is checked is in [docs/voice-resolution-workflow.md](docs/voice-resolution-workflow.md).
 
 **Each flagged issue in a PR is reviewed as its own independent,
