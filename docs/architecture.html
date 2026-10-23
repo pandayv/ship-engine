@@ -573,11 +573,6 @@ footer { margin-top: 24px; font-size: 12.5px; color: var(--ink-soft); font-famil
 </div>
 
 <div class="zone">
-  <div class="zone-label">Scope of this proof of concept</div>
-  <p class="step-desc" style="max-width:none">The webhook (an HMAC signature) and Gate (a dashboard token) authenticate their callers. Relay and the WebSocket API do not authenticate callers in code. Relay accepts only the Host and Origin values it is configured with, which stops a page on another site from calling it in a browser but not a direct call. Anyone who holds the endpoint URLs, which appear in this repository, can call Relay's tools, decision tools included, and can register a screen name. The decision rules (shown on a screen, a reason, a confirmation) are procedural checks, not an identity check. An authorizer in front of both endpoints and a verified identity on each decision are not built.</p>
-</div>
-
-<div class="zone">
   <div class="zone-label">AWS infrastructure</div>
   <div class="infra-grid">
     <div class="infra-item"><div class="name">Lambda &middot; ship-webhook</div><div class="role">Always-on, fast-ack only, no model calls</div></div>

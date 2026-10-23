@@ -4,11 +4,9 @@ This guide takes an empty AWS account to a working SHIP deployment. Most of the 
 
 SHIP runs in one AWS account and one region. The reference deployment uses account `680160265218` and `us-west-2`. The repository still holds that account id, and a few other values from it, in some files. Section 3 lists them.
 
-## 1. Scope of this proof of concept
+## 1. What gets deployed
 
-The webhook checks an HMAC signature on every GitHub delivery. Gate, the review console, asks for a dashboard token. Relay and the WebSocket API do not authenticate callers in code.
-
-Relay accepts only the Host and Origin values it is configured with. That stops a page on another site from calling it in a browser. It does not stop a direct call. Anyone who holds the Relay or WebSocket URL can call Relay's tools, the decision tools included, and can register a screen name. Both URLs end up in the public display and simulator pages. The decision rules (a finding must be shown on a screen, a reason is required, the person confirms) are procedural checks, not an identity check. An authorizer in front of both endpoints and a verified identity on each decision are not built.
+`deploy.sh` creates the DynamoDB tables, SQS queues, IAM roles, Lambda functions and the WebSocket API. The sections below cover the console steps that come with them: the GitHub webhook and branch protection, the review agent on Bedrock AgentCore, the Alexa skill, and the keys.
 
 ## 2. What you need
 
