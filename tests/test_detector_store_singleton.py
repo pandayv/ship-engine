@@ -1,17 +1,10 @@
 """
-Tests the _get_store() singleton behavior (review findings #10 and #35) —
-this had been written and reasoned through but never actually run against
-a simulated failure. Uses a fake VectorStore whose .build() raises on the
-first call and succeeds on the second, to prove a transient failure
-doesn't permanently poison the cache.
+Tests the _get_store() singleton behavior. Uses a fake VectorStore whose .build() raises on the
+first call and succeeds on the second, to prove a transient failure doesn't permanently poison
+the cache.
 
-Finding #35: _get_store() used to be a hand-rolled module-global + "is
-None" guard; it's now functools.lru_cache(maxsize=1), verified separately
-(see test_bedrock_rate_limiting.py's neighbor or the direct lru_cache
-exception-behavior check done live before this refactor) to not cache a
-raised exception — so this test now asserts against lru_cache's own
-introspection API (cache_info()) instead of a hand-rolled module global
-that no longer exists.
+_get_store() is functools.lru_cache(maxsize=1), which does not cache a raised exception, so
+these tests assert against lru_cache's own introspection API (cache_info()).
 """
 
 import src.agents.detector as detector_module

@@ -1,13 +1,10 @@
 """
-Tests for the 2026-09-05 parallel per-fragment dispatch redesign (see
-src/api/main.py's module docstring for the full architecture change).
+Tests for parallel per-fragment dispatch (see src/api/main.py's module docstring).
 
-_dispatch_fragments() replaces the old _invoke_async_processing(), which
-self-invoked the same Lambda with the whole diff and processed every
-escalated fragment sequentially inside one Lambda invocation, bounded by
-Lambda's hard 900-second timeout. The new version splits the diff, scans
-each fragment, and sends one SQS message per escalated fragment instead -
-each fragment becomes its own independent, concurrently-processable job.
+_dispatch_fragments() splits the diff, scans each fragment, and sends one SQS message per
+escalated fragment, so each fragment becomes its own independent, concurrently-processable job
+instead of every fragment being processed sequentially inside one Lambda invocation bounded by
+Lambda's hard 900-second timeout.
 """
 
 import json

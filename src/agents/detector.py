@@ -1,29 +1,21 @@
 """
-Detector — SHIP's semantic evaluator (formerly "Tier 2"). Runs only on
-fragments Screener has already flagged. A Strands Agent, RAG-grounded
-against real regulation text (never unaided model recollection).
+Detector, SHIP's semantic evaluator. Runs only on fragments Screener has already flagged. A
+Strands Agent, RAG-grounded against real regulation text (never unaided model recollection).
 
-Model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama" |
-"gemini", default "bedrock" — the account-wide quota block that once made
-this default to "ollama" was resolved 2026-09-04, see ship_roadmap.md).
-Detector itself is also switchable via SHIP_DETECTOR_MODE
-("in_process" default | "agentcore", see detect() below) — "agentcore"
-calls the real deployed Bedrock AgentCore Runtime over the network instead
-of building the Strands Agent in this process, which is why strands/numpy
-imports in this file are deliberately lazy (see the import block below).
+The model backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama" | "gemini", default
+"bedrock"). Detector itself is switchable via SHIP_DETECTOR_MODE ("in_process" default |
+"agentcore", see detect() below). "agentcore" calls the deployed Bedrock AgentCore Runtime over
+the network instead of building the Strands Agent in this process, which is why the strands and
+numpy imports in this file are lazy.
 
-IMPORTANT scoping note (per ship_roadmap.md): this prompt covers PIIE-001/
-002/003 (GDPR Art. 32), TLGP-002 (EU AI Act Art. 14), ALBP-001 (EU AI Act
-Art. 10 + Annex III Section 5(b)), and TLGP-001 (OWASP LLM06:2025 Excessive
-Agency — an industry security standard, not a law; Detector must be
-honest about that distinction in its output). Still deliberately NOT
-widened to DPSL-002/003 or TLGP-003, which are structurally undetectable
-from a single code diff (need infra/deployment config or multi-file/
-temporal observation, not something a diff-scanning architecture can see)
-regardless of grounding — see roadmap. Only widen further for a category
-that's both diff-detectable AND has a sourced grounding corpus — asking
-Detector to judge anything else would risk the hallucinated-citation
-failure "Trust but Verify" exists to prevent.
+Scope: the prompt covers PIIE-001/002/003 (GDPR Art. 32), TLGP-002 (EU AI Act Art. 14), ALBP-001
+(EU AI Act Art. 10 + Annex III Section 5(b)), and TLGP-001 (OWASP LLM06:2025 Excessive Agency, an
+industry security standard rather than a law, and Detector says so in its output). DPSL-002/003
+and TLGP-003 are out of scope because a single code diff cannot show them: they need
+infrastructure or deployment configuration, or observation across files or over time. A category
+joins Detector only when it is both detectable in a diff and has a sourced grounding corpus.
+Asking Detector to judge anything else risks the hallucinated citations that "Trust but Verify"
+exists to prevent.
 """
 
 import os
@@ -131,8 +123,8 @@ If you confirm a real violation:
 - Set taxonomy_id to whichever ID actually applies (PIIE-001/002/003, TLGP-001, \
   TLGP-002, or ALBP-001).
 - Assign a risk_score from 1-10. Each category is judged and frozen against \
-  its own bar (finding #41 fixed this — these numbers match exactly what \
-  Triage actually enforces per category, see src/taxonomy.py's REGISTRY): \
+  its own bar (these numbers match what \
+  Triage enforces per category, see src/taxonomy.py's REGISTRY): \
   For PIIE-001 (external sink), a score >= 7.0 means raw, directly- \
   identifying financial PII (SSN, account number, full name + income together) \
   reaching an external sink with no masking at all — this category freezes \
@@ -165,12 +157,8 @@ fields empty — do not invent a violation to justify the escalation."""
 
 
 class DetectorOutput(BaseModel):
-    # finding #39 (review, 2026-09-05): this description said "PIIE-001"
-    # only, contradicting the prompt above on every non-PIIE fragment — the
-    # model receives literally contradictory instructions in the same
-    # request, since Strands surfaces this description to the model as part
-    # of the structured-output schema it must fill in. Fixed to match the
-    # prompt's actual scope.
+    # Strands surfaces this description to the model as part of the structured-output schema,
+    # so it must match the prompt's scope.
     matched: bool = Field(description="True only if a real violation was confirmed (any of PIIE-001/002/003, TLGP-001, TLGP-002, ALBP-001), not just Screener's keyword match")
     taxonomy_id: str | None = Field(default=None, description="'PIIE-001', 'PIIE-002', 'PIIE-003', 'TLGP-001', 'TLGP-002', or 'ALBP-001'")
     risk_score: float | None = Field(default=None, ge=1, le=10)
@@ -180,14 +168,9 @@ class DetectorOutput(BaseModel):
 
     @model_validator(mode="after")
     def _matched_implies_populated(self) -> "DetectorOutput":
-        # finding #46: "matched implies all four fields populated" was only
-        # prose in the prompt, never enforced — every caller had to
-        # separately re-derive it (finding #9's `or` fallbacks) with no
-        # guarantee of getting it right, and finding #51 showed a schema-
-        # permitted matched=True/risk_score=None combination can crash
-        # triage.route() several frames away from the actual cause. Enforce
-        # it once, here, so a prompt regression fails loudly at the model
-        # boundary instead of silently becoming an empty string downstream.
+        # "matched implies all four fields populated" is enforced here, once, so a prompt
+        # regression fails loudly at the model boundary instead of silently becoming an empty
+        # string downstream, or crashing triage.route() on matched=True with no risk_score.
         if self.matched:
             missing = [
                 name for name, value in (
@@ -205,16 +188,8 @@ class DetectorOutput(BaseModel):
 
 @lru_cache(maxsize=1)
 def _get_store():
-    # finding #35: this used to be a hand-rolled module-global + "is None"
-    # guard (build into a local var, only publish on success — finding
-    # #10's fix for the exact failure this must still tolerate: a
-    # transient embedding failure permanently poisoning the cache for the
-    # rest of the process's lifetime). lru_cache(maxsize=1) gives the
-    # identical guarantee for free: it does NOT cache a raised exception,
-    # so a failed call is simply retried fresh on the next call, with far
-    # less hand-written state-machine code to get right (verified directly
-    # against the installed functools implementation before relying on
-    # this, not assumed).
+    # lru_cache does not cache a raised exception, so a transient embedding failure is retried
+    # on the next call instead of poisoning the cache for the rest of the process's lifetime.
     from src.rag.chunker import chunk_corpus
     from src.rag.embedding_cache import default_cache_path
     from src.rag.vector_store import VectorStore
@@ -260,9 +235,8 @@ def _get_pattern_store():
 
 
 DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-lite-v1:0"
-# Switched from Claude Haiku 4.5 on 2026-09-08, on measured evidence
-# rather than preference (scripts/benchmark_models.py, run against the
-# real planted violations in micro-finance PRs #1 and #2):
+# Chosen on measured evidence (scripts/benchmark_models.py, run against the planted
+# violations in micro-finance PRs #1 and #2):
 #
 #   model              violations caught   look-alikes dismissed   median   req/min
 #   nova-lite                        6/6                     4/4     3.1s       200
@@ -278,13 +252,10 @@ DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-lite-v1:0"
 # limit). Being first-party Amazon also keeps the whole path AWS-native.
 # No "us." inference-profile prefix needed, unlike the Anthropic models.
 #
-# Honest scope of that evidence: one pass per case, on fixtures built to
-# be unambiguous. It shows nova-lite is not worse on these ten cases, not
-# that all six models are equivalent in general.
+# The evidence is one pass per case on fixtures built to be unambiguous. It shows nova-lite is
+# not worse on these ten cases.
 
-# Overridable so a model can be swapped without editing code — the same
-# reasoning as finding #42's fix for the hardcoded AgentCore runtime ARN.
-# This exists for a concrete reason, not generality for its own sake: the
+# Overridable so a model can be swapped without editing code. The
 # per-model Bedrock request-per-minute quota varies by a factor of twenty
 # on this account (Claude models are capped at 10/min, Amazon Nova Lite at
 # 200/min), and that ceiling — not token throughput — is what bounds how
@@ -292,26 +263,17 @@ DEFAULT_BEDROCK_MODEL_ID = "amazon.nova-lite-v1:0"
 # against the adversarial fixture set without a code change is what makes
 # that a measurable decision instead of a guess.
 BEDROCK_MODEL_ID = os.environ.get("SHIP_BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL_ID)
-# Account-wide 0.0 quota block resolved 2026-09-04 (see ship_roadmap.md for
-# the full saga). Legacy Claude 3 Haiku was tried first as the cheapest
-# option but rejected — Anthropic marks it Legacy and denies access to
-# accounts without 30 days of prior usage history, a brand-new account can
-# never satisfy that. Haiku 4.5 isn't legacy-gated; needs the "us." cross-
-# region inference profile prefix for on-demand invocation (confirmed
-# earlier in the troubleshooting saga).
+# Claude 3 Haiku is legacy-gated (Anthropic denies it to accounts without 30 days of prior
+# usage), so a new account cannot use it. Haiku 4.5 is not gated but needs the "us."
+# cross-region inference profile prefix for on-demand invocation.
 
 OLLAMA_MODEL_ID = "llama3.2:3b"
-# Fully local, zero AWS dependency. Mechanically proven working (2026-09-04)
-# but the 3B model produced a false negative on the one clear planted
-# violation and appears to have skipped the mandatory RAG tool call —
-# plumbing validated, judgment quality not.
+# Fully local, zero AWS dependency. The 3B model missed the planted violation and skipped the
+# mandatory RAG tool call in testing, so use it to exercise the pipeline, not for real reviews.
 
 GEMINI_MODEL_ID = "gemini-3.6-flash"
-# Hosted (not local, so not constrained by dev-machine compute), free tier
-# via Google AI Studio, independent of both the AWS account issue and
-# local-model capability limits. Needs GEMINI_API_KEY set in the
-# environment. Being tried specifically because Ollama's small local model
-# under-performed on judgment quality/tool-use reliability.
+# Hosted (not constrained by dev-machine compute), free tier via Google AI Studio. Needs
+# GEMINI_API_KEY set in the environment.
 
 
 def build_agent() -> "Agent":
@@ -346,21 +308,15 @@ def build_agent() -> "Agent":
 
         from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session
 
-        # finding #45 (updated 2026-09-05): shares the process-wide boto3
-        # Session with vector_store.py's Bedrock embedding calls, and uses
-        # the same adaptive-retry Config — if concurrent fragment
-        # processing (this session's parallel-dispatch redesign) trips the
-        # real account-wide quota, this call backs off and retries
-        # automatically instead of either failing or being pre-emptively
-        # delayed by a limiter that can't see other processes' traffic.
+        # Shares the process-wide boto3 Session with vector_store.py's Bedrock embedding calls
+        # and uses the same adaptive-retry Config, so when concurrent fragment processing trips
+        # the account quota, this call backs off and retries automatically.
         model = BedrockModel(
             model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session(), boto_client_config=BEDROCK_RETRY_CONFIG,
         )
     elif backend == "ollama":
         from strands.models.ollama import OllamaModel
-        # finding #53: this used to hardcode localhost while vector_store.py's
-        # _embed_ollama() correctly read OLLAMA_HOST — same logical backend,
-        # two different sources of truth for where it lives.
+        # Reads OLLAMA_HOST, the same source vector_store.py's _embed_ollama() uses.
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         model = OllamaModel(ollama_host, model_id=OLLAMA_MODEL_ID)
     elif backend == "gemini":
@@ -383,23 +339,17 @@ def detect_in_process(isolated_fragment: str) -> DetectorOutput:
     healthy — used for the demo/dev path."""
     agent = build_agent()
     result = agent(f"Isolated code fragment flagged by Screener:\n\n{isolated_fragment}")
-    # finding #59: structured_output is genuinely Optional in Strands' own
-    # AgentResult (e.g. a run that ends via interrupt) — treating it as
-    # always-populated crashed several frames from the real cause.
+    # structured_output is Optional in Strands' AgentResult (a run that ends via interrupt,
+    # for example), so None is an error here.
     if result.structured_output is None:
         raise RuntimeError("Agent run completed without producing structured output — no verdict to return.")
     return result.structured_output
 
 
 def _agentcore_runtime_arn() -> str:
-    # finding #42: this used to be a hardcoded literal, including the
-    # deploy-specific random suffix `agentcore deploy` assigns. Every
-    # re-deploy risks silently leaving this pointed at a stale, superseded
-    # runtime with no error anywhere — exactly the "fail silent" failure
-    # class the whole review pass has been about eliminating. Required env
-    # var, no fallback default: a missing/wrong value now fails LOUDLY the
-    # first time detect_via_agentcore() is actually called, instead of
-    # silently invoking whatever the constant happened to say.
+    # Required env var with no fallback default. Redeploys can mint a new ARN, so a missing or
+    # wrong value fails loudly the first time detect_via_agentcore() runs instead of silently
+    # invoking a stale runtime.
     arn = os.environ.get("SHIP_AGENTCORE_RUNTIME_ARN")
     if not arn:
         raise RuntimeError(
@@ -411,29 +361,16 @@ def _agentcore_runtime_arn() -> str:
 
 
 def detect_via_agentcore(isolated_fragment: str) -> DetectorOutput:
-    """Calls the real deployed Bedrock AgentCore Runtime (shipagentcore/) over
-    the network instead of running the agent in this process — the
-    architecturally "complete" path: webhook -> deployed AgentCore runtime,
-    not two parallel implementations of the same logic. Needs
-    bedrock-agentcore:InvokeAgentRuntime permission (already granted).
+    """Calls the deployed Bedrock AgentCore Runtime (shipagentcore/) over the network instead of
+    running the agent in this process, so the webhook and the runtime share one implementation
+    of the logic. Needs bedrock-agentcore:InvokeAgentRuntime permission.
 
-    Live-caught bug (2026-09-05, during finding #45's deployment
-    verification): botocore's default read timeout is 60s. A single
-    invoke_agent_runtime call can legitimately take several minutes once
-    the deployed container's own Bedrock rate limiter (finding #45,
-    shipagentcore/.../aws/bedrock_session.py) is pacing a cold-start
-    corpus-embedding burst plus the model's own completion calls -
-    directly observed taking 190s-308s in real runs, not a theoretical
-    worst case. The default timeout fired mid-call, the exception was
-    correctly caught by process_pr()'s per-fragment handler (finding #8)
-    and swallowed with NO visible error (before the logging fix right
-    above this), so the invocation "succeeded" in CloudWatch while
-    silently producing zero alerts. Set an explicit read_timeout with
-    real margin under this Lambda's 600s function timeout, and disable
-    botocore's own retry-on-timeout (max_attempts=1): a retry here would
-    silently double the wait past the Lambda's own timeout budget instead
-    of failing fast and letting finding #8's handler record one clear
-    error.
+    A single invoke_agent_runtime call can take several minutes when the runtime is pacing a
+    cold-start corpus-embedding burst plus the model's own calls (190s to 308s in real runs),
+    and botocore's default read timeout is 60s. So this sets an explicit read_timeout with
+    margin under the Lambda's function timeout, and disables botocore's retry-on-timeout
+    (max_attempts=1): a retry would double the wait past the Lambda's budget instead of
+    failing fast and letting the per-fragment handler record one clear error.
     """
     import json
     import uuid
@@ -453,8 +390,7 @@ def detect_via_agentcore(isolated_fragment: str) -> DetectorOutput:
     )
     body = response["response"].read()
     # main.py's deployed invoke() returns result.structured_output.model_dump()
-    # (see shipagentcore/app/ship_diagnostician/main.py) as a single JSON
-    # object, confirmed empirically against the real deployed runtime
+    # (see shipagentcore/app/ship_diagnostician/main.py) as a single JSON object
     return DetectorOutput(**json.loads(body))
 
 
@@ -475,12 +411,8 @@ if __name__ == "__main__":
     # Will only run once AWS credentials are configured (Bedrock + the
     # embedding calls inside retrieve_regulation_text both need them).
     #
-    # finding #36: this fixture used to be independently hand-retyped here
-    # and had already drifted from screener.py's own copy (missing
-    # blood_group). Kept identical to screener.py's __main__ fixture now —
-    # not shared via an import, since these are deliberately tiny, self-
-    # contained smoke tests for running each module standalone, but synced
-    # by hand once here to remove the existing drift.
+    # This fixture matches screener.py's __main__ fixture. They are separate, self-contained
+    # smoke tests for running each module standalone, so the copy is kept in sync by hand.
     from src.agents.screener import isolate_fragment, scan
 
     bad_sample = '''

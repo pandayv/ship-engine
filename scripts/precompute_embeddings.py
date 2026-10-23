@@ -11,10 +11,9 @@ That cost is the entire point: paying it here, at build time, means no
 container pays it again at cold start. See src/rag/embedding_cache.py for
 the failure this exists to fix.
 
-Writes BOTH corpus copies — the main repo's and the deployed AgentCore
-container's. Writing only one is the exact silent-drift failure that
-finding #29 already cost this project a day of dead detectors, so this
-script deliberately does not offer a way to update just one of them.
+Writes BOTH corpus copies, the main repo's and the deployed AgentCore container's. Writing
+only one would let the two drift apart silently, so this script does not offer a way to update
+just one of them.
 
 Forgetting to run this is not dangerous, only slow: a stale cache fails
 its fingerprint check at load time and the system embeds live instead.

@@ -1,17 +1,12 @@
 """
-Tests for finding #45's rate-limiting fix, updated 2026-09-05 for the
-parallel per-fragment dispatch redesign (see src/api/main.py's module
-docstring for the full architecture change).
+Tests for Bedrock rate-limit handling.
 
-The original fix (a hand-rolled, process-local SlidingWindowRateLimiter)
-was removed: once fragments genuinely run concurrently across multiple
-Lambda/AgentCore instances, a pre-emptive local limiter can't see other
-instances' traffic and can't actually prevent the account-wide quota from
-being exceeded in aggregate — it was always documented as not solving
-that. The replacement is AWS's own standard pattern for many concurrent
-clients sharing one rate limit: adaptive retry (botocore's `adaptive`
-mode), configured once via BEDROCK_RETRY_CONFIG and applied everywhere a
-Bedrock client is built.
+Fragments run concurrently across multiple Lambda/AgentCore instances, so a pre-emptive local
+limiter cannot see other instances' traffic and cannot keep the account-wide quota from being
+exceeded in aggregate. The approach is AWS's standard pattern for many concurrent clients
+sharing one rate limit: adaptive retry (botocore's `adaptive` mode), configured once via
+BEDROCK_RETRY_CONFIG and applied everywhere a Bedrock client is built (see src/api/main.py's
+module docstring).
 
 Includes structural checks (reading source as text, same technique as
 tests/test_taxonomy_consistency.py) that both the in-process copy AND the
@@ -85,10 +80,9 @@ def test_deployed_vector_store_embeddings_use_adaptive_retry_config():
 
 
 def test_main_py_dispatches_fragments_instead_of_self_invoking_lambda():
-    # The old design (self-invoke the same Lambda with the whole diff via
-    # InvocationType="Event") is fully replaced by per-fragment SQS
-    # dispatch - assert the old marker/self-invoke machinery is gone and
-    # the new dispatch function is what the webhook route actually calls.
+    # The webhook dispatches per-fragment through SQS: assert there is no self-invoke
+    # machinery (InvocationType="Event" with the whole diff) and that the dispatch function is
+    # what the webhook route actually calls.
     main_source = (REPO_ROOT / "src" / "api" / "main.py").read_text()
     assert "ASYNC_MARKER" not in main_source
     assert "_dispatch_fragments(repo_full_name, pr_number, code_diff, head_sha)" in main_source

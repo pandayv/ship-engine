@@ -5,10 +5,8 @@ from src.agents.triage import BuildAction, route
 
 
 def _matched(taxonomy_id: str, risk_score: float) -> DetectorOutput:
-    # finding #24: route() takes the real DetectorOutput directly now
-    # (no more hand-copied DetectorVerdict duplicate) - its own
-    # "matched implies populated" validator (finding #46) requires these
-    # fields whenever matched=True, so tests construct a fully valid
+    # route() takes the real DetectorOutput directly, whose "matched implies populated"
+    # validator requires these fields whenever matched=True, so tests construct a fully valid
     # instance rather than a bare partial one.
     return DetectorOutput(
         matched=True, taxonomy_id=taxonomy_id, risk_score=risk_score,
@@ -36,10 +34,8 @@ def test_high_risk_freezes():
 
 
 def test_middle_band_creates_an_alert_without_blocking_the_build():
-    # The whole point of the three-band model (2026-09-07): a confirmed
-    # finding scored below the blocking bar must still reach a human, but
-    # must NOT stop the merge. Under the old two-band model this exact
-    # score produced LOG_WARNING - no alert, nobody ever saw it.
+    # The point of the three-band model: a confirmed finding scored below the blocking bar must
+    # still reach a human, but must NOT stop the merge.
     decision = route(_matched("PIIE-001", 6.0))
     assert decision.action == BuildAction.REVIEW
     assert not decision.blocks_build
@@ -55,16 +51,14 @@ def test_review_band_boundaries_are_inclusive_at_the_bottom_exclusive_at_the_top
 
 
 def test_boundary_exactly_at_threshold_freezes():
-    # PIIE-001's own threshold (finding #41: lowered to 7.0, see
-    # src/taxonomy.py) — not the old uniform 7.5.
+    # PIIE-001's own threshold is 7.0 (see src/taxonomy.py), not a uniform 7.5.
     decision = route(_matched("PIIE-001", 7.0))
     assert decision.action == BuildAction.FREEZE
 
 
 def test_matched_without_score_raises_at_construction():
-    # Finding #46's validator now prevents this invalid state from ever
-    # being constructed in the first place — a stronger guarantee than the
-    # old "route() happens to check for it" behavior.
+    # DetectorOutput's validator prevents this invalid state from ever being constructed, a
+    # stronger guarantee than route() happening to check for it.
     with pytest.raises(ValueError):
         DetectorOutput(matched=True, taxonomy_id="PIIE-001", risk_score=None)
 
@@ -73,19 +67,17 @@ def test_route_still_defends_against_a_missing_score_directly():
     # Defense in depth: even if an invalid instance reaches route() by
     # bypassing pydantic validation (model_construct, or a future caller
     # that isn't actually a DetectorOutput), route() must not crash
-    # several frames away from the real cause (finding #51).
+    # several frames away from the real cause.
     invalid = DetectorOutput.model_construct(matched=True, taxonomy_id="PIIE-001", risk_score=None)
     with pytest.raises(ValueError):
         route(invalid)
 
 
 def test_per_category_thresholds_actually_differ():
-    # Finding #41: this is the behavior a single global threshold could
-    # never produce - the identical risk_score routes differently
-    # depending on taxonomy_id, because the categories are not treated as
-    # equally severe. 7.2 is below ALBP-001's default 7.5 blocking bar but
-    # at/above TLGP-002's lowered 7.0 bar - same score, different
-    # real-world consequence: one stops the merge, one doesn't.
+    # A single global threshold could never produce this: the identical risk_score routes
+    # differently depending on taxonomy_id, because the categories are not equally severe. 7.2 is
+    # below ALBP-001's default 7.5 blocking bar but at/above TLGP-002's lowered 7.0 bar, so one
+    # stops the merge and one doesn't.
     albp = route(_matched("ALBP-001", 7.2))
     tlgp002 = route(_matched("TLGP-002", 7.2))
 

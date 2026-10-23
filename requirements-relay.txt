@@ -22,10 +22,8 @@ python-multipart
 anyio
 typing-extensions
 typing-inspection
-# Added when request_risk_acceptance/proceed started calling
-# src.api.github_writeback directly (voice-resolved findings now post
-# back to the PR, same as Gate's web path) — that module uses requests,
-# not httpx, and was never on Relay's request path before.
+# Used by src.api.github_writeback, which Relay calls directly so voice-resolved findings post
+# back to the PR, same as Gate's web path. That module uses requests, not httpx.
 requests
 # Web Push to screens with no page open (src/relay/webpush.py). pywebpush imports
 # aiohttp at load time, so the Lambda package needs it (arm64 wheels) even though only

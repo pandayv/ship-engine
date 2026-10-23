@@ -1,33 +1,19 @@
 """
-Tracks when an alert was last shown on a screen — the signal
-request_risk_acceptance needs to tell "reviewed, then confirmed" apart
-from a blind decision, without which voice confirmation would be
-indistinguishable from a rubber stamp. See src/relay/server.py's module
-docstring for the full design reasoning behind why that distinction, not
-"voice can never decide anything," is the actual rule.
+Tracks when an alert was last shown on a screen. This is the signal the decision tools need to
+tell "reviewed, then confirmed" apart from a blind decision. Without it, voice confirmation
+would be indistinguishable from a rubber stamp. See src/relay/server.py's module docstring for
+why that distinction, not "voice can never decide anything," is the rule.
 
-WHY THIS IS KEYED BY ALERT, NOT BY SESSION — a real correction, not the
-original design. The first version of this module keyed on the MCP
-session id (Mcp-Session-Id), reasoning that it was a stable per-
-conversation identifier. Verified live against the actual deployed
-system, not assumed, and it wasn't: Relay's create_app() (see
-src/relay/server.py) sets stateless_http=True, and for a real, load-
-bearing reason — every Lambda invocation builds a brand-new FastMCP app
-and session manager (the SnapStart-per-invocation fix), so there is no
-process for a session id to have continuity WITH, whether or not the
-protocol flag is set. A live test confirmed it directly: no
-Mcp-Session-Id header ever arrived on the tool call following
-initialize(). Session-scoping wasn't just unverified, it was structurally
-impossible in this specific architecture.
+WHY THIS IS KEYED BY ALERT, NOT BY SESSION. Relay's create_app() (see src/relay/server.py) sets
+stateless_http=True, and every Lambda invocation builds a new FastMCP app and session manager,
+so there is no process for an MCP session id to have continuity with. No Mcp-Session-Id header
+reaches the tool call that follows initialize().
 
-The actual signal available on every request, with no transport
-continuity required, is simpler: was THIS alert_id shown recently, at
-all. TTL_SECONDS below (10 minutes) is that "recently" — long enough for
-a real ask-review-decide exchange, short enough that a stale viewing from
-an hour ago can't be invoked to unlock a much later, unrelated "go ahead."
-This trades exact per-conversation attribution (which the transport can't
-give us) for a time-windowed proxy that's a genuine, honest fit for what's
-actually available, not a fiction of session continuity that isn't there.
+The signal available on every request, with no transport continuity, is simpler: was THIS
+alert_id shown recently. RECENT_WINDOW_SECONDS below (10 minutes) is "recently": long enough for
+a real ask-review-decide exchange, short enough that a stale viewing from an hour ago cannot
+unlock a much later, unrelated "go ahead." It trades exact per-conversation attribution, which
+the transport cannot give, for a time window that fits what is available.
 """
 
 from __future__ import annotations
@@ -39,13 +25,6 @@ from functools import lru_cache
 log = logging.getLogger(__name__)
 
 TABLE_NAME = "ship-recent-reviews"
-# Not ship-session-context (the name this table had under the rejected
-# session-keyed design). Renamed rather than the old table's schema fixed
-# in place — ship-agent's IAM identity deliberately has no
-# dynamodb:DeleteTable, a properly withheld permission, and this name is
-# also just more accurate for what the table actually holds now. The old,
-# empty, wrong-schema table is harmless to leave orphaned (on-demand
-# billing, zero items, zero cost).
 RECENT_WINDOW_SECONDS = 600  # 10 minutes
 # For a future DynamoDB TTL on `expires_at`; the window above is what the code enforces.
 EXPIRY_SECONDS = 3600

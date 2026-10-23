@@ -18,7 +18,7 @@
           "handler": "lambda_function.handler",
           "lambda": {
             "functionName": "ship-alexa-skill",
-            "description": "SHIP Review: Alexa skill that stands in for an Alexa+ add-on and calls Relay over MCP",
+            "description": "SHIP Review: Alexa skill that calls Relay, SHIP's MCP server",
             "memorySize": 512,
             "timeout": 8,
             "environmentVariables": {

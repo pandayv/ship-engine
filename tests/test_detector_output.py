@@ -1,9 +1,7 @@
 """
 Pure-logic tests for DetectorOutput's validation — no AWS credentials
 needed, since these test pydantic validation and Python control flow, not
-any live model call. Added 2026-09-05: these fixes (the model_validator,
-the singleton-poisoning fix) had been written but never actually verified
-by a test — this closes that gap.
+any live model call.
 """
 
 import pytest
@@ -28,12 +26,10 @@ def test_matched_true_with_all_fields_populated_is_valid():
 
 @pytest.mark.parametrize("missing_field", ["taxonomy_id", "risk_score", "citation", "plain_english_summary"])
 def test_matched_true_missing_any_required_field_raises(missing_field):
-    # review findings #46/#51: this used to be enforced only by prose in
-    # the prompt — a real observed failure mode (Ollama skipping the RAG
-    # tool call) could produce exactly this malformed shape and crash
-    # triage.route() several frames away from the actual cause. Now it's
-    # rejected at construction time, with a clear message naming what's
-    # missing.
+    # "Matched implies all four fields populated" is enforced at construction time. A model that
+    # skips the RAG tool call (Ollama has) can produce exactly this malformed shape, and it would
+    # otherwise crash triage.route() several frames away from the actual cause. The error names
+    # what is missing.
     fields = {
         "matched": True, "taxonomy_id": "PIIE-001", "risk_score": 9.0,
         "citation": "GDPR Art. 32(1)(a)", "plain_english_summary": "Raw PII sent externally.",

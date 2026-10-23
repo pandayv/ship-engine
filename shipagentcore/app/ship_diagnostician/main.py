@@ -8,14 +8,9 @@ no multi-backend switch, no session/conversation caching — each invocation
 is a single stateless classification, not a chat) because AgentCore's
 generated project template lives in its own package/dependency tree.
 
-SYNC WARNING (see architecture review finding #29, 2026-09-05): this file
-drifted out of sync with src/agents/detector.py once already — it sat
-frozen at the original PIIE-001-only prompt/schema for a full day after the
-source of truth expanded to 6 taxonomy IDs, silently making 5 of 6
-detectors no-ops in the actually-deployed path with no error anywhere. If
-you change SYSTEM_PROMPT, DetectorOutput, or rag_corpus/ in
-src/agents/detector.py, you MUST make the same change here and run
-`agentcore deploy` again — nothing currently automates or verifies this.
+SYNC NOTE: this file must match src/agents/detector.py. If you change SYSTEM_PROMPT,
+DetectorOutput, or rag_corpus/ there, make the same change here and run `agentcore deploy`
+again. Otherwise the deployed path silently stops detecting what the source of truth detects.
 """
 
 import os
@@ -41,7 +36,7 @@ log = app.logger
 # on the adversarial fixture set, four times faster, and a 200/min request
 # quota against Haiku's 10/min, which is the ceiling that actually bounds
 # review throughput. Overridable so this container can be A/B'd without a
-# rebuild, same reasoning as finding #42's runtime-ARN fix.
+# rebuild.
 BEDROCK_MODEL_ID = os.environ.get("SHIP_BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 
 SYSTEM_PROMPT = """You are the SHIP Detector, a compliance auditor for a small \
@@ -131,8 +126,8 @@ If you confirm a real violation:
 - Set taxonomy_id to whichever ID actually applies (PIIE-001/002/003, TLGP-001, \
   TLGP-002, or ALBP-001).
 - Assign a risk_score from 1-10. Each category is judged and frozen against \
-  its own bar (finding #41 fixed this — these numbers match exactly what \
-  Triage actually enforces per category, see src/taxonomy.py's REGISTRY): \
+  its own bar (these numbers match what \
+  Triage enforces per category, see src/taxonomy.py's REGISTRY): \
   For PIIE-001 (external sink), a score >= 7.0 means raw, directly- \
   identifying financial PII (SSN, account number, full name + income together) \
   reaching an external sink with no masking at all — this category freezes \
@@ -175,20 +170,14 @@ class DetectorOutput(BaseModel):
 
 @lru_cache(maxsize=1)
 def _get_store() -> VectorStore:
-    # finding #35 (mirrors the main ship-engine copy): this used to be a
-    # hand-rolled module-global + "is None" guard (finding #10: build into
-    # a local var, only publish on success, since the old version assigned
-    # an empty VectorStore() to _store BEFORE calling .build(), so a
-    # transient embedding failure left a broken store cached for the rest
-    # of the container's lifetime). lru_cache(maxsize=1) gives the same
-    # guarantee for free — it does not cache a raised exception, so a
-    # failed build() is retried fresh on the next call.
+    # lru_cache does not cache a raised exception, so a failed build() is retried on the next
+    # call instead of leaving a broken store cached for the container's lifetime.
     corpus_dir = Path(__file__).resolve().parent / "rag_corpus"
     chunks = chunk_corpus(corpus_dir)
     store = VectorStore()
     # Precomputed embeddings when they match; live Titan calls otherwise.
-    # This is the cold-start path that previously re-embedded the entire
-    # corpus in every container instance.
+    # This is the cold-start path: precomputed embeddings avoid re-embedding the corpus in every
+    # container instance.
     store.build(chunks, cache_path=default_cache_path(corpus_dir))
     return store
 
@@ -252,24 +241,17 @@ async def invoke(payload: dict, context) -> dict:
     # purely so `agentcore invoke --prompt "..."` works for quick manual
     # smoke tests, since the CLI has no way to send a custom payload shape.
     fragment = payload.get("fragment") or payload.get("prompt", "")
-    # finding #58: only checked falsiness before, so a truthy non-string
-    # payload (a dict/list) would silently str()-convert into the prompt
-    # instead of failing loudly on the actual shape bug.
+    # A truthy non-string payload (a dict or list) would silently str()-convert into the prompt,
+    # so check the type and fail loudly on the shape bug.
     if not isinstance(fragment, str) or not fragment:
         raise ValueError("payload must include a non-empty 'fragment' (or 'prompt') string")
 
     agent = Agent(
-        # finding #45 (updated 2026-09-05): this is the layer where real
-        # Bedrock traffic actually happens when the webhook Lambda runs in
-        # agentcore mode (it only calls invoke_agent_runtime itself, a
-        # different, less restrictive quota) — and now that PRs dispatch
-        # each escalated fragment as an independently, concurrently
-        # processed job, multiple instances of this container can be
-        # running at once. Adaptive retry (BEDROCK_RETRY_CONFIG) backs off
-        # and retries automatically if that concurrent traffic trips the
-        # real account-wide quota, instead of a process-local limiter that
-        # can't see other instances' traffic anyway (see
-        # aws/bedrock_session.py's docstring).
+        # This is the layer where real Bedrock traffic happens when the webhook Lambda runs in
+        # agentcore mode (it only calls invoke_agent_runtime itself, which has a less restrictive
+        # quota), and several instances of this container run at once. Adaptive retry
+        # (BEDROCK_RETRY_CONFIG) backs off and retries if that concurrent traffic trips the account
+        # quota. See aws/bedrock_session.py's docstring.
         model=BedrockModel(
             model_id=BEDROCK_MODEL_ID, boto_session=bedrock_session(), boto_client_config=BEDROCK_RETRY_CONFIG,
         ),
@@ -277,22 +259,11 @@ async def invoke(payload: dict, context) -> dict:
         tools=[retrieve_regulation_text, retrieve_prior_determinations],
         structured_output_model=DetectorOutput,
     )
-    # finding #11: this used to be the synchronous `agent(...)` call inside
-    # an `async def` entrypoint - a plain blocking call, not a real
-    # coroutine, so it never actually yielded control back to
-    # BedrockAgentCoreApp's event loop during Bedrock I/O. Since this is a
-    # persistent runtime service (not a one-shot Lambda), that meant any
-    # concurrency it offered was defeated - concurrent requests queued
-    # behind whichever one arrived first. Strands' own Agent exposes a
-    # real async entrypoint (confirmed via direct introspection of the
-    # installed library, not assumed: Agent.invoke_async is an actual
-    # coroutine function with the same signature as the sync __call__) -
-    # using it here lets the runtime genuinely interleave concurrent
-    # requests during I/O wait instead of one strictly blocking the next.
+    # Strands' Agent.invoke_async is a real coroutine, so using it lets the runtime interleave
+    # concurrent requests during Bedrock I/O instead of one blocking the next.
     result = await agent.invoke_async(f"Isolated code fragment flagged by Screener:\n\n{fragment}")
-    # finding #59: structured_output is genuinely Optional in Strands' own
-    # AgentResult (e.g. a run that ends via interrupt) — treating it as
-    # always-populated crashed several frames from the real cause.
+    # structured_output is Optional in Strands' AgentResult (a run that ends via interrupt, for
+    # example), so None is an error here.
     if result.structured_output is None:
         raise RuntimeError("Agent run completed without producing structured output — no verdict to return.")
     return result.structured_output.model_dump()

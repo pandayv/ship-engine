@@ -54,8 +54,7 @@ def test_agentic_bucket():
 
 
 def test_no_false_positive_from_race_substring():
-    # regression test for review finding #63 — "traceback"/"embrace" used
-    # to trip bias_data's "race" via plain substring matching
+    # "traceback"/"embrace" must not trip bias_data's "race" via substring matching
     result = scan("try:\n    do_thing()\nexcept Exception:\n    log.error(traceback.format_exc())\n")
     assert "bias_data" not in result.matched_buckets
     result2 = scan("def embrace_new_design():\n    pass\n")
@@ -63,8 +62,7 @@ def test_no_false_positive_from_race_substring():
 
 
 def test_no_false_positive_from_mobile_substring():
-    # regression test for review finding #63 — "automobile" used to trip
-    # pii_data's "mobile" via plain substring matching
+    # "automobile" must not trip pii_data's "mobile" via substring matching
     result = scan("loan_purpose = 'automobile financing for the applicant'")
     assert "pii_data" not in result.matched_buckets
 
@@ -76,13 +74,9 @@ def test_real_mobile_field_still_matches():
 
 
 def test_punctuation_ending_terms_match_with_their_own_argument_immediately_following():
-    # Regression test for a bug an independent review caught (2026-09-05)
-    # in the #63 word-boundary fix itself: an unconditional (?!\w) after
-    # every term broke matching for any term ending in punctuation
-    # ("print(", ".setex(", "eval(", "exec(", "Agent(", "session[") the
-    # instant it was followed by its own realistic argument - exactly the
-    # normal, correct usage, not an edge case. Reproduced directly before
-    # fixing: scan("print(applicant_summary)") returned matched=False.
+    # A term ending in punctuation ("print(", ".setex(", "eval(", "exec(", "Agent(", "session[")
+    # must still match when it is immediately followed by its own realistic argument. That is
+    # normal, correct usage, not an edge case: scan("print(applicant_summary)") must match.
     cases = [
         ("result = eval(user_input)", "agentic", "eval("),
         ("subprocess.exec(cmd)", "agentic", "exec("),
@@ -156,9 +150,8 @@ def test_split_diff_into_fragments_falls_back_without_git_markers():
 
 
 def test_split_diff_preserves_code_before_first_function():
-    # regression test for review finding #5 — code before the first
-    # def/class (imports, module-level constants) used to be silently
-    # dropped from every fragment
+    # code before the first def/class (imports, module-level constants) must not be dropped
+    # from every fragment
     diff = """diff --git a/loans/x.py b/loans/x.py
 new file mode 100644
 --- /dev/null
@@ -177,9 +170,8 @@ new file mode 100644
 
 
 def test_split_diff_does_not_split_indented_methods_from_their_class():
-    # regression test for review finding #64 — indented class methods used
-    # to be treated as top-level boundaries too, splitting a class's
-    # __init__ away from a method that uses what __init__ built
+    # indented class methods are not top-level boundaries, so a class's __init__ stays with
+    # a method that uses what __init__ built
     diff = """diff --git a/loans/y.py b/loans/y.py
 new file mode 100644
 --- /dev/null

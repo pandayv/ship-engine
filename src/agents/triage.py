@@ -1,38 +1,22 @@
 """
-Triage — routes the build based on Detector's risk score.
-Pure conditional logic, no judgment of its own, no AWS dependency (beyond
-importing src.taxonomy and src.agents.detector.DetectorOutput,
-neither of which pull in strands/numpy/boto3 — see their own docstrings
-for why those heavier imports are deliberately lazy elsewhere).
+Triage routes the build based on Detector's risk score. Pure conditional logic, no judgment of
+its own, no AWS dependency (beyond importing src.taxonomy and
+src.agents.detector.DetectorOutput, neither of which pulls in strands/numpy/boto3).
 
-Finding #41: the freeze threshold used to be one constant applied uniformly
-across all six taxonomy IDs. It's now looked up per taxonomy_id from
-src/taxonomy.py's REGISTRY (see that file for the full reasoning behind
-each category's specific value) — the FALLBACK_* constants below are kept
-only for a taxonomy_id the registry doesn't recognize, which should not
-happen in practice (see tests/test_taxonomy_consistency.py) but is safer
-as a conservative default than a crash in what's meant to be simple,
-reliable routing logic.
+The freeze threshold is looked up per taxonomy_id from src/taxonomy.py's REGISTRY, which
+explains each category's value. The FALLBACK_* constants below apply only to a taxonomy_id the
+registry does not recognize. That should not happen (see tests/test_taxonomy_consistency.py),
+but a conservative default is safer than a crash in routing logic meant to be simple and
+reliable.
 
-Three routing bands (2026-09-07). A confirmed finding used to have only
-two possible outcomes: freeze the build, or log a line nobody reads.
-That forced every judgment call into "stop the team" or "say nothing."
-Now a middle band exists: a finding the model confirmed but scored below
-the blocking bar creates a real, visible alert for a human WITHOUT
-blocking the merge. Only findings at or above the per-category blocking
-threshold actually stop anything. See src/taxonomy.py for the band
-definitions and for an honest note on severity being used as a proxy for
-confidence here.
+Three routing bands. A finding the model confirmed but scored below the blocking bar creates a
+visible alert for a human WITHOUT blocking the merge. Only findings at or above the
+per-category blocking threshold stop anything. See src/taxonomy.py for the band definitions
+and for a note on severity being used as a proxy for confidence.
 
-Finding #24: this module used to define its own DetectorVerdict
-dataclass, a hand-copied, field-by-field duplicate of Detector's real
-DetectorOutput (same six fields, same order) — the docstring's
-original justification ("so Triage can be tested before Detector
-exists") no longer applies now that Detector has existed for a while.
-route() now takes the real DetectorOutput directly: one schema, one
-place fields can drift, and route() gets DetectorOutput's own
-"matched implies populated" pydantic validation (finding #46) for free
-instead of trusting every caller to construct a valid shape.
+route() takes Detector's DetectorOutput directly: one schema, and route() gets DetectorOutput's
+"matched implies populated" validation for free instead of trusting every caller to construct
+a valid shape.
 """
 
 from dataclasses import dataclass

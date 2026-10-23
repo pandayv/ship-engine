@@ -142,10 +142,9 @@ def run_model(model_id: str, fixtures: list[dict]) -> dict:
 # citation separately from the classification matters more than it looks:
 # a model can land the right category and still cite the wrong instrument,
 # which is precisely the hallucinated-citation failure the RAG grounding
-# exists to prevent. Observed for real on 2026-09-08 — a correct PIIE-001
-# verdict citing OWASP LLM06 (the grounding for TLGP-001) instead of GDPR
-# Article 32. The first version of this benchmark scored only the taxonomy
-# id and would have called that a pass.
+# exists to prevent. A correct PIIE-001 verdict that cites OWASP LLM06 (the grounding for
+# TLGP-001) instead of GDPR Article 32 is a failure, and a benchmark that scored only the
+# taxonomy id would call it a pass.
 EXPECTED_SOURCE = {
     "PIIE-001": "GDPR", "PIIE-002": "GDPR", "PIIE-003": "GDPR",
     "TLGP-002": "EU AI Act", "ALBP-001": "EU AI Act", "TLGP-001": "OWASP",

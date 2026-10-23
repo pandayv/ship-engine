@@ -1,35 +1,17 @@
 """
 Shared Bedrock session + retry configuration.
 
-Review finding #45 (original fix, 2026-09-04/05): a hand-placed
-time.sleep(7) between fragments in main.py's process_pr() loop assumed
-exactly one Bedrock call per fragment, which isn't how a tool-using
-Detector agent behaves. The first fix moved to a custom, process-
-local SlidingWindowRateLimiter shared by every Bedrock caller — real
-improvement over a blind sleep, but it never solved (and was always
-documented as not solving) coordination ACROSS multiple concurrent
-processes/container instances, since each instance's limiter only knows
-about its own traffic.
+Fragments of a PR run concurrently across Lambda and AgentCore instances, and all of them draw
+on one account-wide Bedrock request quota. A local, pre-emptive rate limiter cannot see the
+other instances' traffic, so it cannot keep the aggregate under the quota, and it adds latency
+to every call even when the limit has not been hit.
 
-2026-09-05 — replaced with parallel per-fragment dispatch (see
-src/api/main.py's module docstring for the full architecture change):
-once fragments genuinely run concurrently across multiple Lambda/AgentCore
-instances, a pre-emptive local limiter is actively the wrong tool — it
-can't see the OTHER instances' traffic, so it can't actually prevent the
-account-wide quota (10 requests/minute, confirmed 2026-09-04) from being
-exceeded in aggregate, while still adding latency to every call even when
-the real limit hasn't been hit.
-
-Real fix: let calls fire immediately, and if AWS responds with a throttle,
-back off and retry automatically — AWS's own standard, SDK-native pattern
-for exactly this scenario (many concurrent clients sharing one account-
-wide limit), via botocore's `adaptive` retry mode. This needs zero custom
-coordination code; BEDROCK_RETRY_CONFIG below is applied everywhere a
-Bedrock client is built. Combined with a cap on how many fragments the
-SQS-Lambda event source mapping lets run concurrently (an AWS setting, not
-code — see the fragment-processor Lambda's deployment config), this keeps
-real throughput near the account's actual limit without a custom
-coordinator that (per the above) couldn't actually coordinate anyway.
+So calls fire immediately, and if AWS responds with a throttle the client backs off and
+retries automatically. That is AWS's SDK-native pattern for many concurrent clients sharing
+one limit: botocore's `adaptive` retry mode. It needs no custom coordination code.
+BEDROCK_RETRY_CONFIG below is applied everywhere a Bedrock client is built. Combined with a cap
+on how many fragments the SQS event source mapping lets run concurrently (an AWS setting on
+the fragment-processor Lambda, not code), this keeps throughput near the account's limit.
 """
 
 import threading
@@ -60,8 +42,7 @@ def bedrock_session() -> boto3.Session:
     if _shared_session is None:
         with _session_lock:
             if _shared_session is None:
-                # Build into a local var first, same non-atomic-singleton
-                # reasoning as finding #10's _get_store() fix: only publish
-                # to the module global after setup fully succeeds.
+                # Build into a local var first and publish to the module global only after setup
+                # fully succeeds.
                 _shared_session = boto3.Session()
     return _shared_session

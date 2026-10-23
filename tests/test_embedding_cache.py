@@ -107,7 +107,7 @@ def test_both_corpus_copies_hold_identical_text():
     # The precompute script reuses one set of vectors for both copies, so
     # they must be identical or the mirrored cache would pass its own
     # fingerprint check while serving text the container does not have.
-    # This is the same class of drift as finding #29.
+    # Two copies of the same corpus can drift apart.
     primary, mirror = ({c.text for c in chunk_corpus(d)} for d in CORPUS_DIRS)
     assert primary == mirror, (
         "rag_corpus/ and shipagentcore/app/ship_diagnostician/rag_corpus/ have diverged — "

@@ -4,7 +4,7 @@ Tests for the connected-repositories store.
 Most of these are about is_watched(), which is not a convenience lookup —
 it is the control that stops a forged webhook payload naming an arbitrary
 repository and spending this service's GitHub token and Bedrock quota
-against it (review finding #7). The behaviour that matters most is what it
+against it. The behaviour that matters most is what it
 does when the datastore is unavailable, because the tempting answer there
 is the one that silently removes the control.
 """
@@ -217,8 +217,7 @@ def test_not_stuck_within_the_grace_window():
 
 
 def test_stuck_past_the_grace_window_with_nothing_reviewed():
-    # This is exactly the 2026-09-27 bug: an event received, a disabled
-    # SQS consumer, nothing ever completes review.
+    # An event received, a disabled SQS consumer, nothing ever completes review.
     from datetime import datetime, timedelta, timezone
     old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
     repo = WatchedRepo(repo_full_name="a/b", status=STATUS_WATCHING, connected_at="x", last_event_at=old)

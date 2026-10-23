@@ -8,10 +8,9 @@ import src.api.main as main_module
 
 
 def test_no_secret_configured_fails_closed_by_default(monkeypatch):
-    # review finding #1: this used to silently allow any unsigned payload
-    # through when the secret wasn't configured — a real production
-    # misconfiguration would have let anyone trigger the pipeline. Now it
-    # must fail loudly (500, "misconfigured") rather than fail open.
+    # With no secret configured, an unsigned payload must not be let through: a production
+    # misconfiguration would let anyone trigger the pipeline. It must fail loudly (500,
+    # "misconfigured") rather than fail open.
     monkeypatch.setattr(main_module, "GITHUB_WEBHOOK_SECRET", "")
     monkeypatch.setattr(main_module, "ALLOW_UNSIGNED", False)
     with pytest.raises(HTTPException) as exc_info:

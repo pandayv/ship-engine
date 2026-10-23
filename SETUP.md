@@ -119,7 +119,7 @@ The output names the runtime ARN. Keep it. It becomes `SHIP_AGENTCORE_RUNTIME_AR
 
 ### 4.4 Write your settings
 
-`deploy.sh` reads settings from your environment or from `.env.deploy`. It parses that file as `NAME=value` lines and does not run it. It never prints a value.
+`deploy.sh` reads settings from your environment or from `.env.deploy`. It parses that file as `NAME=value` lines and does not run it. It never prints a value. Set `SHIP_ENV_FILE` to read a different file.
 
 `.env.deploy` is listed in `.gitignore`, so it never reaches the repository.
 
@@ -335,7 +335,7 @@ Give the role its reviewed policy:
 ./deploy.sh skill-policy
 ```
 
-That writes `ship-alexa-skill-access` to the role. It allows logs, one `PutItem` on `ship-alexa-users`, and `bedrock:InvokeModel` on Amazon Nova Lite. Like `roles`, it hands over the command when you lack IAM rights.
+That writes `ship-alexa-skill-access` to the role. It allows logs, one `PutItem` on `ship-alexa-users`, and `bedrock:InvokeModel` on Amazon Nova Lite. Like `roles`, it needs the IAM rights in the deployer policy.
 
 Store the Login with Amazon credentials of the skill (section 2) as `SHIP_ALEXA_CLIENT_ID` and `SHIP_ALEXA_CLIENT_SECRET` in `.env.deploy`, then:
 
@@ -410,7 +410,7 @@ Then make `ship/compliance` a required status check in the repository's branch p
 
 ## 10. Reset the demo
 
-Between takes, or when the demo data is spent:
+Between demo runs, or when the demo data is spent:
 
 ```bash
 python scripts/demo_reset.py          # shows the plan
@@ -443,15 +443,6 @@ For Relay, the script publishes a version, waits until it is Active and moves th
 The other three functions have no versions. To go back, check out the earlier commit, run `packages` and `functions` again.
 
 If Detector's prompt, schema or RAG corpus changes, make the same change in `src/agents/detector.py` and in `shipagentcore/app/ship_diagnostician/main.py`, then run `agentcore deploy --yes` from `shipagentcore/`. `tests/test_taxonomy_consistency.py` catches the two copies drifting apart.
-
-### One-off data fixes
-
-Both scripts show what they would change unless you pass `--apply`. Both are safe to run twice. A deployment that has only ever run the current code has nothing for them to do.
-
-| Script | When it applies |
-|---|---|
-| `scripts/migrate_decision_names.py` | Findings decided before decisions were named allowed and blocked hold `approved` or `rejected`. Run it after the new code is deployed. |
-| `scripts/backfill_fragment_keys.py` | Findings recorded before code fingerprints existed have none, so blocking one would not hold the merge. It reads pull request diffs with `gh`. |
 
 ### Scripts you run by hand
 

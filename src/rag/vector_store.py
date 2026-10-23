@@ -1,29 +1,15 @@
 """
-Local vector store for the RAG corpus. Deliberately NOT FAISS/Chroma-as-a-
-service or Bedrock Knowledge Bases — the corpus is ~13 chunks (GDPR Art. 32
-+ EU AI Act Art. 14), so a brute-force numpy cosine-similarity search is
-simpler, has zero install risk, and is functionally identical at this scale.
-See ship_roadmap.md's "AWS-native technical stack" section for why Knowledge
-Bases was deliberately skipped.
+Local vector store for the RAG corpus. A brute-force numpy cosine-similarity search, not
+FAISS/Chroma-as-a-service or Bedrock Knowledge Bases: the corpus is small (GDPR Art. 32, EU AI
+Act Art. 14 and the other sourced texts), so brute force is simpler, has zero install risk, and
+is functionally identical at this scale.
 
-Embedding backend is switchable via the SHIP_MODEL_BACKEND env var
-("bedrock" | "ollama", default "bedrock" — the account-wide Bedrock quota
-block that once made "ollama" the safe default was resolved 2026-09-04, see
-ship_roadmap.md; this docstring previously went stale on that point,
-finding #55 in the 2026-09-05 architecture review — fixed here). Bedrock
-Titan is the AWS-native choice for the real submission; Ollama's
-nomic-embed-text remains available as a fully-local, zero-AWS-dependency
-fallback.
-
-Backend selection matters for more than dev convenience: Bedrock is the
-primary submission backend, Gemini is the deliberate credit-exhaustion
-fallback (free tier, independent of AWS), and Ollama is the fully-local
-reliability fallback (works with no internet/API dependency at all). All
-three need to work completely — including embeddings, not just the LLM
-call — or "switch to Gemini" as a real fallback plan doesn't actually work
-when it's needed. gemini embeddings use Google's `gemini-embedding-001`
-model via the same google-genai client/GEMINI_API_KEY already required for
-Detector's Gemini LLM path.
+The embedding backend is switchable via SHIP_MODEL_BACKEND ("bedrock" | "ollama" | "gemini",
+default "bedrock"). Bedrock Titan is the AWS-native choice. Gemini (free tier, independent of
+AWS) and Ollama (fully local, no internet or API dependency) are fallbacks, and all three work
+completely, embeddings included, not only the LLM call. Gemini embeddings use Google's
+`gemini-embedding-001` model via the same google-genai client and GEMINI_API_KEY as Detector's
+Gemini LLM path.
 """
 
 import json
@@ -40,33 +26,25 @@ from src.rag.chunker import Chunk
 TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
 OLLAMA_EMBED_MODEL_ID = "nomic-embed-text"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-GEMINI_EMBED_MODEL_ID = "gemini-embedding-001"  # text-only; confirmed current via
-# live web search 2026-09-05, not guessed — the sibling "gemini-embedding-2" model
-# is multimodal (text/image/video/audio) and unnecessary for this text-only corpus.
+GEMINI_EMBED_MODEL_ID = "gemini-embedding-001"  # text-only; the sibling "gemini-embedding-2"
+# model is multimodal and unnecessary for this text-only corpus.
 
 
 @lru_cache(maxsize=1)
 def _bedrock_runtime_client():
-    # Independent review (2026-09-05) caught a real gap: the #16/#50
-    # cleanup pass cached alert_store._table() and both Detector
-    # copies' _get_store() to avoid rebuilding a client on every call in
-    # the hot per-fragment loop, but missed this one — _embed_bedrock()
-    # still built a fresh boto3 client from the (already-cached) session
-    # on every single RAG query, including every retrieve_regulation_text
-    # tool call during a fragment's detection. Cached the same way now.
+    # One bedrock-runtime client per process, built from the cached session, instead of a new
+    # client on every RAG query (including every retrieve_regulation_text tool call during a
+    # fragment's detection).
     from src.aws.bedrock_session import BEDROCK_RETRY_CONFIG, bedrock_session  # lazy import, same reasoning as before
 
     return bedrock_session().client("bedrock-runtime", config=BEDROCK_RETRY_CONFIG)
 
 
 def _embed_bedrock(texts: list[str]) -> np.ndarray:
-    # finding #45 (updated 2026-09-05): built with adaptive retry config
-    # (BEDROCK_RETRY_CONFIG) so a cold-start VectorStore.build() burst (one
-    # call per corpus chunk), or concurrent traffic from other fragments'
-    # own detection running at the same time, backs off and retries
-    # automatically if the real account-wide quota is hit, instead of
-    # either being unpaced entirely or pre-emptively delayed by a local
-    # limiter that can't see other processes' traffic anyway.
+    # Built with adaptive retry config (BEDROCK_RETRY_CONFIG), so a cold-start
+    # VectorStore.build() burst (one call per corpus chunk), or concurrent traffic from other
+    # fragments, backs off and retries automatically if the account quota is hit, instead of
+    # being unpaced or delayed by a local limiter that can't see other processes' traffic.
     client = _bedrock_runtime_client()
     vectors = []
     for text in texts:
@@ -86,22 +64,15 @@ def _embed_ollama(texts: list[str]) -> np.ndarray:
 
 
 def _embed_gemini(texts: list[str], is_query: bool) -> np.ndarray:
-    # Verified against the actually-installed google-genai SDK (2026-09-05,
-    # via live introspection, not guessed): Client().models.embed_content(
-    # model=..., contents=<list[str] ok>) -> EmbedContentResponse, whose
-    # .embeddings is a list[ContentEmbedding], each with a .values vector —
-    # same shape/order as the input list, matching _embed_bedrock's contract.
+    # Client().models.embed_content(model=..., contents=<list[str]>) returns an
+    # EmbedContentResponse whose .embeddings is a list[ContentEmbedding], each with a .values
+    # vector, in the same order as the input, matching _embed_bedrock's contract.
     #
-    # task_type matters, confirmed by a real failure caught during live
-    # testing, not assumed: without it, a live query for "sending raw
-    # personal data to an external AI model" ranked OWASP chunks above the
-    # actually-relevant GDPR Art. 32 chunk — silently wrong retrieval, no
-    # error anywhere, exactly the failure mode "Trust but Verify" exists to
-    # catch. Gemini's embedding model is asymmetric: short queries and long
-    # documents need different task_type hints (RETRIEVAL_QUERY vs.
-    # RETRIEVAL_DOCUMENT) to land in a comparable embedding space. Verified
-    # valid values via a live web search (2026-09-05), not guessed — the
-    # SDK's own type hint for this field is an unconstrained string.
+    # task_type matters. Without it, a query like "sending raw personal data to an external AI
+    # model" ranked OWASP chunks above the relevant GDPR Art. 32 chunk, which is silently wrong
+    # retrieval. Gemini's embedding model is asymmetric: short queries and long documents need
+    # different task_type hints (RETRIEVAL_QUERY vs. RETRIEVAL_DOCUMENT) to land in a comparable
+    # embedding space. The SDK's own type hint for this field is an unconstrained string.
     from google import genai
     from google.genai import types
 

@@ -4,11 +4,8 @@ three things that must actually agree with it: Screener's trigger buckets,
 Detector's prompt text (both the in-process copy and the deployed
 AgentCore copy), and the RAG corpus files on disk (both trees).
 
-This is the test that should have caught finding #29 (the deployed
-AgentCore Detector silently drifting to a stale, PIIE-001-only
-prompt/corpus for a full day) the moment it happened, instead of a manual
-review catching it a day later. If this test suite is green, that specific
-failure class cannot recur silently.
+It guards against the deployed AgentCore Detector silently drifting to a stale prompt or
+corpus: if this test suite is green, that failure class cannot recur silently.
 
 The deployed copy's source is read as plain text, not imported — it lives
 in a separate package tree (shipagentcore/app/ship_diagnostician/) with its
@@ -39,8 +36,7 @@ def test_every_registry_entry_has_grounding_in_the_main_corpus():
 
 
 def test_every_registry_entry_has_grounding_in_the_deployed_corpus():
-    # This exact check — run against the DEPLOYED copy specifically — is
-    # what would have caught finding #29 automatically.
+    # Run against the DEPLOYED copy specifically, this catches the deployed corpus drifting.
     for entry in REGISTRY:
         for corpus_file in entry.corpus_files:
             path = DEPLOYED_CORPUS_DIR / corpus_file
@@ -81,11 +77,9 @@ def test_every_registry_screener_bucket_is_a_real_screener_bucket():
 
 
 def test_every_registry_block_threshold_is_mentioned_in_the_main_prompt():
-    # Finding #41: per-category thresholds only matter if the model's own
-    # calibration (what it's told "severe" means per category) actually
-    # matches what Triage enforces. A future retune of one without the
-    # other would silently reintroduce the exact "model calibrates
-    # against a number Triage doesn't use" problem #41 was about.
+    # Per-category thresholds only matter if the model's own calibration (what it is told
+    # "severe" means per category) matches what Triage enforces. A retune of one without the
+    # other would leave the model calibrating against a number Triage doesn't use.
     for entry in REGISTRY:
         threshold_text = f">= {entry.block_threshold}"
         assert threshold_text in MAIN_DETECTOR_SOURCE, (

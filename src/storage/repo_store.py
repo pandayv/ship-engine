@@ -1,30 +1,22 @@
 """
 The repositories SHIP watches.
 
-This used to be SHIP_ALLOWED_REPOS, a comma-separated environment variable
-on both Lambdas. That was wrong in two ways that mattered. Practically:
-Lambda caps all environment variables at 4 KB combined, so the list topped
-out somewhere around sixty repositories and could not grow, and adding one
-meant a configuration update on two functions kept in sync by hand — a
-deploy, to onboard a customer. Conceptually: a product where connecting a
-repository is a backend chore is not a product.
+Repositories live in a table, not an environment variable. Lambda caps all environment
+variables at 4 KB combined, which would cap the list at roughly sixty repositories, and changing
+it would mean a configuration update on two functions. In a table, connecting a repository is a
+dashboard action.
 
-Repositories live in their own table rather than sharing ship-alerts
-because the access patterns have nothing in common. Alerts are keyed by
-alert_id and read as a queue; repositories are keyed by full name and read
-as a point lookup on the hot path of every webhook delivery. Partitioning
-on repo_full_name makes the allowlist check a single GetItem — constant
-time whether ten repositories are connected or ten thousand — instead of
-parsing a string that grows without bound.
+The table is separate from ship-alerts because the access patterns have nothing in common.
+Alerts are keyed by alert_id and read as a queue; repositories are keyed by full name and read
+as a point lookup on the hot path of every webhook delivery. Partitioning on repo_full_name
+makes the allowlist check a single GetItem, constant time whether ten repositories are
+connected or ten thousand.
 
-SECURITY NOTE, deliberately load-bearing. is_watched() is the control that
-stops an arbitrary webhook payload naming someone else's repository and
-spending this service's GitHub token and Bedrock quota against it (review
-finding #7). It therefore FAILS CLOSED: if DynamoDB cannot be read, the
-answer is whatever the environment-variable bootstrap says and nothing
-more — never "allow". A convenient fallback that admits everything when
-the datastore hiccups would quietly delete the control it is standing in
-for.
+SECURITY NOTE. is_watched() stops an arbitrary webhook payload from naming someone else's
+repository and spending this service's GitHub token and Bedrock quota against it. It therefore
+FAILS CLOSED: if DynamoDB cannot be read, the answer is whatever the environment-variable
+bootstrap says and nothing more, never "allow". A fallback that admits everything when the
+datastore hiccups would delete the control it stands in for.
 """
 
 import logging
@@ -62,13 +54,9 @@ class WatchedRepo:
     def stuck(self) -> bool:
         """True when an event was received but nothing has completed review
         since, for longer than a real (even cold-start) review should ever
-        take. Live-caught 2026-09-27: a disabled SQS consumer let the
-        webhook accept and 200 an event that then sat forever with nothing
-        downstream ever processing it, and nothing surfaced that except a
-        manual live test. This is that gap made visible on the dashboard
-        itself, for whoever is actually looking (us, or a judge testing a
-        real connected repo), rather than a background alarm nobody sees
-        and nobody can act on once the project is submitted.
+        take. A disabled SQS consumer is the case this catches: the webhook accepts and 200s an
+        event that then sits with nothing downstream processing it. The dashboard shows it, for
+        whoever is looking, rather than a background alarm nobody can act on.
 
         The 20-minute grace window is generous against the worst real
         latency observed (a cold AgentCore container took ~440s), not a

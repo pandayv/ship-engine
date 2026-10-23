@@ -36,25 +36,17 @@ the same text" — both look like drift here, and disambiguating them
 requires the same human judgment either way. False positives are the
 safe failure mode for a job whose only action is "tell a human to look."
 
-Verified against the real live sources, not just synthetic fixtures
-(2026-09-10) — found and fixed two genuinely generic false-positive
-causes this way: HTML numeric entities (genai.owasp.org's "&#8211;" for
-an en dash, silently mismatching the literal character in the stored
-text — html.unescape() fixed this for every entity, not just that one)
-and CSS/`<ol>`-rendered clause numbering (several sites never put "1."
-or "(a)" in the HTML at all, including markers buried mid-paragraph, not
-just at the start — normalize() now strips these at genuine clause
-boundaries only). Two sources still show known false positives after
-those fixes, deliberately left as documented limitations rather than
-chased further: artificialintelligenceact.eu injects interactive
-glossary-tooltip text inline (a term appears, then its definition, both
-flattened into the plain text by any tag-stripping approach), and one
-OWASP heading has a trailing colon in the stored corpus that the live
-page doesn't render — a transcription-formatting difference, not an
-extraction bug, and not worth a corpus edit that would need a fresh
-embedding regen for one punctuation mark. Both would need site-specific
-scraping logic to fully resolve, which would trade away the whole point
-of staying a generic, lightweight check for one or two sites' quirks.
+Normalization handles the generic causes of false drift: HTML numeric entities
+(genai.owasp.org's "&#8211;" for an en dash, which html.unescape() decodes along with every
+other entity) and CSS/`<ol>`-rendered clause numbering (several sites never put "1." or "(a)"
+in the HTML at all, including markers mid-paragraph; normalize() strips these at clause
+boundaries only). Two sources show known false positives that are accepted rather than chased:
+artificialintelligenceact.eu injects interactive glossary-tooltip text inline (a term appears,
+then its definition, both flattened into the plain text by any tag-stripping approach), and one
+OWASP heading has a trailing colon in the stored corpus that the live page doesn't render, a
+formatting difference not worth a corpus edit that would need a fresh embedding regen. Both
+would need site-specific scraping logic, which would trade away the point of a generic,
+lightweight check.
 """
 
 import html
@@ -91,13 +83,9 @@ def strip_html(page: str) -> str:
     HTML-parser dependency: good enough for a containment check, not
     meant to faithfully render the page.
 
-    Real bug caught while first running this against the live sources
-    (2026-09-10): a hand-rolled list of entity replacements missed
-    &#8211; (en dash), which genai.owasp.org's page uses in the exact
-    sentence this corpus quotes — a false "drift" positive with nothing
-    to do with the actual text changing. html.unescape() decodes every
-    named and numeric entity in one call; no reason to maintain a partial
-    list by hand when the standard library already does this completely.
+    html.unescape() decodes every named and numeric entity in one call. genai.owasp.org's page
+    uses &#8211; (an en dash) in a sentence this corpus quotes, so a partial entity list kept by
+    hand would report false drift.
     """
     text = re.sub(r"<script[^>]*>.*?</script>", " ", page, flags=re.S | re.I)
     text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.S | re.I)

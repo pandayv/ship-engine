@@ -1,41 +1,6 @@
 #!/usr/bin/env bash
-# deploy.sh - stands up SHIP's AWS resources from this repository.
-#
-#   ./deploy.sh env           # once: write .env.deploy, then fill in the values
-#   ./deploy.sh all           # everything below, in order
-#   ./deploy.sh --help        # the steps one by one
-#
-# Creates, in one account and region:
-#   tables     the ten DynamoDB tables, on-demand billing
-#   queues     ship-fragment-queue and its dead-letter queue ship-fragment-queue-dlq
-#   roles      four Lambda execution roles, each with its policy from infra/iam/
-#   packages   the four zips in build/, through scripts/build_packages.py
-#   functions  ship-relay (SnapStart, alias "live"), ship-webhook, ship-fragment-processor
-#              (with its SQS trigger) and ship-device-gateway, plus their Function URLs
-#   websocket  the ship-devices WebSocket API, its five routes, the "prod" stage
-#   secrets    the three SecureString parameters under /ship/ in Parameter Store
-#
-# Every step checks before it creates and updates what exists, so any step can be run again.
-# Not created here (see SETUP.md): Bedrock model access, the Detector in AgentCore Runtime,
-# the Alexa skill (ask deploy), the Login with Amazon profile, the GitHub token, webhook and
-# branch protection, and GitHub Pages.
-#
-# You need
-#   AWS CLI v2, signed in as an IAM user or role with the policy in infra/iam/deployer-policy.json
-#   (the README next to it explains what it allows); Python 3.12 or newer; the packages in
-#   requirements.txt for the tables step.
-#   If an administrator creates the roles, they run "./deploy.sh roles" and you run
-#   "./deploy.sh --skip-roles all".
-#
-# Settings, from the environment or from a gitignored .env.deploy file (see the env step):
-#   SHIP_ACCOUNT_ID   the only account this script touches. Set it to your own account id.
-#   SHIP_REGION       default us-west-2.
-#   SHIP_ENV_FILE     default .env.deploy in the repository root.
-#   Values for the Lambdas:
-#     GITHUB_TOKEN  GITHUB_WEBHOOK_SECRET  SHIP_DASHBOARD_TOKEN  SHIP_AGENTCORE_RUNTIME_ARN
-#     SHIP_ALLOWED_REPOS  SHIP_REVIEWER_NAME  SHIP_RELAY_ALLOWED_ORIGINS  SHIP_VAPID_CONTACT
-#   Values for Parameter Store:
-#     SHIP_ALEXA_CLIENT_ID  SHIP_ALEXA_CLIENT_SECRET  SHIP_VAPID_PRIVATE_KEY
+# deploy.sh - creates and updates SHIP's AWS resources.
+# How and when to use it: see SETUP.md.
 
 set -euo pipefail
 umask 077
@@ -961,29 +926,11 @@ usage() {
   cat <<'EOF'
 Usage: ./deploy.sh [options] STEP [STEP ...]
 
-Steps (each can be run again):
-  env             create a gitignored .env.deploy with random webhook and dashboard secrets
-  tables          the ten DynamoDB tables
-  queues          ship-fragment-queue and its dead-letter queue
-  roles           the four Lambda roles and their policies
-  packages        build the four zips with scripts/build_packages.py
-  functions       the four Lambdas, Function URLs, Relay alias and SQS trigger
-  websocket       the ship-devices WebSocket API, routes, stage and permission
-  secrets         the three SSM SecureString parameters
-  skill-policy    attach the reviewed policy to the Alexa skill's role (after ask deploy)
-  relay-rollback [VERSION]
-                  move Relay's alias "live" to VERSION; with no VERSION, list versions
-  all             tables queues roles packages functions websocket secrets, in that order
+Steps:    env tables queues roles packages functions websocket secrets skill-policy
+          relay-rollback [VERSION] all
+Options:  --dry-run  --only a,b  --skip-roles  --generate-vapid  -h
 
-Options:
-  --dry-run          print every command and run none. Makes no AWS call.
-  --only a,b         with functions: only relay, webhook, fragment or gateway
-  --skip-roles       leave out the roles step of "all"
-  --generate-vapid   with secrets: make a VAPID key pair and store the private half
-  -h, --help         this text
-
-Settings: SHIP_ACCOUNT_ID, SHIP_REGION (default us-west-2), SHIP_ENV_FILE (default .env.deploy).
-Permissions needed to run it: infra/iam/deployer-policy.json
+See SETUP.md.
 EOF
 }
 

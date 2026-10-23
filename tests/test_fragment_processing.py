@@ -1,12 +1,10 @@
 """
 Tests for process_fragment() (src/api/main.py) and the SQS-triggered
-fragment_lambda_handler.py entrypoint, part of the 2026-09-05 parallel
-per-fragment dispatch redesign.
+fragment_lambda_handler.py entrypoint.
 
 process_fragment() deliberately does NOT catch its own exceptions - the
 two callers need different policies. process_pr()'s sequential loop
-catches per-fragment (finding #8: one failure shouldn't abort the rest of
-the same run); fragment_lambda_handler.py wants the exception to
+catches per-fragment (one failure shouldn't abort the rest of the same run); fragment_lambda_handler.py wants the exception to
 propagate so SQS's own retry/DLQ mechanism handles it instead.
 """
 

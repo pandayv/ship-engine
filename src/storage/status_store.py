@@ -158,15 +158,10 @@ def refresh_summary(alerts=None) -> ReleaseSummary:
     fail the finding that triggered it, because the alert itself is already
     durably stored and the next refresh will correct this one.
 
-    Live-caught bug (2026-09-28): the try/except used to wrap only the
-    put_item call, not compute_summary()'s own read of the alerts table.
-    A real AccessDeniedException on that Scan (a role missing
-    dynamodb:Scan on ship-alerts) propagated out of this "best-effort"
-    function uncaught, crashing the whole fragment invocation AFTER the
-    expensive Detector call had already run and put_alert() had already
-    succeeded — turning one IAM gap into a wasted multi-minute retry loop
-    instead of the silent, self-healing degradation this was designed for.
-    The whole body is now inside the guard, not just the write.
+    The whole body is inside the guard, the read of the alerts table as well as the write. A
+    missing permission on that read (dynamodb:Scan on ship-alerts, say) therefore degrades
+    silently instead of crashing the fragment invocation after the expensive Detector call and
+    put_alert() have already succeeded.
 
     The write only lands if no newer summary is stored (see the module docstring).
     """

@@ -1,27 +1,19 @@
 """
-Lambda entrypoint for the SQS-triggered fragment processor (ship-fragment-
-processor). Deployed 2026-09-05 to replace the old single-Lambda,
-sequential-per-PR design — see src/api/main.py's module docstring for the
-full reasoning: a live end-to-end test proved that design could silently
-fail to finish reviewing a PR with 3+ escalated fragments, killed mid-run
-by AWS Lambda's hard, non-negotiable 900-second function timeout.
+Lambda entrypoint for the SQS-triggered fragment processor (ship-fragment-processor).
 
-Each SQS message is exactly one already-escalated, already-isolated code
-fragment (queued by src/api/main.py's _dispatch_fragments()). This
-function's only job is to detect, route, and (if frozen) store it via
-process_fragment() — the same function process_pr()'s local-fallback loop
-uses, so there is exactly one implementation of "what happens to one
-fragment," not two.
+Each SQS message is exactly one already-escalated, already-isolated code fragment, queued by
+src/api/main.py's _dispatch_fragments(). Reviewing fragments as separate jobs keeps a PR with
+many findings clear of Lambda's 900-second limit on a single invocation (see that module's
+docstring). This function's only job is to detect, route, and (if frozen) store the fragment
+via process_fragment(), the same function process_pr()'s local-fallback loop uses, so there is
+one implementation of "what happens to one fragment".
 
-Deployed with BatchSize=1 on the SQS-Lambda event source mapping, so this
-handler always processes exactly one message per invocation — no partial-
-batch-failure handling needed. If process_fragment() raises (a genuine
-failure, not something already handled internally), this handler lets the
-exception propagate: Lambda reports the invocation as failed, SQS makes
-the message visible again for retry, and after the queue's configured
-maxReceiveCount, the message moves to the dead-letter queue instead of
-being retried forever or silently dropped — the DLQ + backlog visibility
-the original architecture review (finding #40) flagged as missing.
+Deployed with BatchSize=1 on the SQS event source mapping, so each invocation handles exactly
+one message and no partial-batch-failure handling is needed. If process_fragment() raises (a
+real failure, not something already handled internally), this handler lets the exception
+propagate: Lambda reports the invocation as failed, SQS makes the message visible again for
+retry, and after the queue's maxReceiveCount the message moves to the dead-letter queue
+instead of being retried forever or silently dropped.
 
 Deployed with SHIP_DETECTOR_MODE=agentcore, same as ship-webhook.
 """

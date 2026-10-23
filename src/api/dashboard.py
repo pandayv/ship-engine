@@ -1,36 +1,25 @@
 """
-Gate — the human-in-the-loop review console. A FastAPI router (mounted
-into the main app, not a separate service) rather than a standalone
-Streamlit process — keeps the stack to one deployable thing.
+Gate, the human-in-the-loop review console. A FastAPI router mounted into the main app, not a
+separate service, which keeps the stack to one deployable thing.
 
-The route handlers themselves are fully testable without DynamoDB by
-monkeypatching src.storage.alert_store's list_active_alerts/resolve_alert
-(see tests/test_dashboard.py) — this file's own logic (rendering, routing,
-which action calls which store function) is verified even though a live
-DynamoDB round-trip isn't.
+The route handlers are testable without DynamoDB by monkeypatching src.storage.alert_store's
+list_active_alerts/resolve_alert (see tests/test_dashboard.py). That verifies this file's own
+logic: rendering, routing, and which action calls which store function.
 
-Auth (added 2026-09-05, review finding #2): all three routes previously had
-zero authentication — anyone who could reach the URL could clear a frozen
-high-risk alert with a bare curl, defeating the entire "freeze pending
-human review" point with no credential at all. Gated behind a shared-
-secret token (SHIP_DASHBOARD_TOKEN).
+Auth: every route requires a shared-secret token (SHIP_DASHBOARD_TOKEN), because anyone who
+could reach the URL could otherwise clear a frozen high-risk alert and defeat the point of
+holding it for human review. The token comparison uses hmac.compare_digest, as the webhook's
+signature check does, so it has no timing side-channel.
 
-Session cookie (added 2026-09-10): a bare `?token=` on every link reads as
-a raw secret pasted into a URL, not a deployed web app — it leaks into
-browser history, referrer headers, and screenshots. A visitor now hits
-`/dashboard/login` once (directly, or automatically via a shared link
-carrying `?token=`), and an httponly session cookie carries them through
-the rest of the console from there. The query parameter still works
-exactly as before — this is additive, not a replacement — so an existing
-bookmarked link or a script hitting the API directly is unaffected.
+Session cookie: a visitor hits `/dashboard/login` once (directly, or through a shared link
+carrying `?token=`), and an httponly session cookie carries them through the rest of the
+console. A bare `?token=` on every link would sit in browser history, referrer headers and
+screenshots. The query parameter still works, so a bookmarked link or a script calling the API
+directly is unaffected.
 
-Real bug an independent review caught (2026-09-05): the local-dev opt-out
-used to read the exact same SHIP_ALLOW_UNSIGNED env var the webhook uses
-to bypass its own, unrelated HMAC signature check. Setting that flag to
-test webhook delivery locally silently disabled dashboard auth too, with
-no indication that happened as a side effect of an unrelated setting.
-Given its own dedicated flag (SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD) so the
-two security controls can only ever be bypassed independently, on purpose.
+The local-development opt-out has its own flag (SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD), separate
+from the webhook's SHIP_ALLOW_UNSIGNED, so the two security controls can only be bypassed
+independently, on purpose.
 """
 
 import hmac
@@ -53,7 +42,7 @@ templates.env.globals["theme_for"] = alert_store.theme_for
 DASHBOARD_TOKEN = os.environ.get("SHIP_DASHBOARD_TOKEN", "")
 ALLOW_UNAUTHENTICATED = os.environ.get("SHIP_ALLOW_UNAUTHENTICATED_DASHBOARD", "").lower() == "true"
 SESSION_COOKIE = "ship_session"
-SESSION_MAX_AGE = 60 * 60 * 24 * 7  # a week — long enough that a judge doesn't re-authenticate mid-review
+SESSION_MAX_AGE = 60 * 60 * 24 * 7  # a week, long enough that a reviewer doesn't re-authenticate mid-review
 
 
 def _reviewer_name() -> str:
@@ -79,11 +68,7 @@ def _authenticated(request: Request, token: str | None) -> bool:
     cookie_token = request.cookies.get(SESSION_COOKIE)
     if cookie_token and hmac.compare_digest(cookie_token, DASHBOARD_TOKEN):
         return True
-    # Independent review (2026-09-05): this was a plain `!=` comparison,
-    # unlike the webhook's own HMAC check in the same fix pass, which
-    # correctly used hmac.compare_digest. A data-dependent short-circuiting
-    # string comparison risks a timing side-channel for a shared-secret
-    # token check; compare_digest is the standard fix.
+    # compare_digest avoids the timing side-channel of a short-circuiting string comparison.
     return bool(token) and hmac.compare_digest(token, DASHBOARD_TOKEN)
 
 
@@ -151,8 +136,8 @@ def view_dashboard(request: Request, token: str | None = Query(default=None)):
 
 
 def _resolve(alert_id: str, request: Request, token: str | None, decision: str, reason: str) -> RedirectResponse:
-    # finding #37: allow() and block() are a pair differing only in the decision,
-    # so the write-back to GitHub below is written once, not twice.
+    # allow() and block() differ only in the decision, so the write-back to GitHub below is
+    # written once.
     if not _authenticated(request, token):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
@@ -220,9 +205,8 @@ def view_history(request: Request, token: str | None = Query(default=None)):
 
 @router.get("/dashboard/repos", response_class=HTMLResponse)
 def view_repos(request: Request, token: str | None = Query(default=None)):
-    """Which repositories SHIP is watching — see src/storage/repo_store.py
-    for why this replaced a static SHIP_ALLOWED_REPOS env var: connecting a
-    repo used to be a redeploy, capped by Lambda's 4KB env var limit."""
+    """Which repositories SHIP is watching. Connecting one is a dashboard action; see
+    src/storage/repo_store.py for why the list lives in a table."""
     _check_configured()
     if not _authenticated(request, token):
         return RedirectResponse(url="/dashboard/login?next=/dashboard/repos", status_code=303)

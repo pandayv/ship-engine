@@ -1,40 +1,20 @@
 """
-Shared Bedrock session + retry configuration — deployed AgentCore copy.
+Shared Bedrock session + retry configuration, deployed AgentCore copy.
 
-Mirrors src/aws/bedrock_session.py in the main ship-engine repo (see that
-file's docstring for the full reasoning). Duplicated here, not imported,
-for the same reason vector_store.py/chunker.py are duplicated rather than
-shared: this package runs inside AgentCore Runtime as its own dependency
-tree with its own import root (`from rag...` only resolves inside this
-package), so a shared src/ import isn't reachable from here.
+Mirrors src/aws/bedrock_session.py in the main ship-engine repo (see that file's docstring for
+the reasoning). Duplicated here, not imported, because this package runs inside AgentCore
+Runtime as its own dependency tree with its own import root (`from rag...` only resolves inside
+this package), so a shared src/ import is not reachable from here.
 
-This is actually the more important copy of the two: when the SHIP
-webhook Lambda runs with SHIP_DETECTOR_MODE=agentcore (the deployed
-configuration), the Lambda itself makes no direct Bedrock calls at all —
-it only calls invoke_agent_runtime, a control-plane call with a different,
-much less restrictive quota than the 10-requests/minute model quota. The
-real Bedrock traffic (Titan embeddings + the model's own completions) all
-happens inside THIS container.
-
-2026-09-05 — this file used to hand-roll a process-local
-SlidingWindowRateLimiter (see git history), flagged in its own docstring
-as an open, unsolved problem: it couldn't coordinate across multiple
-concurrent AgentCore container instances, so aggregate traffic could
-still exceed the real account-wide quota under real concurrent load.
-That's now expected and deliberate — SHIP dispatches each PR's flagged
-issues as independent, concurrently-processed jobs (see
-src/api/main.py's module docstring in the main repo for the full
-architecture change), so multiple container instances running at once is
-the normal case, not an edge case. Rather than build custom cross-
-instance coordination, the fix is AWS's own standard pattern for this
-exact scenario: let calls fire immediately, and if AWS responds with a
-throttle, back off and retry automatically, via botocore's `adaptive`
-retry mode (BEDROCK_RETRY_CONFIG below). Combined with a cap on how many
-fragments the SQS-Lambda event source mapping lets run concurrently (an
-AWS setting on the fragment-processor Lambda, not code here), this keeps
-real throughput near the account's actual limit without a custom
-coordinator that — as this file's own prior docstring already
-acknowledged — couldn't actually coordinate across instances anyway.
+This is the more important copy of the two. When the webhook Lambda runs with
+SHIP_DETECTOR_MODE=agentcore (the deployed configuration), it makes no direct Bedrock calls: it
+only calls invoke_agent_runtime, a control-plane call with a much less restrictive quota than
+the model quota. The real Bedrock traffic (Titan embeddings and the model's own completions)
+happens inside THIS container, and several container instances run at once because each PR's
+flagged fragments are independent jobs. Calls fire immediately and back off on a throttle via
+botocore's `adaptive` retry mode (BEDROCK_RETRY_CONFIG below). The SQS event source mapping
+caps how many fragments run concurrently (an AWS setting on the fragment-processor Lambda, not
+code here).
 """
 
 import threading

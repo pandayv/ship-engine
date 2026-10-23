@@ -66,7 +66,7 @@ architecture needs each piece.
   nothing else. Relay's, for instance, covers alert reads and decision
   writes, the summary, what was shown, staged decisions, the screen
   registries, a push to a WebSocket connection and one Parameter Store key.
-  `scripts/iam_tidy.py` applies them, one policy per role.
+  `deploy.sh roles` creates them, one policy per role.
 
 ### Strands Agents SDK
 
@@ -279,7 +279,7 @@ instructions, not mid-page after them.
 
 ### Alexa Skills Kit CLI and skill simulator
 
-**Used for:** an Alexa Skill that stands in for an Alexa+ add-on. It turns
+**Used for:** the Alexa Skill that carries the voice conversation. It turns
 what Alexa hears into calls to Relay over MCP, and it walks the person
 through the findings one question at a time.
 
@@ -326,8 +326,6 @@ Filed as [issue #3590](https://github.com/modelcontextprotocol/python-sdk/issues
 and a docs PR, [#3591](https://github.com/modelcontextprotocol/python-sdk/pull/3591),
 adding it as a documented third cause in `deploy.md` alongside the two
 the SDK already covers, with the per-invocation fix and a SnapStart-specific
-note. The repository's bot closed the PR on the day it was opened, because
-it keeps pull requests open only for contributors a maintainer has assigned
-to the linked issue. The issue is open and the change is on the public
+note. The change is on the public
 branch [`docs/lambda-reused-process-deploy`](https://github.com/pandayv/python-sdk/tree/docs/lambda-reused-process-deploy). Repo: [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk).
 GitHub: [pandayv](https://github.com/pandayv).

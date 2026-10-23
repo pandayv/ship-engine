@@ -1,12 +1,9 @@
 """
-DynamoDB persistence for alerts Triage has frozen — this is what Gate
-reads from. Live-tested against the real table (2026-09-04).
+DynamoDB persistence for alerts Triage has frozen. This is what Gate reads from.
 
-Table schema (single table, on-demand billing to avoid provisioning
-decisions during a hackathon sprint):
+Table schema (single table, on-demand billing, so there is nothing to provision):
   - Partition key: alert_id (string) — see put_alert()'s docstring for how
-    this is derived (deterministic, not a random UUID, as of the 2026-09-05
-    architecture-review fix pass)
+    this is derived (deterministic, not a random UUID)
   - Attributes: repo, pr_number, file, taxonomy_id, risk_score,
     plain_english_summary, citation, remediation_patch, status
     ("frozen" | "resolved"), severity ("blocking" | "review"), resolution
@@ -117,18 +114,14 @@ class Alert:
     created_at: str
     resolution: str | None = None  # RESOLUTION_ALLOWED | RESOLUTION_BLOCKED
     resolved_at: str | None = None
-    # The dispositions history needs these two to mean anything — before
-    # this, the reason a human gave lived ONLY in the PR comment
-    # (comment_for_decision), and the audit record dashboard.py itself
-    # calls load-bearing ("the reason IS the audit record") existed nowhere
-    # this service could read back. Empty for rows resolved before this
-    # field existed.
+    # The reason a person gave and who gave it, kept so Gate's dispositions history is the audit
+    # record (the reason also goes in the PR comment). Empty for rows resolved before these
+    # fields existed.
     resolution_reason: str = ""
     resolved_by: str = ""
-    # "blocking" defaults here rather than being required because every row
-    # written before this field existed (2026-09-07) was a FREEZE, and
-    # because a call site that forgets to pass it should fail toward
-    # over-blocking, not toward silently letting a blocking finding through.
+    # "blocking" is the default because every row written before this field existed was a
+    # freeze, and because a call site that forgets to pass it should fail toward over-blocking,
+    # not toward silently letting a blocking finding through.
     severity: str = SEVERITY_BLOCKING
     # The commit this finding was judged against. Stored because the
     # dashboard needs it to update the PR's commit status when a human
@@ -157,16 +150,9 @@ class Alert:
     newly_written: bool = False
 
 
-# finding #16/#50: this used to build a fresh boto3 DynamoDB resource +
-# Table wrapper on every single call — real, repeated construction overhead
-# inside process_pr()'s hot per-fragment loop, where a multi-fragment PR
-# can call put_alert() several times in one invocation. lru_cache(maxsize=1)
-# gives the same "build once, reuse" behavior as a hand-rolled singleton
-# (finding #35's motivation too) with real failure-tolerance for free:
-# lru_cache does NOT cache an exception, so a transient failure on the
-# first call doesn't poison every later call in the same process — the
-# next call just retries construction, the same guarantee finding #10's
-# fix for _get_store() had to hand-write.
+# One boto3 Table per process, so a PR with several fragments does not rebuild it on every
+# put_alert(). lru_cache does not cache an exception, so a transient failure on the first call
+# is retried on the next one instead of poisoning every later call in the same process.
 @lru_cache(maxsize=1)
 def _table():
     import boto3  # lazy import, same reasoning as vector_store.py
@@ -197,44 +183,24 @@ def create_table_if_not_exists() -> None:
 
 def _deterministic_alert_id(repo: str, pr_number: int, file: str, taxonomy_id: str, fragment_text: str) -> str:
     """
-    Review finding #6: alert_id used to be a fresh uuid4() on every call, so
-    a GitHub webhook redelivery or a Lambda async-invoke retry (finding #52)
-    re-processing the same PR wrote a brand-new alert for the identical
-    violation every time — the dashboard accumulated duplicate frozen rows
-    that had to be manually reconciled, and resolving one had no effect on
-    the others. Deriving the id from what actually identifies "this
-    violation" means a retry's put_item naturally overwrites the same row
-    instead of creating a new one — true idempotency, not just
-    retry-avoidance.
+    The alert_id is derived from what identifies "this violation", so a GitHub webhook
+    redelivery or a Lambda retry re-processing the same PR overwrites the same row instead of
+    creating a duplicate. That makes the write idempotent, not merely retry-avoiding.
 
-    Bug an independent review caught (2026-09-05) in the original fix:
-    (repo, pr_number, file, taxonomy_id) alone is too coarse. Two entirely
-    different violations of the SAME taxonomy_id in the SAME file (e.g. an
-    SSN leak in one function and a separate account-number leak in another
-    function, both PIIE-001) hashed to the IDENTICAL alert_id — the second
-    put_alert() call would silently overwrite the first violation's row
-    (the idempotent-write ConditionExpression allows overwriting a still-
-    "frozen" row), and once resolved, that same collision would silently
-    block a genuinely new future violation of the same taxonomy_id/file
-    from ever being persisted at all, with put_alert() returning as if it
-    had succeeded. Fixed by including the isolated fragment's own text in
-    the key: a real retry of the SAME violation re-detects the SAME
-    fragment text (still collides/overwrites correctly, preserving finding
-    #6's idempotency guarantee), while two DIFFERENT violations produce
-    different fragment text and therefore different ids.
+    (repo, pr_number, file, taxonomy_id) alone is too coarse: two different violations of the
+    same taxonomy_id in the same file (an SSN leak in one function and an account-number leak
+    in another, both PIIE-001) would collide, and the second would overwrite the first. So the
+    isolated fragment's own text is part of the key. A retry of the same violation re-detects
+    the same fragment text and overwrites correctly, while two different violations produce
+    different ids.
     """
     key = f"{repo}#{pr_number}#{file}#{taxonomy_id}#{fragment_text}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-# finding #27: float<->Decimal conversion used to be hand-written per
-# field in two separate functions (put_alert() encoding risk_score alone;
-# list_active_alerts() decoding risk_score and pr_number separately) — a
-# new numeric field added to Alert needed matching manual lines in both
-# places, silently breaking (native float rejected by DynamoDB on write,
-# or a stray Decimal leaking into JSON serialization on read) if either
-# side was forgotten. Generalized once here, driven off Alert's own field
-# type annotations, so it can't drift out of sync with the dataclass.
+# DynamoDB rejects native floats on write, and returns every number as Decimal on read. The
+# conversion is driven off Alert's own field type annotations, so a new numeric field cannot
+# drift out of sync with the dataclass.
 _FLOAT_FIELDS = {f.name for f in fields(Alert) if f.type is float}
 _INT_FIELDS = {f.name for f in fields(Alert) if f.type is int}
 
@@ -353,12 +319,9 @@ def _scan_all(**scan_kwargs) -> list[dict]:
     # moment ago must be in it. (Costs twice the read units of an eventually
     # consistent scan, on a table of tens of rows.)
     scan_kwargs.setdefault("ConsistentRead", True)
-    # finding #14: DynamoDB Scan reads at most 1MB BEFORE applying
-    # FilterExpression, then returns LastEvaluatedKey if more of the table
-    # remains to be scanned - a single, unpaginated .scan() silently
-    # truncates once the table grows past that, and a reviewer sees an
-    # empty-looking queue while real "frozen" alerts sit unseen past the
-    # 1MB boundary. Loop until LastEvaluatedKey is actually absent.
+    # DynamoDB Scan reads at most 1MB before applying FilterExpression and returns
+    # LastEvaluatedKey if more remains, so a single unpaginated scan silently truncates once the
+    # table grows. Loop until LastEvaluatedKey is absent.
     table = _table()
     items = []
     while True:
@@ -379,16 +342,13 @@ def _row_to_alert(item: dict) -> Alert:
     # DynamoDB's Number type has no int/float distinction — everything
     # numeric comes back as Decimal; _decode_item() converts back to what
     # the rest of the app (and JSON serialization) actually expects,
-    # generically off Alert's own field types (finding #27).
+    # generically off Alert's own field types.
     item = _decode_item(item)
-    # Tolerate rows written before a field existed (caught live,
-    # 2026-09-05: real rows from earlier that session predate the "file"
-    # field added for finding #60 and crashed with a missing-argument
-    # TypeError).
+    # Tolerate rows written before a field existed, which would otherwise raise a
+    # missing-argument TypeError.
     item.setdefault("file", "<unknown>")
-    # Rows predating severity were written by the old binary
-    # freeze-or-nothing path, so "blocking" is their historically correct
-    # value, not just a safe filler.
+    # Rows predating severity were all freezes, so "blocking" is their correct value, not just a
+    # safe filler.
     item.setdefault("severity", SEVERITY_BLOCKING)
     # Rows predating head_sha have no commit to post a status against;
     # the write-back path skips an empty sha rather than guessing.
@@ -484,12 +444,10 @@ def get_alert(alert_id: str) -> Alert | None:
 
 class AlertNotFoundOrAlreadyResolved(Exception):
     """Raised when resolve_alert() targets an alert_id that doesn't exist,
-    or that's already been resolved. Review findings #3/#4: DynamoDB's
-    update_item upserts by default with no existence check, so a bogus or
-    stale alert_id used to silently create a malformed ghost row instead of
-    404ing, and an already-resolved alert could be silently re-resolved
-    (overwriting a prior block with an allow, or vice versa) with no
-    conflict detection and no record the first decision ever happened."""
+    or that's already been resolved. DynamoDB's update_item upserts by default, so
+    resolve_alert() checks first: a bogus or stale alert_id is refused instead of creating a
+    malformed row, and an already-resolved alert cannot be re-resolved (overwriting a prior
+    block with an allow, or the reverse) with no record that the first decision happened."""
 
 
 def resolve_alert(alert_id: str, decision: str, reason: str = "", resolved_by: str = "") -> None:
@@ -609,7 +567,7 @@ def release_step(alert_id: str, step: str) -> None:
 
 
 if __name__ == "__main__":
-    # will only run once dynamodb:* permissions are added to ship-agent's policy
+    # Smoke test: needs AWS credentials with DynamoDB access.
     create_table_if_not_exists()
     alert = put_alert(
         repo="pandayv/micro-finance", pr_number=1, file="loans/ai_underwriting.py",

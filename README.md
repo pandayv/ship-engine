@@ -510,9 +510,6 @@ scripts/
   preflight.py             # Checks everything a demo needs and says what to fix
   demo_reset.py            # Clears the findings and opens fresh demo pull requests
   build_packages.py        # Builds the four Lambda zips from the repository
-  iam_tidy.py              # One reviewed policy per role, named <function>-access
-  migrate_decision_names.py  # One-off: older stored decisions to allowed/blocked
-  backfill_fragment_keys.py  # One-off: gives older findings their code fingerprint
   healing_loop.py          # Periodic corpus-grounding check
   pattern_miner.py         # Extracts patterns from allowed findings
   benchmark_models.py      # The benchmark behind the Nova Lite choice

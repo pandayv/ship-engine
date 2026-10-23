@@ -39,9 +39,8 @@ def chunk_file(path: Path) -> list[Chunk]:
         return []
 
     title = paragraphs[0].splitlines()[0].strip()
-    # finding #25: filter out the non-statute paragraphs first, then
-    # enumerate() the survivors — no hand-incremented counter to keep in
-    # sync with which paragraphs were skipped.
+    # Filter out the non-statute paragraphs first, then enumerate() the survivors, so there is no
+    # hand-incremented counter to keep in sync with which paragraphs were skipped.
     body_paragraphs = [
         para for para in paragraphs[1:]
         # skip the "Source:" / "Retrieved verbatim from..." provenance line

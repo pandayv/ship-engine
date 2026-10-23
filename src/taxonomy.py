@@ -1,56 +1,35 @@
 """
-Single source of truth for which taxonomy IDs SHIP actually detects, which
-regulation source file(s) ground each one, and which Screener trigger
-bucket(s) can indicate each one.
+Single source of truth for which taxonomy IDs SHIP detects, which regulation source file(s)
+ground each one, and which Screener trigger bucket(s) can indicate each one.
 
-Built 2026-09-05 specifically to prevent a repeat of architecture-review
-finding #29/#38: the deployed AgentCore Detector silently drifted out
-of sync with the in-process one (stale prompt, missing corpus files) for a
-full day with no error anywhere, because nothing enforced that three things
-stay consistent: SCREENER_TRIGGERS' buckets, Detector's taxonomy_id
-values, and what's actually grounded in rag_corpus/. A human review caught
-it a day later; that's not good enough for something that silently
-disables detectors with zero error.
+tests/test_taxonomy_consistency.py checks the places that must agree: SCREENER_TRIGGERS'
+buckets, Detector's taxonomy_id values, and what is grounded in rag_corpus/. A mismatch fails
+the test run instead of silently disabling a detector.
 
-See tests/test_taxonomy_consistency.py — that test is what SHOULD have
-caught #29 automatically the moment it happened, checked on every test run
-from now on (including CI, if/when this project gets one), instead of
-depending on someone remembering to run a manual multi-agent review.
-
-Deliberately NOT trying to make this the actual runtime source of
-SCREENER_TRIGGERS or the SYSTEM_PROMPT text — those still live where they
-always did, since Screener's triggers and Detector's prompt prose
-serve different purposes (fast regex matching vs. natural-language
-instruction to an LLM) and forcing them through one generated
-representation would make both harder to read for the sake of a DRY-ness
-that isn't actually needed. This registry's job is narrower and more
-valuable: give an automated test something concrete to check both against.
+This registry is not the runtime source of SCREENER_TRIGGERS or the SYSTEM_PROMPT text. Those
+serve different purposes (fast regex matching vs. natural-language instruction to an LLM), and
+forcing them through one generated representation would make both harder to read. The registry
+gives an automated test something concrete to check both against.
 """
 
 from dataclasses import dataclass
 
-# Two thresholds per category, defining three routing bands. Added
-# 2026-09-07: a single cutoff forced every confirmed finding into a binary
-# "block the build or say nothing at all," which is the wrong shape for the
-# problem. A finding the model is only moderately sure about doesn't
-# justify stopping a team's merge, but it also shouldn't vanish into a log
-# nobody reads. The bands Triage now routes on:
+# Two thresholds per category, defining three routing bands. A single cutoff would force every
+# confirmed finding into a binary "block the build or say nothing at all", which is the wrong
+# shape for the problem. A finding the model is only moderately sure about doesn't justify
+# stopping a team's merge, but it shouldn't vanish into a log nobody reads either. The bands
+# Triage routes on:
 #
 #   score <  review_threshold  -> logged, build continues, nobody interrupted
 #   review <= score < block    -> REVIEW: an alert a human is asked to look
 #                                 at, build NOT blocked
 #   score >= block_threshold   -> FREEZE: alert created AND build blocked
 #
-# Honest note on what risk_score actually measures: it is a SEVERITY score
-# ("how bad is this if it's real"), and the review band is using it as a
-# proxy for CONFIDENCE ("how sure are we it's real"). Those are genuinely
-# different axes, and the more correct design gives Detector a
-# separate confidence field. That's a schema + prompt change requiring
-# every detector's true/false-positive cases to be re-verified against the
-# new field, so it is deliberately NOT being done under deadline — the
-# proxy is a reasoned approximation, not a claim that the two axes are the
-# same thing. Recorded here so the limitation is visible in the code rather
-# than only in someone's memory.
+# What risk_score measures: it is a SEVERITY score ("how bad is this if it's real"), and the
+# review band uses it as a proxy for CONFIDENCE ("how sure are we it's real"). A separate
+# confidence field on Detector would separate the two axes, at the cost of a schema and prompt
+# change that re-verifies every detector's cases. Until then the proxy is an approximation, not
+# a claim that the two axes are the same thing.
 #
 # Reasoning behind each block value below (DEFAULT_BLOCK_THRESHOLD unless noted):
 # categories where a confirmed violation is structurally irreversible or
@@ -72,8 +51,7 @@ from dataclasses import dataclass
 #     loop" premise is broken, not a matter of degree.
 #   - ALBP-001 (bias/protected characteristic affecting scoring) — kept at
 #     default. Detector's prompt already holds this ID to a strict
-#     evidence bar before matched=true is even set (see finding #64's
-#     note); stacking a second, harsher decision-stage bar on top of an
+#     evidence bar before matched=true is even set; stacking a second, harsher decision-stage bar on top of an
 #     already-strict detection-stage bar isn't principled, just stricter.
 #   - TLGP-001 (ungated destructive AI-exposed capability) — LOWERED to
 #     7.0. Industry-standard (not statutory), but once genuinely confirmed
@@ -142,10 +120,8 @@ REVIEW_THRESHOLDS: dict[str, float] = {e.taxonomy_id: e.review_threshold for e i
 
 ACTIVE_TAXONOMY_IDS: tuple[str, ...] = tuple(e.taxonomy_id for e in REGISTRY)
 
-# Roadmap items — deliberately NOT in REGISTRY, so the consistency test
-# doesn't demand grounding/prompt coverage for something not built yet.
-# Kept here so "why isn't X in the registry" has one documented answer
-# instead of needing to be re-derived from the roadmap/decision log.
+# Not in REGISTRY, so the consistency test doesn't demand grounding or prompt coverage for
+# something not built. Kept here so "why isn't X in the registry" has one documented answer.
 RULED_OUT = {
     "DPSL-001": "redundant with PIIE-001",
     "DPSL-002": "not detectable from a single code diff — needs infra/deployment context",

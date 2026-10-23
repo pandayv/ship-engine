@@ -2,13 +2,12 @@
 A finding is posted to the pull request once, and the person is told once, even when a step
 fails or the invocation dies part way.
 
-Found by the 2026-10-08 smoke test: a second commit pushed to a PR re-detected a finding a
-person had already accepted, and SHIP commented "merge blocked" again on a PR whose check was
-green. The first fix tied "comment" to the creation of the row. That left a hole: a failed
-comment POST, or a crash after the row was written, meant an SQS retry saw "not new" and the
-comment and the Echo notification were never sent. Now each delivery step is recorded on the
-alert only after it succeeds, under a short lease, and every pass finishes whichever step is
-missing without repeating the one already done.
+A second commit pushed to a PR can re-detect a finding a person had already accepted. SHIP must
+not comment "merge blocked" again on a PR whose check is green. Tying "comment" to the creation
+of the row would leave a hole: a failed comment POST, or a crash after the row was written,
+means an SQS retry sees "not new" and the comment and the Echo notification are never sent. So
+each delivery step is recorded on the alert only after it succeeds, under a short lease, and
+every pass finishes whichever step is missing without repeating the one already done.
 """
 
 import pytest

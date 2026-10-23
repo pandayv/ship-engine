@@ -47,7 +47,7 @@ def test_renders_alert_details(monkeypatch):
     assert "PIIE-001" in response.text
     assert "GDPR Art. 32(1)(a)" in response.text
     assert "redact PII" in response.text
-    assert "loans/ai_underwriting.py" in response.text  # finding #60: file traceability
+    assert "loans/ai_underwriting.py" in response.text  # file traceability
 
 
 def _wire_resolvable(monkeypatch, calls, alert=None):
@@ -120,9 +120,7 @@ def test_decision_without_a_reason_is_refused(monkeypatch):
 
 
 def test_deciding_a_finding_that_was_already_decided_returns_409(monkeypatch):
-    # review finding #3/#4: resolving a bogus or already-resolved alert_id
-    # used to either silently create a ghost row or silently overwrite a
-    # prior decision — now it's a real 409, not a silent success.
+    # Resolving a bogus or already-resolved alert_id is a real 409, not a silent success.
     calls = []
     _wire_resolvable(monkeypatch, calls)
 
@@ -143,7 +141,7 @@ def test_unknown_alert_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
-# --- Session cookie / login page (2026-09-10) ---
+# --- Session cookie / login page ---
 
 
 def test_login_page_renders_without_auth():
@@ -211,7 +209,7 @@ def test_logout_tells_the_browser_to_forget_the_cookie(monkeypatch):
     assert "Max-Age=0" in set_cookie
 
 
-# --- Auth-specific tests (review finding #2: no auth at all previously) ---
+# --- Auth-specific tests ---
 
 
 def test_missing_token_rejected(monkeypatch):
@@ -257,15 +255,11 @@ def test_no_token_configured_allows_through_with_explicit_opt_out(monkeypatch):
 
 
 def test_dashboard_auth_env_var_is_independent_of_the_webhook_signature_flag():
-    # Real bug an independent review caught (2026-09-05): the dashboard's
-    # opt-out used to read the exact same SHIP_ALLOW_UNSIGNED env var the
-    # webhook uses to bypass its own, unrelated HMAC check — setting one
-    # for local webhook testing silently disabled dashboard auth too, with
-    # no indication that happened as a side effect. Asserted directly
-    # against the source (not just current in-memory values, which could
-    # coincidentally differ even if both read the same env var) that the
-    # dashboard reads its own dedicated env var and does not reference the
-    # webhook's at all.
+    # The dashboard's opt-out must not read the webhook's SHIP_ALLOW_UNSIGNED env var. Setting
+    # one for local webhook testing would otherwise disable dashboard auth too, as an invisible
+    # side effect. Asserted directly against the source (not just in-memory values, which could
+    # coincidentally differ even if both read the same env var) that the dashboard reads its own
+    # dedicated env var and does not reference the webhook's at all.
     import inspect
 
     dashboard_source = inspect.getsource(dashboard_module)
@@ -388,13 +382,10 @@ def test_connect_repo_requires_token(monkeypatch):
 
 
 def test_wrong_token_uses_constant_time_comparison(monkeypatch):
-    # Independent review (2026-09-05): the token check used a plain `!=`
-    # rather than hmac.compare_digest, unlike the sibling webhook HMAC
-    # check in the same fix pass. This test can't observe timing directly,
-    # but confirms the code path actually calls compare_digest rather than
-    # `!=` by checking a wrong-but-same-length token is still rejected
-    # (compare_digest and `!=` agree on correctness; the real fix is in
-    # the source, asserted via inspection below).
+    # The token check must use hmac.compare_digest, not `!=`, like the webhook HMAC check. This
+    # test can't observe timing directly, but confirms the code path calls compare_digest rather
+    # than `!=` by checking a wrong-but-same-length token is still rejected (compare_digest and
+    # `!=` agree on correctness; the implementation is asserted via inspection below).
     import inspect
 
     source = inspect.getsource(dashboard_module._authenticated)

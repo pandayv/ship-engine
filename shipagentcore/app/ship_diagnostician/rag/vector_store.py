@@ -20,23 +20,15 @@ TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
 
 @lru_cache(maxsize=1)
 def _bedrock_runtime_client():
-    # Independent review (2026-09-05, mirrors the main ship-engine copy's
-    # same fix): embed_texts() used to build a fresh boto3 client from the
-    # already-cached session on every single call, including every
-    # retrieve_regulation_text tool call during a fragment's detection —
-    # the exact hot-loop client-construction overhead findings #16/#50
-    # fixed elsewhere but missed here.
+    # One bedrock-runtime client per process, built from the cached session, instead of a new
+    # client on every embed_texts() call.
     return bedrock_session().client("bedrock-runtime", config=BEDROCK_RETRY_CONFIG)
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    # finding #45 (updated 2026-09-05): built with adaptive retry config so
-    # a cold-start VectorStore.build() burst (one call per corpus chunk),
-    # or concurrent traffic from other fragments processing at the same
-    # time in other container instances, backs off and retries
-    # automatically if the real account-wide quota is hit — see
-    # aws/bedrock_session.py's docstring for why this replaced the old
-    # process-local pre-emptive limiter.
+    # Built with adaptive retry config so a cold-start VectorStore.build() burst (one call per
+    # corpus chunk), or concurrent traffic from fragments in other container instances, backs
+    # off and retries automatically if the account quota is hit. See aws/bedrock_session.py.
     client = _bedrock_runtime_client()
     vectors = []
     for text in texts:
@@ -67,9 +59,8 @@ class VectorStore:
         """
         cache_path: precomputed embeddings, used only if they provably
         match these exact chunks and this model. This is what keeps a cold
-        start from re-embedding the whole static corpus through Bedrock —
-        the measured cause of a fragment blowing past Lambda's 900s
-        ceiling on 2026-09-08. See rag/embedding_cache.py.
+        start from re-embedding the whole static corpus through Bedrock, which can push a
+        fragment past Lambda's 900s ceiling. See rag/embedding_cache.py.
         """
         self._chunks = chunks
         texts = [c.text for c in chunks]

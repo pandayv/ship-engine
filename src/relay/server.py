@@ -14,18 +14,12 @@ WHAT VOICE CANNOT DO, AND WHY THAT IS THE POINT
 Voice cannot decide a compliance finding BLIND. It can confirm a decision, once a
 person has actually looked at the finding on a screen and given a reason.
 
-The first version of this rule was simpler and wrong: no tool here would
-ever accept a risk by voice, full stop. Revisited directly (2026-09-28) —
-the actual failure mode SHIP exists to catch isn't "a decision happened
-over voice," it's "a decision happened without a human genuinely engaging
-with what they were deciding." Those aren't the same thing. A person who
-asked to see the findings, had them rendered on a real screen, and then
-says "override it, here's why" has done exactly what human oversight
-requires. Refusing that and forcing a trip to a web form adds friction
-without adding safety. What the ORIGINAL refusal correctly blocks, and
-what still must never work, is "ignore it, go ahead" with no review at
-all — that is the actual TLGP-002 shape (an AI-mediated decision with no
-human checkpoint), not "the confirmation channel was a microphone."
+A decision tool must never accept a risk by voice with no review at all ("ignore it, go
+ahead"). That is the TLGP-002 shape, an AI-mediated decision with no human checkpoint. What
+SHIP exists to catch is a decision made without a person genuinely engaging with it, not a
+decision made over voice. A person who asked to see the findings, had them rendered on a
+screen, and then says "override it, here's why" has done what human oversight requires.
+Forcing a trip to a web form would add friction without adding safety.
 
 So the decision tools check one real, server-side fact before
 doing anything: was a screen tool (blocked_pull_requests / finding_detail)
@@ -33,9 +27,8 @@ called for THIS alert_id recently — see src/storage/session_store.py. No:
 refused, exactly as before, redirected to Gate. Yes, and a reason was
 given: performed for real, written to ship-alerts with that reason as the
 record, same durability Gate's own resolve gives it. The reason is still
-required either way — dropping that would trade a real audit trail for a
-bare yes/no flag, which is the one piece of the original design worth
-keeping regardless of channel.
+required either way, because dropping it would trade a real audit trail for a
+bare yes/no flag.
 
 The same two facts gate the batch path (stage_decisions, then proceed), checked
 again at commit time. Decisions name a finding by its alert_id, never by a live
@@ -46,21 +39,13 @@ never a boolean, and anything else is refused rather than guessed at. Allow acce
 risk and the finding stops blocking; block says the finding is real, so the PR stays
 blocked until the code changes (see src/api/github_writeback.py).
 
-That check is keyed on the alert, by a time window, not on an MCP session
-— a real correction, not the original design. The first version keyed on
-Mcp-Session-Id, reasoning it was a stable per-conversation identifier.
-Live-tested against the actually-deployed system, not assumed correct
-from a local check: it never arrived. `create_app()` below (see the
-ARCHITECTURE NOTE) builds a brand-new session manager on every single
-invocation, so there is no process for a session id to have continuity
-WITH — that isn't a bug to fix, it's what SnapStart-per-invocation
-structurally requires. See src/storage/session_store.py's own docstring
-for the full correction and why "shown in the last ten minutes" is the
-honest signal actually available here.
+That check is keyed on the alert and a time window, not on an MCP session. `create_app()`
+below (see the ARCHITECTURE NOTE) builds a new session manager on every invocation, so there is
+no process for a session id to have continuity with. See src/storage/session_store.py for why
+"shown in the last ten minutes" is the signal that fits.
 
 ARCHITECTURE NOTE — why the ASGI app is a FACTORY, not a module-level
-singleton. Confirmed by a real, reproduced failure, not assumed: the MCP
-Python SDK's Streamable HTTP transport owns a StreamableHTTPSessionManager
+singleton. The MCP Python SDK's Streamable HTTP transport owns a StreamableHTTPSessionManager
 whose lifespan can be entered exactly once per instance. Lambda reuses a
 warm container's module-level state across invocations by design (that is
 the whole point of container reuse), so a session manager built once at
@@ -69,9 +54,7 @@ container with "SessionManager .run() can only be called once per
 instance," independent of stateful/stateless mode. `create_app()` below
 is called fresh on every invocation by relay_lambda_handler.py specifically
 to avoid this: a never-run session manager satisfies that constraint by
-construction, every time. Verified locally against the real failure mode
-(five independent invocations, not one) before relying on this, per this
-project's own standard of testing the failure a fix claims to resolve.
+construction, every time.
 
 The tool functions themselves stay at module level, outside the factory —
 they hold no state, do no I/O at import, and registering them onto a
@@ -115,34 +98,21 @@ def _console_root(value: str) -> str:
 
 CONSOLE_URL = _console_root(os.environ.get("SHIP_DASHBOARD_URL", ""))
 
-# MCP's Streamable HTTP transport enables DNS-rebinding protection by
-# default (mcp.server.transport_security.TransportSecuritySettings,
-# enable_dns_rebinding_protection=True with an EMPTY allowed_hosts) — every
-# request is rejected with 421 unless its Host header is explicitly
-# allowlisted. Confirmed by a real local invoke, not assumed: an
-# unconfigured server returned "Invalid Host header" for a completely
-# valid request.
+# MCP's Streamable HTTP transport enables DNS-rebinding protection by default
+# (mcp.server.transport_security.TransportSecuritySettings,
+# enable_dns_rebinding_protection=True with an EMPTY allowed_hosts), so every request is
+# rejected with 421 unless its Host header is explicitly allowlisted.
 #
-# allowed_hosts and allowed_origins are DELIBERATELY two separate
-# variables, not one shared list — confirmed necessary by a real failure,
-# not assumed. Host is the address a request is sent TO (always this
-# Lambda's own Function URL hostname, regardless of caller); Origin is the
-# page a BROWSER request came FROM (a completely different value once a
-# real web client — the Alexa+ simulator page — calls this endpoint via
-# fetch()). Treating them as one list worked fine until a cross-origin
-# browser call was actually tried: it came back 403 with zero CORS
-# headers, which traced to this exact security check correctly rejecting
-# an origin that was never allowlisted, because allowed_origins had been
-# silently set to the same single value as allowed_hosts.
+# allowed_hosts and allowed_origins are separate variables, not one shared list. Host is the
+# address a request is sent TO (always this Lambda's own Function URL hostname, regardless of
+# caller). Origin is the page a BROWSER request came FROM, a different value once a web client
+# such as the Alexa+ simulator page calls this endpoint via fetch(). One list for both would make
+# the security check reject the simulator's origin with 403 and no CORS headers.
 #
-# Both hostnames don't exist until after their respective resources are
-# created (the Function URL; the page's real hosting URL), so both are
-# read from environment variables set post-deploy — same pattern as
-# finding #42's SHIP_AGENTCORE_RUNTIME_ARN fix, never guessed or
-# hardcoded. Comma-separated since a real deployment plausibly has more
-# than one valid value for either (the raw Function URL during setup vs.
-# a custom domain later; a GitHub Pages origin vs. a custom domain for
-# the simulator).
+# Neither value exists until the Function URL and the page's hosting URL exist, so both are read
+# from environment variables set after deploy. They are comma-separated because a deployment can
+# have more than one valid value for either (the raw Function URL during setup and a custom
+# domain later; a GitHub Pages origin and a custom domain for the simulator).
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("SHIP_RELAY_ALLOWED_HOSTS", "").split(",") if h.strip()]
 ALLOWED_ORIGINS = [h.strip() for h in os.environ.get("SHIP_RELAY_ALLOWED_ORIGINS", "").split(",") if h.strip()]
 if not ALLOWED_HOSTS:
@@ -861,40 +831,26 @@ def create_app() -> Starlette:
         # session would even be caching. Independently required on Lambda
         # regardless (see ARCHITECTURE NOTE), but correct on its own terms.
         stateless_http=True,
-        # REQUIRED on a Lambda Function URL, confirmed by a real deployed
-        # failure: the MCP spec allows a Streamable HTTP server to answer
-        # either as a single buffered JSON response or as an SSE stream,
-        # and the SDK defaults to SSE (is_json_response_enabled=False,
-        # see mcp.server.streamable_http.StreamableHTTPServerTransport).
-        # An SSE response carries `Connection: keep-alive`, which a Lambda
-        # Function URL's default BUFFERED invoke mode cannot reconcile —
-        # reproduced against the real deployed endpoint: a direct
-        # aws lambda invoke succeeded in 375ms with a correct response
-        # body, while the SAME request through the Function URL failed in
-        # ~240ms with a generic timeout error, isolating the fault to that
-        # HTTP layer specifically, not the function's own logic. Relay's
-        # tools are simple synchronous request/response calls with nothing
-        # to stream incrementally, so plain JSON is not a compromise here
-        # — it is the correct shape for what Relay actually does, and it
-        # is a first-class, spec-legitimate SDK option, not a workaround.
+        # REQUIRED on a Lambda Function URL. The MCP spec allows a Streamable HTTP server to answer
+        # as a single buffered JSON response or as an SSE stream, and the SDK defaults to SSE
+        # (is_json_response_enabled=False, see mcp.server.streamable_http.StreamableHTTPServerTransport).
+        # An SSE response carries `Connection: keep-alive`, which a Lambda Function URL's default
+        # BUFFERED invoke mode cannot reconcile, so the request times out. Relay's tools are simple
+        # request/response calls with nothing to stream, so plain JSON is the right shape, and it is
+        # a first-class SDK option.
         json_response=True,
     )
     for fn in TOOLS:
         fresh.tool()(fn)
     raw_app = fresh.streamable_http_app()
 
-    # transport_security (above) is a DENY GATE — it rejects a disallowed
-    # Host/Origin with 403/421, but confirmed by a real local test NOT to
-    # add the Access-Control-Allow-Origin response header even for an
-    # ALLOWED origin. A browser enforces CORS independently of whatever
-    # the server permits: without this header, a genuine cross-origin
-    # fetch() from the Alexa+ simulator page would succeed at the network
-    # level and then be silently blocked from JavaScript reading the
-    # response, in the browser console only — invisible to curl, and
-    # exactly the kind of gap a local request-level test alone would
-    # have missed here. CORSMiddleware adds the actual response headers;
-    # transport_security still does the deeper Host-based rebinding
-    # check underneath it.
+    # transport_security (above) is a DENY GATE: it rejects a disallowed Host/Origin with 403/421
+    # but does not add the Access-Control-Allow-Origin response header, even for an allowed
+    # origin. A browser enforces CORS independently, so without this header a cross-origin
+    # fetch() from the Alexa+ simulator page succeeds at the network level and is then blocked
+    # from JavaScript reading the response, visible only in the browser console. CORSMiddleware
+    # adds the response headers; transport_security still does the Host-based rebinding check
+    # underneath it.
     return CORSMiddleware(
         raw_app,
         allow_origins=ALLOWED_ORIGINS,

@@ -1,12 +1,8 @@
 """
-SHIP Review: the Alexa skill that stands in for an Alexa+ add-on.
-
-Alexa+ add-ons are not open to hackathon participants, so a custom skill
-carries the same conversation: Alexa hears the person, and this function
-turns what they said into calls to Relay, SHIP's MCP server. Relay decides
-everything that matters (what to say, what a voice may do, where a finding
-is shown). This file only translates, so voice still goes through the MCP
-server.
+SHIP Review: the Alexa skill. Alexa hears the person, and this function turns what they said
+into calls to Relay, SHIP's MCP server, the same server an Alexa+ add-on would use. Relay
+decides everything that matters (what to say, what a voice may do, where a finding is shown).
+This file only translates, so voice still goes through the MCP server.
 
 Two ways in. The common requests have their own Alexa intents and are
 answered by plain code, fast. Anything else the person says in their own

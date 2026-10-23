@@ -8,7 +8,7 @@ Builds the deployment zips for SHIP's four Python Lambdas, from the repository a
 Each zip holds the function's third-party dependencies, installed for the Lambda runtime (Linux,
 arm64, Python 3.12) whatever machine this runs on, and exactly the first-party files its handler
 imports, found by following the imports from the handler. A module a handler needs can therefore
-never be left out, which is how a stale package used to fail.
+never be left out.
 
     relay      relay_lambda_handler.py          requirements-relay.txt
     webhook    lambda_handler.py (+ the fragment handler, and the Gate console templates)

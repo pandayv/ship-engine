@@ -2,16 +2,12 @@
 Precomputed corpus embeddings, so a cold start doesn't re-embed static
 regulation text through Bedrock every single time.
 
-WHY THIS EXISTS — a real, measured production failure (2026-09-08). A live
-webhook test dispatched two fragments in parallel. Each one cold-started
-its own AgentCore container; each container rebuilt the whole vector store
-from scratch, which is one Titan embedding call per corpus chunk; and both
-bursts competed for the same account-wide 10-requests-per-minute Bedrock
-quota. Adaptive retry did its job and backed both off, so one fragment
-limped in at 435 seconds and the other was killed by Lambda's hard
-900-second ceiling without producing anything. The corpus is STATIC between
-deploys — paying for those embeddings at runtime, in every container, was
-pure waste that made the system miss its deadline.
+WHY THIS EXISTS. When a PR dispatches fragments in parallel, each one cold-starts its own
+AgentCore container, and each container would rebuild the whole vector store from scratch, one
+Titan embedding call per corpus chunk. Those bursts compete for the same account-wide Bedrock
+request quota, adaptive retry backs them off, and fragments finish late or miss Lambda's
+900-second ceiling. The corpus is STATIC between deploys, so paying for those embeddings at
+runtime in every container is pure waste.
 
 WHAT IS CACHED, AND WHAT DELIBERATELY IS NOT: only the vectors. Chunks are
 always re-derived from the corpus files at load time, never deserialized
@@ -40,9 +36,7 @@ the exact failure mode the "Trust but verify" principle exists to catch.
 
 See also tests/test_embedding_cache.py, which fails at development time if
 a committed cache no longer matches the corpus — the same structural-guard
-pattern as tests/test_taxonomy_consistency.py, which exists because a
-silent drift of this kind already cost this project a full day (finding
-#29).
+pattern as tests/test_taxonomy_consistency.py.
 """
 
 import hashlib

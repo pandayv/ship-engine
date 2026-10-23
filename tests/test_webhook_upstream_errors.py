@@ -1,10 +1,8 @@
 """
-Finding #62: fetch_pr_diff()'s raise_for_status() was uncaught in
-github_webhook()'s "fast, reliable" leg - a closed/deleted PR, an expired
-token, or a transient GitHub 5xx turned into an unhandled requests.HTTPError
-and a bare 500 with no logged context, in the exact part of the handler
-meant to be fast and reliable, before the async fix (finding #44) even
-gets a chance to run.
+fetch_pr_diff()'s raise_for_status() must be caught in github_webhook()'s "fast, reliable" leg.
+A closed or deleted PR, an expired token, or a transient GitHub 5xx would otherwise become an
+unhandled requests.HTTPError and a bare 500 with no logged context, in the part of the handler
+meant to be fast and reliable.
 """
 
 import hashlib

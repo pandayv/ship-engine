@@ -71,14 +71,11 @@ class _FakePendingTable:
 
 @pytest.fixture(autouse=True)
 def session_table(monkeypatch):
-    """Autouse, not opt-in: blocked_pull_requests/finding_detail/display_on
-    all call session_store.mark_shown() unconditionally now, and it fails
-    SILENTLY by design (see session_store.py's own docstring) — a test
-    that forgets to mock this doesn't fail, it quietly writes to the real
-    ship-recent-reviews table instead. Caught live: several tests here did
-    exactly that before this became autouse. Making it automatic for every
-    test in this file removes the failure mode instead of relying on
-    every future test author to remember it."""
+    """Autouse, not opt-in: blocked_pull_requests/finding_detail/display_on all call
+    session_store.mark_shown() unconditionally, and it fails SILENTLY by design (see
+    session_store.py's docstring). A test that forgets to mock this doesn't fail, it quietly
+    writes to the real ship-recent-reviews table instead. Making it automatic for every test in
+    this file removes that failure mode instead of relying on every test author to remember it."""
     fake = _FakeSessionTable()
     monkeypatch.setattr(session_store, "_table", lambda: fake)
     return fake
@@ -86,17 +83,13 @@ def session_table(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_writeback(monkeypatch):
-    """Autouse, same reasoning as session_table above, and caught the same
-    way: a real dynamodb:PutItem landed in the live ship-status table
-    during a local pytest run, because request_risk_acceptance's success
-    path calls refresh_summary(), which was unmocked, and this machine's
-    boto3 picks up real ship-agent credentials with no extra setup. GitHub
-    write-back (post_pr_comment/sync_pr_check) is already safe without
-    mocking — _writeback_enabled() short-circuits with no GITHUB_TOKEN
-    configured — but refresh_summary() has no such guard, by design
-    (status_store.py's own docstring: best-effort, not opt-out). Faked
-    here rather than relying on every test that exercises a resolve path
-    to remember it individually."""
+    """Autouse, same reasoning as session_table above. request_risk_acceptance's success path
+    calls refresh_summary(), which writes to the real ship-status table when boto3 finds real
+    credentials. GitHub write-back (post_pr_comment/sync_pr_check) is already safe without
+    mocking, because _writeback_enabled() short-circuits with no GITHUB_TOKEN configured, but
+    refresh_summary() has no such guard, by design (status_store.py's docstring: best-effort, not
+    opt-out). Faked here rather than relying on every test that exercises a resolve path to
+    remember it individually."""
     monkeypatch.setattr(relay, "refresh_summary", lambda *a, **k: None)
 
 
@@ -229,7 +222,6 @@ def test_clean_state_is_reassuring_and_short(monkeypatch):
 
 
 def test_release_status_never_reads_the_alerts_table_directly(monkeypatch):
-    # Regression test for the exact bug this fixture design just caught:
     # release_status() must depend ONLY on the pre-computed summary. If it
     # ever falls back to list_active_alerts() or a live scan, this proves
     # it by making that path explode.
@@ -895,17 +887,14 @@ def test_missing_finding_is_reported_not_faked(one_blocking):
     assert relay.finding_detail("does-not-exist")["found"] is False
 
 
-# --- Lambda execution model: the actual bug found and fixed 2026-09-24 ---
+# --- Lambda execution model ---
 
 
 def test_create_app_returns_a_new_instance_every_call():
-    # Regression test for the real bug: the MCP SDK's StreamableHTTP
-    # session manager can only run its lifespan once per instance. A
-    # module-level app object reused across Lambda invocations crashed on
-    # the SECOND request with "SessionManager .run() can only be called
-    # once per instance" — reproduced locally before this fix, not
-    # assumed. create_app() must hand back a genuinely fresh, never-run
-    # instance every time it is called, not the same object memoized.
+    # The MCP SDK's StreamableHTTP session manager can only run its lifespan once per instance. A
+    # module-level app object reused across Lambda invocations crashes on the SECOND request with
+    # "SessionManager .run() can only be called once per instance". create_app() must hand back a
+    # fresh, never-run instance every time it is called, not the same object memoized.
     from src.relay.server import create_app
 
     apps = [create_app() for _ in range(3)]

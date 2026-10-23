@@ -1,30 +1,22 @@
 """
-Screener — SHIP's fast, zero-cost pre-filter (formerly called "Tier 1 / Sentry"
-in early drafts; renamed to avoid confusion with the unrelated Sentry.io brand).
+Screener, SHIP's fast, zero-cost pre-filter.
 
-Runs on every commit. Regex/AST pattern matching only — no model calls, no
-network calls, no cost. If nothing matches, the build passes in milliseconds.
-If something matches, the fragment is isolated and handed to Detector
-(the semantic evaluator) for a real judgment call.
-
-The Amazon Comprehend PII-NER pass (decided 2026-09-03, replacing the
-originally-considered Presidio) is a SEPARATE, second-stage check that only
-runs on fragments already flagged here — it is not part of this module, to
-keep this module's zero-cost property intact. See src/agents/pii_scan.py
-(not yet written) for that piece.
+Runs on every commit. Regex/AST pattern matching only: no model calls, no network calls, no
+cost. If nothing matches, the build passes in milliseconds. If something matches, the fragment
+is isolated and handed to Detector (the semantic evaluator) for a real judgment call.
 """
 
 import ast
 import re
 from dataclasses import dataclass, field
 
-# Maps directly to the taxonomy in ship_roadmap.md:
-# imports/egress/pii_data       -> PIIE-001 (Detector #1, must-ship)
-# logging_sinks + pii_data      -> PIIE-002 (near-free extension, same GDPR Art. 32 grounding)
-# cache_sinks + pii_data        -> PIIE-003 (near-free extension, same GDPR Art. 32 grounding)
-# decision_mutation (+ imports) -> TLGP-002 (built 2026-09-04)
-# bias_data                     -> ALBP-001 (built 2026-09-04, stretch goal)
-# agentic                       -> TLGP-001 (built 2026-09-04, stretch goal)
+# Maps to the taxonomy in src/taxonomy.py:
+# imports/egress/pii_data       -> PIIE-001
+# logging_sinks + pii_data      -> PIIE-002 (same GDPR Art. 32 grounding)
+# cache_sinks + pii_data        -> PIIE-003 (same GDPR Art. 32 grounding)
+# decision_mutation (+ imports) -> TLGP-002
+# bias_data                     -> ALBP-001
+# agentic                       -> TLGP-001
 SCREENER_TRIGGERS = {
     "imports": ["openai", "anthropic", "langchain", "llamaindex", "transformers", "autogen"],
     "egress": ["httpx.post", "requests.post", "client.chat.completions", "axios.post"],
@@ -65,37 +57,19 @@ class ScreenerResult:
 
 
 def _compile_term_pattern(term: str) -> re.Pattern:
-    # Independent review (2026-09-05) caught a real regression here: an
-    # unconditional (?<!\w) / (?!\w) on BOTH sides breaks matching for any
-    # term whose own first/last character is already punctuation, not a
-    # word character — which several real trigger terms are ("print(",
-    # ".setex(", "eval(", "exec(", "Agent(", "session["). Reproduced
-    # directly: scan("print(applicant_summary)") returned matched=False,
-    # because (?!\w) checks the character AFTER the literal "(" — which is
-    # the call's own argument, a word character — and rejects. ".setex("
-    # failed on the LEADING side too: (?<!\w) checked the character before
-    # the term's leading ".", which in "cache.setex(" is "e" (word char),
-    # and rejected a completely normal, correct usage.
-    #
-    # The boundary check's actual purpose is only to reject a term being
-    # embedded INSIDE a longer identifier (the finding #63 false positives:
-    # "race" inside "traceback", "mobile" inside "automobile") — that risk
-    # only exists on a side where the term's own edge character is itself
-    # a word character. If the term already starts/ends in punctuation
-    # (".", "(", "["), that punctuation can't be "continued" as part of a
-    # longer identifier in any of these languages, so no boundary
-    # assertion is needed — or correct — on that side at all.
+    # The boundary check only has to reject a term embedded INSIDE a longer identifier ("race"
+    # inside "traceback", "mobile" inside "automobile"). That risk exists only on a side where the
+    # term's own edge character is a word character. A term that starts or ends in punctuation
+    # (".setex(", "print(", "session[") cannot be continued into a longer identifier on that side,
+    # and a boundary assertion there would wrongly reject normal use, such as "print(" followed
+    # by its own argument. So the assertion is applied per side, only where it is needed.
     prefix = r"(?<!\w)" if term[0].isalnum() or term[0] == "_" else ""
     suffix = r"(?!\w)" if term[-1].isalnum() or term[-1] == "_" else ""
     return re.compile(prefix + re.escape(term) + suffix, flags=re.IGNORECASE)
 
 
-# finding #21: _term_matches() used to build a fresh pattern string (escape
-# + concatenate) and call re.search() with it on every single call — for
-# ~50 terms across 8 buckets, that's ~50 pattern (re)constructions per
-# scan(), every time, for text that's known at module-load time and never
-# changes. Precompiled once here instead; scan()/isolate_fragment() now
-# look up the compiled pattern instead of rebuilding it.
+# Patterns are compiled once at import, because the terms never change; scan() and
+# isolate_fragment() look them up instead of rebuilding them on every call.
 _COMPILED_TERM_PATTERNS: dict[str, re.Pattern] = {
     term: _compile_term_pattern(term) for terms in SCREENER_TRIGGERS.values() for term in terms
 }
@@ -103,37 +77,17 @@ _COMPILED_TERM_PATTERNS: dict[str, re.Pattern] = {
 
 def _term_matches(text: str, term: str) -> bool:
     """
-    Shared match logic for a single trigger term against a text (finding
-    #33: scan() and isolate_fragment() used to reimplement this
-    independently and could disagree).
+    Shared match logic for a single trigger term against a text. scan() and isolate_fragment()
+    both use it, so they cannot disagree about what counts as a match.
 
-    finding #63: the old version was a plain re.escape(term) substring
-    search with no actual boundary anchoring, despite a comment claiming
-    "word-boundary-ish" matching. Confirmed real false positives in this
-    exact fintech domain: "traceback"/"embrace" tripped bias_data's "race";
-    "automobile" tripped pii_data's "mobile". Fixed with single-char
-    lookaround (?<!\\w)...(?!\\w) instead of \\b, since several terms end in
-    punctuation (e.g. "print(", "httpx.post") where \\b's word-char
-    requirement on both sides doesn't behave as intended.
+    Matching uses single-character lookaround rather than word-boundary assertions, because
+    several terms end in punctuation ("print(", "httpx.post"). See _compile_term_pattern() for
+    which sides get an assertion. "traceback" and "embrace" do not trip "race", and
+    "automobile" does not trip "mobile".
 
-    Follow-up fix (independent review, 2026-09-05): the first version of
-    this applied the lookaround unconditionally on both sides, which broke
-    matching entirely for the realistic case — a punctuation-ending term
-    (e.g. "print(") immediately followed by its own argument
-    ("print(applicant_summary)"). _compile_term_pattern() now only applies
-    a boundary assertion on a side where the term's own edge character is
-    itself a word character — see that function's docstring for the full
-    reasoning. Confirmed via direct reproduction that this fix restores
-    matching for "eval(user_input)", "cache.setex(...)",
-    "print(applicant_summary)", and "session[user_id]" while the original
-    #63 false-positive tests (race/mobile) still correctly reject.
-
-    Trade-off worth knowing: this also stops matching a term as a prefix of
-    a longer identifier (e.g. "mobile" no longer matches inside
-    "mobile_number", since "_" counts as a word character) — acceptable
-    here since the real demo repo uses the bare field name, not a suffixed
-    variant, but worth remembering if trigger terms ever need prefix
-    matching against a real codebase that uses such suffixes.
+    A term also no longer matches as a prefix of a longer identifier ("mobile" does not match
+    inside "mobile_number", since "_" counts as a word character). The demo repository uses the
+    bare field name. Trigger terms that must match suffixed names need their own entries.
     """
     pattern = _COMPILED_TERM_PATTERNS.get(term)
     if pattern is None:  # a term not in SCREENER_TRIGGERS (e.g. ad-hoc test input) — compile on the fly
@@ -192,13 +146,9 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
         file_chunks.append({"file": m.group(1), "text": code_diff[start:end]})
 
     fragments = []
-    # finding #64: this used to allow arbitrary leading whitespace after the
-    # "+", so an indented class method counted as a boundary too, contrary
-    # to the docstring's "top-level def/class" claim — a class's __init__
-    # (building a scoring table) and its score() method could get split
-    # into separate fragments, dropping context ALBP-001's strict evidence
-    # bar needs. Requiring the "+" to be immediately followed by def/class
-    # (no whitespace) restricts this to genuinely top-level definitions.
+    # The "+" must be immediately followed by def/class (no whitespace), so only top-level
+    # definitions are boundaries. An indented method is not one: a class's __init__ and its
+    # score() method stay in one fragment, keeping the context ALBP-001's evidence bar needs.
     func_pattern = re.compile(r"^\+(?:def|class)\s+\w+")
     for chunk in file_chunks:
         lines = chunk["text"].splitlines()
@@ -206,13 +156,10 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
         if len(boundaries) <= 1:
             fragments.append(chunk)  # nothing to split further
             continue
-        # finding #5: this used to have an end sentinel (len(lines)) but no
-        # start sentinel, so lines[0:boundaries[0]] — imports, module-level
-        # constants, diff/hunk headers, any added top-level code before the
-        # first def/class — was silently dropped from every fragment. A
-        # fragment matched by Screener's whole-diff precheck but containing
-        # none of the actual triggering line would reach Detector
-        # effectively undetected.
+        # A start sentinel keeps lines[0:boundaries[0]] (imports, module-level constants, hunk
+        # headers, added top-level code before the first def/class) in a fragment. Without it,
+        # a fragment flagged by the whole-diff precheck could reach Detector without the
+        # triggering line.
         if boundaries[0] != 0:
             boundaries = [0] + boundaries
         boundaries.append(len(lines))
@@ -225,15 +172,13 @@ def split_diff_into_fragments(code_diff: str) -> list[dict]:
 def isolate_fragment(code_diff: str, matched_terms: list, context_lines: int = 3) -> str:
     """
     Given a diff and the terms that matched, return just the surrounding
-    lines (not the whole file) to hand to Detector — keeps Tier 2's
+    lines (not the whole file) to hand to Detector, which keeps its
     context window small and its reasoning focused.
     """
     lines = code_diff.splitlines()
     keep = set()
     for i, line in enumerate(lines):
-        # finding #33: now shares _term_matches with scan() instead of its
-        # own separate substring check, so the two can't silently disagree
-        # about what counts as a match.
+        # Shares _term_matches with scan(), so the two agree about what counts as a match.
         if any(_term_matches(line, term) for term in matched_terms):
             for j in range(max(0, i - context_lines), min(len(lines), i + context_lines + 1)):
                 keep.add(j)

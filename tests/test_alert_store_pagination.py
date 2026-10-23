@@ -1,13 +1,10 @@
 """
-Finding #14: DynamoDB Scan reads at most 1MB BEFORE applying
-FilterExpression, then returns LastEvaluatedKey if more of the table
-remains unscanned. The old list_active_alerts() called .scan() exactly
-once and returned whatever came back - once the table grows past 1MB,
-some "frozen" alerts silently fall off the dashboard with no indication
-more data exists. This test proves the fix actually loops until
-LastEvaluatedKey is genuinely absent, using a fake table that requires two
-calls to exhaust the table (matching real DynamoDB's own pagination
-contract), not just a single-page happy path.
+DynamoDB Scan reads at most 1MB BEFORE applying FilterExpression, then returns
+LastEvaluatedKey if more of the table remains unscanned. A list_active_alerts() that called
+.scan() once would drop some "frozen" alerts from the dashboard, with no indication more data
+exists, once the table grows past 1MB. This test proves it loops until LastEvaluatedKey is
+absent, using a fake table that requires two calls to exhaust the table (matching real
+DynamoDB's pagination contract), not just a single-page happy path.
 """
 
 from decimal import Decimal

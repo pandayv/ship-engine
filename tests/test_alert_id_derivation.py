@@ -1,14 +1,11 @@
 """
-Regression test for a real bug an independent review caught (2026-09-05)
-in finding #6's deterministic alert_id fix: deriving the id from only
-(repo, pr_number, file, taxonomy_id) is too coarse. Two genuinely
-different violations of the same taxonomy_id in the same file (e.g. an
-SSN leak in one function, a separate account-number leak in another,
-both PIIE-001) hashed to the identical alert_id — the second put_alert()
-call would silently overwrite the first violation's row with no record it
-ever existed, and after resolution, the same collision would silently
-block any future, genuinely new violation of that taxonomy_id/file combo
-from ever being persisted at all.
+The alert_id is derived from what identifies a violation. Deriving it from only
+(repo, pr_number, file, taxonomy_id) is too coarse: two different violations of the same
+taxonomy_id in the same file (an SSN leak in one function, a separate account-number leak in
+another, both PIIE-001) would hash to the same alert_id. The second put_alert() would silently
+overwrite the first violation's row with no record it ever existed, and after resolution the same
+collision would block any future, genuinely new violation of that taxonomy_id/file combination
+from ever being persisted. The isolated fragment's text is part of the key to prevent that.
 """
 
 from src.storage.alert_store import _deterministic_alert_id
@@ -29,10 +26,9 @@ def test_two_different_violations_same_taxonomy_and_file_get_different_ids():
 
 
 def test_a_real_retry_of_the_same_violation_still_produces_the_same_id():
-    # finding #6's original guarantee must still hold: re-detecting the
-    # identical fragment (a webhook redelivery, a Lambda async retry) must
-    # still derive the identical id, so the retry overwrites the same row
-    # instead of creating a duplicate.
+    # Re-detecting the identical fragment (a webhook redelivery, a Lambda async retry) must
+    # derive the identical id, so the retry overwrites the same row instead of creating a
+    # duplicate.
     first = _deterministic_alert_id(
         repo="pandayv/micro-finance", pr_number=1, file="loans/apply.py", taxonomy_id="PIIE-001",
         fragment_text="logger.info(f'SSN: {applicant.ssn}')",

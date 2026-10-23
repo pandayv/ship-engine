@@ -1,11 +1,9 @@
 """
 Tests for session_store — the "was this alert shown recently" signal
 request_risk_acceptance depends on. Keyed by alert_id and a time window,
-not by MCP session — see the module's own docstring for why: Relay's
-create_app() builds a brand-new session manager on every Lambda
-invocation, so there is no session continuity to key on, confirmed live
-against the actually-deployed system after an earlier session-based
-version of this store shipped and silently never worked.
+not by MCP session. See the module's own docstring for why: Relay's create_app() builds a
+brand-new session manager on every Lambda invocation, so there is no session continuity to key
+on.
 
 The two properties that matter: an unshown alert never reads as shown,
 and a datastore error fails CLOSED (reads as not-reviewed) — the unsafe

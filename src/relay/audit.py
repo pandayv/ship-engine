@@ -1,8 +1,8 @@
 """
 One audit line per state change and per refusal in Relay.
 
-Relay's tools decide things (a finding is allowed or blocked, a batch is refused) and the only
-trace used to be the GitHub comment. These lines are what a person reads in CloudWatch
+Relay's tools decide things (a finding is allowed or blocked, a batch is refused) and the
+GitHub comment is otherwise the only trace. These lines are what a person reads in CloudWatch
 to answer "what happened to that decision": which tool, which pull request, which
 findings, the outcome, and why it was refused.
 
