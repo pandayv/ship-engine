@@ -30,7 +30,7 @@ Assume nothing was checked before this. It doesn't matter who wrote the code, a 
 Rely on facts, not memory or guesswork. Every citation traces to sourced regulation text.
 
 **Meet you where you are.**
-The answer finds you, on whatever device is nearest. Voice gives the headline and asks the questions. A screen gives the detail. You never need to know the right phrase.
+The answer finds you, on the screen you pick: laptop, tablet, TV, or all of them. Voice gives the headline and asks the questions. A screen gives the detail. You never need to know the right phrase.
 
 **Learns from your decisions.**
 What reviewers allow shapes the next review. Detector still judges every finding against the regulation text.
