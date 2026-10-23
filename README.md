@@ -401,8 +401,9 @@ has reported. If SHIP can't read its state, the check stays pending.
 - **Observability:** Relay writes one audit line per decision and per
   refusal to CloudWatch. It carries the tool, outcome, pull request,
   finding ids and a reason code, never the reason or finding text.
-- **IAM:** reference policies for each Lambda role are in
-  [`infra/iam/`](infra/iam/). They are not applied by the repo.
+- **IAM:** each Lambda has its own role with one policy that allows only
+  what that function does. The policies are in [`infra/iam/`](infra/iam/),
+  and `deploy.sh roles` creates the roles.
 
 ### Relay's tools
 
@@ -494,7 +495,7 @@ alexa-skill/
   lambda/review_flow.py      # The guided review: the questions, and reading the answers in code
   lambda/orchestrator.py     # Free speech: the model proposes, plain code checks
   skill-package/             # Skill manifest and language model
-infra/iam/                 # Reference IAM policies, one per Lambda role
+infra/iam/                 # One IAM policy per Lambda role, and the deployer policy
 rag_corpus/                # Sourced regulation/standard text, verbatim
 shipagentcore/             # AgentCore Runtime deployment of Detector
 docs/

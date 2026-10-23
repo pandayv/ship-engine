@@ -1,42 +1,41 @@
 #!/usr/bin/env bash
 # deploy.sh - stands up SHIP's AWS resources from this repository.
 #
-# It only creates and updates. It never deletes a table, queue, function, role or parameter.
-# Every subcommand checks before it creates and updates what already exists, so you can run
-# any of them again.
+#   ./deploy.sh env           # once: write .env.deploy, then fill in the values
+#   ./deploy.sh all           # everything below, in order
+#   ./deploy.sh --help        # the steps one by one
 #
-# Creates (all in one account and region):
+# Creates, in one account and region:
 #   tables     the ten DynamoDB tables, on-demand billing
 #   queues     ship-fragment-queue and its dead-letter queue ship-fragment-queue-dlq
-#   roles      four Lambda execution roles with the reviewed policies from infra/iam/
+#   roles      four Lambda execution roles, each with its policy from infra/iam/
 #   packages   the four zips in build/, through scripts/build_packages.py
 #   functions  ship-relay (SnapStart, alias "live"), ship-webhook, ship-fragment-processor
 #              (with its SQS trigger) and ship-device-gateway, plus their Function URLs
 #   websocket  the ship-devices WebSocket API, its five routes, the "prod" stage
 #   secrets    the three SecureString parameters under /ship/ in Parameter Store
 #
+# Every step checks before it creates and updates what exists, so any step can be run again.
 # Not created here (see SETUP.md): Bedrock model access, the Detector in AgentCore Runtime,
-# the Alexa skill and its Lambda (ask deploy), the Login with Amazon profile, the GitHub
-# token, webhook and branch protection, and GitHub Pages.
+# the Alexa skill (ask deploy), the Login with Amazon profile, the GitHub token, webhook and
+# branch protection, and GitHub Pages.
 #
-# Needs: AWS CLI v2 signed in with an identity that may manage Lambda, API Gateway, SQS,
-# DynamoDB and SSM; Python 3.12 or newer; the local environment from requirements.txt
-# (boto3 and numpy) for the tables step. jq is not used. Roles need an identity that can
-# manage IAM. If yours cannot, the roles step writes the files and prints the commands
-# for someone who can, and stops.
+# You need
+#   AWS CLI v2, signed in as an IAM user or role with the policy in infra/iam/deployer-policy.json
+#   (the README next to it explains what it allows); Python 3.12 or newer; the packages in
+#   requirements.txt for the tables step.
+#   If an administrator creates the roles, they run "./deploy.sh roles" and you run
+#   "./deploy.sh --skip-roles all".
 #
-# Settings, from the caller's environment or from a gitignored .env.deploy file (see "env"):
-#   SHIP_ACCOUNT_ID   the only account this script may touch. Default 680160265218, the
-#                     account that runs SHIP today. Set it to your own account id.
+# Settings, from the environment or from a gitignored .env.deploy file (see the env step):
+#   SHIP_ACCOUNT_ID   the only account this script touches. Set it to your own account id.
 #   SHIP_REGION       default us-west-2.
 #   SHIP_ENV_FILE     default .env.deploy in the repository root.
-#   Values for the Lambdas (never printed, never stored by this script):
+#   Values for the Lambdas:
 #     GITHUB_TOKEN  GITHUB_WEBHOOK_SECRET  SHIP_DASHBOARD_TOKEN  SHIP_AGENTCORE_RUNTIME_ARN
 #     SHIP_ALLOWED_REPOS  SHIP_REVIEWER_NAME  SHIP_RELAY_ALLOWED_ORIGINS  SHIP_VAPID_CONTACT
 #   Values for Parameter Store:
 #     SHIP_ALEXA_CLIENT_ID  SHIP_ALEXA_CLIENT_SECRET  SHIP_VAPID_PRIVATE_KEY
-#
-# Run "./deploy.sh --help" for the subcommands.
 
 set -euo pipefail
 umask 077
@@ -302,41 +301,15 @@ resolve_api_id() {
   printf '%s' "$id"
 }
 
-# 0 done, 8 not found, 9 access denied. Anything else stops the script.
+# 0 done, 8 not found. Anything else stops the script.
 IAM_OUT=""
 iam_call() {
   local out rc=0
   out=$("$@" 2>&1) || rc=$?
   if [[ $rc -eq 0 ]]; then IAM_OUT=$out; return 0; fi
   if [[ $out =~ NoSuchEntity ]]; then return 8; fi
-  if [[ $out =~ $DENIED_RE ]]; then return 9; fi
+  if [[ $out =~ $DENIED_RE ]]; then die "access denied for $1 $2 $3. Attach infra/iam/deployer-policy.json to the identity running this script."; fi
   die "$* failed: $out"
-}
-
-# Printed when the caller cannot manage IAM. The files are already written.
-iam_handoff() {
-  cat <<EOF
-
-This identity cannot manage IAM roles. Nothing was changed in IAM.
-The trust policy and the reviewed policies, filled in for account $ACCOUNT_ID, are in
-build/iam/. Give that folder to someone who can manage IAM and ask them to run these
-commands from the repository root. They can also run './deploy.sh roles' themselves
-from a checkout of this repository.
-
-EOF
-  local role fn policy file
-  while IFS=$'\t' read -r role fn policy file; do
-    if [[ $fn == ship-alexa-skill ]]; then continue; fi
-    printf 'aws iam create-role --role-name %q --assume-role-policy-document file://build/iam/lambda-trust.json\n' "$role"
-    printf 'aws iam put-role-policy --role-name %q --policy-name %q --policy-document file://build/iam/%q.policy.json\n' "$role" "$policy" "$role"
-  done < <(py_roles table)
-  cat <<EOF
-
-(create-role fails with EntityAlreadyExists for a role that is already there. Skip that
-line and run the put-role-policy line.)
-When the roles exist, continue with:  ./deploy.sh --skip-roles packages functions websocket secrets
-The Alexa skill's role is created later by 'ask deploy'. Its policy comes from './deploy.sh skill-policy'.
-EOF
 }
 
 # ---------------------------------------------------------------------------------------
@@ -449,7 +422,7 @@ cmd_roles() {
     render_policy "$file" "$out/$role.policy.json" "$api"
   done 3< <(py_roles table)
 
-  local rc try created=0 denied=0
+  local rc try created=0
   while IFS=$'\t' read -r -u 3 role fn policy file; do
     if [[ $fn == ship-alexa-skill ]]; then continue; fi
     note "$role -> $policy"
@@ -475,13 +448,8 @@ cmd_roles() {
       done
     fi
     if [[ $rc -eq 8 ]]; then die "$role is not visible to IAM yet. Run './deploy.sh roles' again in a minute."; fi
-    if [[ $rc -eq 9 ]]; then denied=1; break; fi
   done 3< <(py_roles table)
 
-  if [[ $denied -eq 1 ]]; then
-    iam_handoff
-    exit 3
-  fi
   if [[ $created -eq 1 ]]; then
     note "waiting 10 s for new roles to become usable"
     sleep 10
@@ -491,7 +459,7 @@ cmd_roles() {
 # Attaches the reviewed policy to the role `ask deploy` created for ship-alexa-skill.
 cmd_skill_policy() {
   say "Alexa skill role policy (run after 'ask deploy' has created ship-alexa-skill)"
-  local arn role policy file api rc=0
+  local arn role policy file api
   arn=$(capture "arn:aws:iam::$ACCOUNT_ID:role/<ask-lambda-role>" aws lambda get-function-configuration \
     --function-name ship-alexa-skill --query Role --output text)
   role=${arn##*/}
@@ -505,15 +473,7 @@ cmd_skill_policy() {
     return 0
   fi
   iam_call aws iam put-role-policy --role-name "$role" --policy-name "$policy" \
-    --policy-document "file://$ROOT/build/iam/ship-alexa-skill.policy.json" || rc=$?
-  if [[ $rc -eq 9 ]]; then
-    cat <<EOF
-
-This identity cannot manage IAM roles. Ask someone who can to run, from the repository root:
-aws iam put-role-policy --role-name $role --policy-name $policy --policy-document file://build/iam/ship-alexa-skill.policy.json
-EOF
-    exit 3
-  fi
+    --policy-document "file://$ROOT/build/iam/ship-alexa-skill.policy.json"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -1001,11 +961,11 @@ usage() {
   cat <<'EOF'
 Usage: ./deploy.sh [options] STEP [STEP ...]
 
-Steps (each can be repeated safely; this script only creates and updates):
+Steps (each can be run again):
   env             create a gitignored .env.deploy with random webhook and dashboard secrets
   tables          the ten DynamoDB tables
   queues          ship-fragment-queue and its dead-letter queue
-  roles           the four Lambda roles and their reviewed policies (needs IAM rights)
+  roles           the four Lambda roles and their policies
   packages        build the four zips with scripts/build_packages.py
   functions       the four Lambdas, Function URLs, Relay alias and SQS trigger
   websocket       the ship-devices WebSocket API, routes, stage and permission
@@ -1018,12 +978,12 @@ Steps (each can be repeated safely; this script only creates and updates):
 Options:
   --dry-run          print every command and run none. Makes no AWS call.
   --only a,b         with functions: only relay, webhook, fragment or gateway
-  --skip-roles       leave out the roles step of "all" (roles made by an administrator)
+  --skip-roles       leave out the roles step of "all"
   --generate-vapid   with secrets: make a VAPID key pair and store the private half
   -h, --help         this text
 
-Settings: SHIP_ACCOUNT_ID (default 680160265218), SHIP_REGION (default us-west-2),
-SHIP_ENV_FILE (default .env.deploy). The script refuses to run in any other account.
+Settings: SHIP_ACCOUNT_ID, SHIP_REGION (default us-west-2), SHIP_ENV_FILE (default .env.deploy).
+Permissions needed to run it: infra/iam/deployer-policy.json
 EOF
 }
 

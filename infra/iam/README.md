@@ -1,87 +1,65 @@
-# IAM: one role per function, one policy per role
+# IAM
 
-Each Lambda has its own role, because each needs different permissions. A role holds exactly one
-inline policy, named after the function it serves: `<function>-access`. The policy documents in
-this folder are the source of truth, and `roles.json` ties each role to its function, its policy
-name and its file.
+Each SHIP Lambda runs under its own role. Each role holds one policy, named `<function>-access`,
+that allows what that function does and nothing else. `deploy.sh roles` creates the four Lambda
+roles and attaches their policies. `ask deploy` creates the Alexa skill's role, and
+`deploy.sh skill-policy` attaches its policy.
 
-| Role | Function | Policy | File |
+## Roles
+
+| Role | Function | What it does | Policy file |
 |---|---|---|---|
-| `ship-relay-role` | `ship-relay` | `ship-relay-access` | `ship-relay-role.json` |
-| `ship-device-gateway-role` | `ship-device-gateway` | `ship-device-gateway-access` | `ship-device-gateway-role.json` |
-| `ship-fragment-processor-role` | `ship-fragment-processor` | `ship-fragment-processor-access` | `ship-fragment-processor-role.json` |
-| `ship-webhook-AgentCore-lambda-role` | `ship-webhook` | `ship-webhook-access` | `ship-webhook-AgentCore-lambda-role.json` |
-| `ask-lambda-SHIPReview-1791468806554` | `ship-alexa-skill` | `ship-alexa-skill-access` | `ask-lambda-SHIPReview-1791468806554.json` |
+| `ship-relay-role` | `ship-relay` | Relay, the MCP server. Reads findings, records decisions, pushes to screens. | `ship-relay-role.json` |
+| `ship-webhook-AgentCore-lambda-role` | `ship-webhook` | The GitHub webhook and the Gate console. Queues review jobs, records decisions, keeps the check honest. | `ship-webhook-AgentCore-lambda-role.json` |
+| `ship-fragment-processor-role` | `ship-fragment-processor` | Reviews one piece of code per run through Detector, records findings, sends the Alexa alert. | `ship-fragment-processor-role.json` |
+| `ship-device-gateway-role` | `ship-device-gateway` | The WebSocket gateway. Registers screens and records what a page displayed. | `ship-device-gateway-role.json` |
+| `ask-lambda-SHIPReview-*` | `ship-alexa-skill` | The Alexa skill. Remembers who to alert and picks Relay tools with Nova Lite. | `ask-lambda-SHIPReview-1791468806554.json` |
 
-The webhook role keeps its historical name and the skill role is named by the ASK CLI. Roles
-cannot be renamed, and the names do not matter to anyone using the system. What matters is that
-each holds one policy that says what it needs and why.
+`roles.json` lists the same roles for the scripts. Every role can also write its own logs.
 
-## Tidying a deployment
+## What each role can do
 
-`scripts/iam_tidy.py` brings every role to that layout. It needs credentials that can manage IAM,
-not the deploy user. The stages are safe to stop after:
+**Relay** reads and updates findings and their summary, so it can report them and record
+decisions. It records what each screen was shown, which is what lets the server require a look
+before a voice decision. It holds staged decisions until a person confirms them, keeps track of
+connected screens and their notification registrations, saves findings for a screen whose page is
+closed, pushes to open pages through the WebSocket API, and reads the web push signing key.
+
+**Webhook** sends review jobs to the queue. It reads findings and records decisions for the Gate
+console, keeps the review summary and ledger that decide the pull request check, and manages the
+list of connected repositories.
+
+**Fragment processor** takes jobs off the queue and asks the AgentCore runtime to review each
+piece of code. It writes the findings, updates the review ledger, marks the repository reviewed,
+and reads the Alexa user list and the skill's credentials to send the alert.
+
+**Device gateway** registers and forgets screen connections, files each screen's notification
+address, hands over findings held for a screen that was closed, records that a page displayed
+findings, and replies on the open connection.
+
+**Alexa skill** remembers which user to alert, and calls Amazon Nova Lite to choose a Relay tool
+for free speech.
+
+The policy files list every resource and action exactly.
+
+## Apply them
+
+`deploy.sh roles` does this for you and fills in your account, region and WebSocket API id. To
+apply a file by hand, replace the account id, region and WebSocket API id in it first. In
+`ship-fragment-processor-role.json`, you can also replace `runtime/*` with your AgentCore
+runtime's ARN.
+
+## Permissions to run deploy.sh
+
+The person running `deploy.sh` needs the policy in `deployer-policy.json`. It allows creating
+and updating the tables, queue, parameters, functions, WebSocket API and roles that SHIP uses,
+and passing those roles to Lambda. Fill in your account id and region, then attach it to the IAM
+user that runs the script:
 
 ```
-python scripts/iam_tidy.py            # show what each role has now and what would change
-python scripts/iam_tidy.py --apply    # add the one policy to every role; nothing is removed
-python scripts/preflight.py           # check the demo still works
-python scripts/iam_tidy.py --prune    # back up, then remove every other policy from those roles
-python scripts/iam_tidy.py --restore infra/iam/backups/<file>.json    # put back what --prune removed
+sed -e "s/ACCOUNT_ID/123456789012/g" -e "s/REGION/us-west-2/g" infra/iam/deployer-policy.json > deployer-policy.json
+aws iam put-user-policy --user-name YOUR_USER --policy-name ship-deployer --policy-document file://deployer-policy.json
 ```
 
-`--prune` refuses to run unless each role already has its policy exactly as in this folder, and
-it writes a backup of everything it removes before it removes anything. It never touches a role's
-trust policy, tags, or the roles themselves. Roles that look like SHIP's but are not listed in
-`roles.json` are reported for review in the console, and nothing more.
-
-## How each permission was derived
-
-Each line was checked against the call in the code, after the changes in this branch.
-
-| Table or resource | Actions | Where |
-|---|---|---|
-| `ship-alerts` | GetItem, Scan, UpdateItem (Relay, webhook/Gate) | `alert_store.get_alert`, `_scan_all` (Scan, with `ConsistentRead`), `resolve_alert`, `release_fixed_blocks` |
-| `ship-alerts` | + PutItem (fragment processor) | `alert_store.put_alert` creates the row; refresh and delivery steps are UpdateItem |
-| `ship-status` | GetItem, PutItem (Relay) | `status_store.read_summary`, `refresh_summary` (conditional PutItem) |
-| `ship-status` | + UpdateItem (webhook, fragment processor) | `review_ledger.fragment_reported` (UpdateItem `ADD`), `begin_review` (PutItem) |
-| `ship-recent-reviews` | GetItem, PutItem | `session_store.recent_view`, `mark_shown` |
-| `ship-pending-dispositions` | GetItem, PutItem, DeleteItem | `pending_store.get_pending_with_age`, `stage`, `clear_pending` |
-| `ship-device-connections` | Scan, DeleteItem (Relay); UpdateItem, DeleteItem (gateway) | `device_store.list_*`, `remove_connection`, `register_connection` |
-| `ship-push-subscriptions` | Scan, DeleteItem (Relay); PutItem (gateway) | `push_store.subscriptions_for_device`, `remove_subscription`, `save_subscription` |
-| `ship-pending-display` | PutItem (Relay); GetItem, DeleteItem (gateway) | `push_store.save_pending`, `get_pending`, `clear_pending` |
-| `ship-repos` | GetItem, PutItem, DeleteItem, Scan, UpdateItem (webhook); UpdateItem (fragment) | `repo_store.get_repo`, `connect_repo`, `disconnect_repo`, `list_repos`, `mark_event_seen`, `mark_reviewed` |
-| `ship-alexa-users` | Scan (fragment); PutItem (skill) | `alexa_user_store.list_user_ids`; the skill's `remember_user` |
-| `execute-api:ManageConnections` | Relay, gateway | `push.push_to_device`, `device_gateway_handler._ack` (`post_to_connection`) |
-| SSM `/ship/webpush/vapid_private` | GetParameter (Relay) | `webpush._vapid_private_key` |
-| SSM `/ship/alexa/client_id`, `client_secret` | GetParameter (fragment) | `alexa_notify._parameter` |
-| SQS `ship-fragment-queue` | SendMessage (webhook); Receive/Delete/GetQueueAttributes (fragment) | `main._dispatch_fragments`; the event source mapping |
-| `bedrock-agentcore:InvokeAgentRuntime` | fragment | `detector.detect_via_agentcore` |
-| `bedrock:InvokeModel` on Nova Lite | skill | `lambda_function._converse` (Converse needs InvokeModel) |
-
-
-## Left out on purpose
-
-- **Bedrock `InvokeModel` and `ship-learned-patterns` on the webhook and fragment roles.** `deploy.sh`
-  grants them. With `SHIP_DETECTOR_MODE=agentcore` the Lambdas only call the AgentCore runtime; the
-  model and the pattern store are used inside the runtime, which has its own role. They are needed
-  again only if a Lambda is switched to `in_process` detection.
-- **Anything for the webhook's sequential no-queue fallback.** That path (`process_pr` with
-  `SHIP_FRAGMENT_QUEUE_URL` unset) writes alerts and calls Detector; it is for local runs. A
-  deployed webhook has the queue set.
-- **`ship-device-connections` on the fragment processor**, which `deploy.sh` grants. No code path
-  there reads it.
-- **Table administration** (`CreateTable`, `DescribeTable`). The `create_table_if_not_exists`
-  helpers are run by a person with their own identity.
-
-## Not verified
-
-- The AgentCore runtime ARN shape in `ship-fragment-processor-role.json` (`runtime/*`) is the
-  documented form, not read from the account. Replace the wildcard with the real runtime ARN from
-  the deploy output.
-- That each SecureString uses the AWS-managed key. If a customer-managed key was used, the roles
-  that read it also need `kms:Decrypt` on that key.
-- The account id, region and WebSocket API id (`680160265218`, `us-west-2`, `9vkr6eelzd`) come from
-  the project notes and the display page's `WS_URL`. Check them against the account before applying.
-- Whether the live roles carry other permissions that something outside this repo relies on.
-  These files describe what this repo's code needs.
+If an administrator creates the roles, they run `./deploy.sh roles`. Everyone else can then run
+`./deploy.sh --skip-roles all` and needs only the rest of the policy.

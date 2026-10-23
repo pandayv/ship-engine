@@ -19,7 +19,7 @@ Relay accepts only the Host and Origin values it is configured with. That stops 
 - An Amazon developer account, for the Alexa skill and Login with Amazon.
 - An Echo device, to hear the guided review and the alert chime.
 
-The deploy identity needs permission to create and update Lambda functions, Function URLs, API Gateway, SQS, DynamoDB tables and SSM parameters, and to pass the four Lambda roles to Lambda (`iam:PassRole`). It does not need IAM rights. The reference deployment's deploy user cannot manage IAM. Roles and their policies are created by an administrator, and `deploy.sh roles` hands over the exact files and commands when it hits that limit.
+The identity that runs `deploy.sh` needs the policy in [`infra/iam/deployer-policy.json`](infra/iam/deployer-policy.json). [`infra/iam/README.md`](infra/iam/README.md) says what it allows and how to attach it. If an administrator creates the roles, they run `./deploy.sh roles`, and you run `./deploy.sh --skip-roles all`.
 
 ### Tools
 
@@ -196,11 +196,9 @@ This creates the four Lambda roles with a Lambda trust policy and gives each one
 | `ship-fragment-processor-role` | `ship-fragment-processor-access` | `ship-fragment-processor` |
 | `ship-webhook-AgentCore-lambda-role` | `ship-webhook-access` | `ship-webhook` |
 
-The webhook role's name is historical. The Alexa skill's role is made by `ask deploy` (section 5).
+The Alexa skill's role is made by `ask deploy` (section 5).
 
-If your identity cannot manage IAM, the step writes the filled-in files to `build/iam/`, prints the `aws iam` commands, and exits with status 3. Hand the folder and the commands to an administrator. They can also run `./deploy.sh roles` from a checkout. When the roles exist, continue with `./deploy.sh --skip-roles packages functions websocket secrets`.
-
-The WebSocket API does not exist yet, so the Relay and gateway policies allow any API id for now. Step 4.11 narrows them.
+In a new account the WebSocket API does not exist yet, so the Relay and gateway policies allow any API id. Run `./deploy.sh roles` again after step 4.11 to name yours.
 
 Check, with an identity that can read IAM:
 
@@ -462,23 +460,7 @@ Both scripts show what they would change unless you pass `--apply`. Both are saf
 
 Neither runs on a schedule.
 
-## 12. IAM tidy
-
-Over time a role can collect dated and one-off policies. `scripts/iam_tidy.py` gives each Lambda role exactly one policy, the reviewed one from `infra/iam/`, named `<function>-access`. Run it with credentials that can manage IAM. It works in four stages, and you can stop after any of them.
-
-```bash
-python scripts/iam_tidy.py                 # 1. plan: shows what each role has and what would change
-python scripts/iam_tidy.py --apply         # 2. adds the one policy to every role, changes nothing else
-python scripts/preflight.py                #    check that everything still works
-python scripts/iam_tidy.py --prune         # 3. backs up, then removes every other policy
-python scripts/iam_tidy.py --restore FILE  # 4. puts back what --prune removed
-```
-
-`--prune` refuses to run unless every role already has its policy exactly as in `infra/iam/`. It writes a backup to `infra/iam/backups/` before it removes anything. It never touches a role's trust policy or tags, or the roles themselves.
-
-The script applies the files in `infra/iam/` as written, and refuses to run outside the account named in `infra/iam/roles.json`. In a different account, `deploy.sh roles` already gives each role the one reviewed policy with your account filled in, so you do not need this script there.
-
-## 13. Troubleshooting
+## 12. Troubleshooting
 
 | What you see | Cause | Fix |
 |---|---|---|
@@ -492,10 +474,9 @@ The script applies the files in `infra/iam/` as written, and refuses to run outs
 | GitHub shows a 404 or 405 for the webhook delivery. | The Payload URL lacks the route. | Use the Function URL plus `api/v1/webhook`. |
 | GitHub shows a 403 saying the repo is not connected. | The repository is not in `ship-repos`. | Connect it in Gate (section 7). |
 | The pull request check stays `pending` and Gate shows a "stuck" badge. | The SQS trigger is disabled, or reviews are failing and landing in the dead-letter queue. | `aws lambda list-event-source-mappings --function-name ship-fragment-processor` should show `Enabled`. `preflight.py` reports the dead-letter queue depth. |
-| `deploy.sh roles` exits with status 3. | Your identity cannot manage IAM. | Hand `build/iam/` and the printed commands to an administrator (section 4.7). |
 | Bedrock calls fail with an access or quota error. | Model access is not enabled, or the account's quota is too low. | Enable the models in the Bedrock console. A new account's quota can start at 0. Ask AWS Support to raise it. |
 
-## 14. Not covered by `deploy.sh`
+## 13. Not covered by `deploy.sh`
 
 | Item | Where it is handled |
 |---|---|
